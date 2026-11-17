@@ -1,0 +1,5 @@
+//@ expected-fail: T167
+
+pub fn answer() -> u32 {
+    42
+}

@@ -1,0 +1,10 @@
+//@ covers: E0905
+//@ expected-fail: T038
+// `pub` items can be imported, also through a `pub use` re-export (§7.8.2).
+use geometry.{area, Square};
+use shapes;
+
+pub fn main() {
+    let s = Square { side: 2.0 };
+    _ = area(s) + shapes.perimeter(s);
+}

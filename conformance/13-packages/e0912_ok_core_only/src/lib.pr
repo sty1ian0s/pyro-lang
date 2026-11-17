@@ -1,0 +1,12 @@
+//@ covers: E0912
+//@ expected-fail: T116
+// A no_std package keeps std.mem.FixedArena, std.math, std.simd and std.meta
+// (§14.1.1).
+use std.mem.{FixedArena};
+use std.math;
+use std.simd;
+use std.meta;
+
+pub fn hypot(x: f32, y: f32) -> f32 {
+    math.sqrt(x * x + y * y)
+}

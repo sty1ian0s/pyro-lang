@@ -1,0 +1,7 @@
+//@ expected-fail: T038
+// Imported by main.pr line 3, which is where E0905 is reported.
+// (annotation for that report; matching ignores the file) //~ E0905
+
+fn area(side: f32) -> f32 {
+    side * side
+}

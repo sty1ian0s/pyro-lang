@@ -1,0 +1,8 @@
+//@ covers: E0901
+//@ expected-fail: T036
+// `src/physics/rigid_body.pr` is module `physics.rigid_body` (§7.8.1).
+use physics.rigid_body;
+
+pub fn main() {
+    rigid_body.step();
+}

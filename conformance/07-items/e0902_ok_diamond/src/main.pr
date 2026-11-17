@@ -1,0 +1,11 @@
+//@ covers: E0902
+//@ expected-fail: T036
+// A diamond is not a cycle: `base` is reached through `left` and `right` and is
+// compiled once (§7.8.3).
+use left;
+use right;
+
+pub fn main() {
+    left.f();
+    right.g();
+}

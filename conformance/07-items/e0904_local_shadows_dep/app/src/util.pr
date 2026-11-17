@@ -1,0 +1,6 @@
+//~ E0904 module `util` has the name of the dependency `util`
+//@ expected-fail: T038
+
+pub fn answer() -> u32 {
+    0
+}

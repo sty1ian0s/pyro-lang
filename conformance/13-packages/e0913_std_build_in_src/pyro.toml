@@ -1,0 +1,4 @@
+[package]
+name = "std_build_in_src"
+version = "0.1.0"
+edition = "2026"

@@ -1,0 +1,4 @@
+//@ covers: E0902
+//@ expected-fail: T036
+
+pub fn shared() {}

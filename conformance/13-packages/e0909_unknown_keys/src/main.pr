@@ -1,0 +1,14 @@
+//@ expected-fail: T029
+// Unknown keys and tables in pyro.toml are errors (§13.2). The lines below
+// match the offending lines of pyro.toml.
+// line 4
+// pyro.toml line 5: `author` is not a [package] key //~ E0909
+// line 6
+// pyro.toml line 7: `[profile]` is not a table (its keys are not reported) //~ E0909
+// line 8
+// line 9
+// line 10
+// line 11
+// pyro.toml line 12: `optimise` is not a [build] key //~ E0909
+
+pub fn main() {}

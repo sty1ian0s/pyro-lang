@@ -1,0 +1,7 @@
+//@ expected-fail: T159
+// pyro.lock records a hash that does not match the source of `util` (§13.4).
+use util;
+
+pub fn main() {}
+
+// pyro.lock line 7: sha256 = "0000…" //~ E0911

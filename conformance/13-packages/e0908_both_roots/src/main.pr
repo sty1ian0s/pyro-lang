@@ -1,0 +1,5 @@
+//~ E0908 reported at line 1 of pyro.toml: src/main.pr and src/lib.pr both exist
+//@ expected-fail: T031
+// A package is an executable or a library, not both (§13.1).
+
+pub fn main() {}

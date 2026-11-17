@@ -1,0 +1,8 @@
+//@ expected-fail: T036
+// The cycle a → b → c → a is reported once, with the full chain (§7.8.3).
+// Every `use` in the cycle is on line 3 of its file. //~ E0902
+use a;
+
+pub fn main() {
+    a.f();
+}

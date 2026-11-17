@@ -1,0 +1,5 @@
+//~ E0908 reported at line 1 of pyro.toml: neither src/main.pr nor src/lib.pr exists
+//@ expected-fail: T031
+// A package needs a root module (§13.1).
+
+pub fn helper() {}

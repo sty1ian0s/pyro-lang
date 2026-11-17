@@ -1,0 +1,4 @@
+[package]
+name = "private_import"
+version = "0.1.0"
+edition = "2026"

@@ -1,0 +1,9 @@
+//@ covers: E0913
+//@ expected-fail: T167
+// The package's own build script may use std.build (§13.5, §14.12).
+use std.build.{Builder};
+
+pub fn build(mut b: Builder) -> Result<void, std.build.Error> {
+    b.generate_module("version", "pub const VERSION: str = \"0.1.0\";")?;
+    return .ok();
+}

@@ -1,0 +1,7 @@
+//@ expected-fail: T038
+// An import may not bind the same name as a local item (§7.8.2).
+use std.math; //~ E0903
+
+const math: u32 = 1;
+
+pub fn main() {}

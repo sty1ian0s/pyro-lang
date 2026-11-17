@@ -1,0 +1,5 @@
+//@ expected-fail: T167
+// std.build is available only to build.pr (§14.12).
+use std.build.{Builder}; //~ E0913
+
+pub fn main() {}

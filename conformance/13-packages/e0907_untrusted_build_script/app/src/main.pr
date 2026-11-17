@@ -1,0 +1,7 @@
+//@ expected-fail: T167
+// The dependency `gen` has a build.pr, but it is not listed in
+// [build] trusted_build_scripts and --trust-build-scripts is not given (§13.5).
+use gen;
+
+pub fn main() {}
+// pyro.toml line 7: gen = { path = "../gen" } //~ E0907

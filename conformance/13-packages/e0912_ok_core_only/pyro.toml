@@ -1,0 +1,5 @@
+[package]
+name = "core_only"
+version = "0.1.0"
+edition = "2026"
+no_std = true
