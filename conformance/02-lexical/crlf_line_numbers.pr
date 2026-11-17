@@ -1,0 +1,4 @@
+//@ expected-fail: T012 (lexer core); runs once T024 wires `pyro check`
+// CR LF ends every line; diagnostics still use LF line numbers.
+const A: u32 = 1;
+const B: u32 = $; //~ E0104

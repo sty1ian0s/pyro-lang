@@ -1,0 +1,4 @@
+//@ stop-after: parse
+//@ expected-fail: T023 (expression parser); runs once T024 wires `pyro check`
+// After `.`, digits lex as a plain INT_LIT: `t.0.1` is t . 0 . 1, not t . 0.1.
+fn f(t: ((u32, u32), u32)) -> u32 { t.0.1 + t.0.0 + t.1 }

@@ -1,0 +1,12 @@
+//@ covers: E0106
+//@ expected-fail: T012 (lexer core); runs once T024 wires `pyro check`
+// Words that contain or resemble reserved words are ordinary identifiers.
+const actors: u32 = 1;
+const async_io: u32 = 2;
+const Await: u32 = 3;
+const macros: u32 = 4;
+const STATIC: u32 = 5;
+const try_lock: u32 = 6;
+const Union: u32 = 7;
+const var_x: u32 = 8;
+const yielded: u32 = 9;

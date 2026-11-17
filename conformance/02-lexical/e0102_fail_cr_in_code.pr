@@ -1,0 +1,2 @@
+//@ expected-fail: T011 (source loading); runs once T024 wires `pyro check`
+const A: u32 = 1;const B: u32 = 2; //~ E0102
