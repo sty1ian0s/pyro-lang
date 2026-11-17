@@ -17,11 +17,14 @@ enum Color {
     Green,
 }
 
-/// Documents the function.
-fn area(
-    /// Documents a parameter.
-    w: u32,
-    h: u32,
-) -> u32 { w * h }
+/// Documents the protocol.
+protocol Shape {
+    /// Documents a required method.
+    fn area(
+        /// Documents a parameter.
+        w: u32,
+        h: u32,
+    ) -> u32;
+}
 
 //// Four slashes make an ordinary comment, so this documents nothing and is fine.

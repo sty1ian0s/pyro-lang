@@ -1,10 +1,8 @@
 //@ stop-after: parse
 //@ expected-fail: T023 (expression parser); runs once T024 wires `pyro check`
 // `1.` and `.5` are not floats, so `0..10` is a range.
-fn f(a: []u32) -> f64 {
-    let r = 0..10;
-    let s = 1..=5;
-    let t = a[1..];
-    let u = 2.max(3);
-    1.5 + 2.0e-3
-}
+const R = 0..10;
+const S = 1..=5;
+const T = A[1..];
+const U = 2.max(3);
+const F: f64 = 1.5 + 2.0e-3;

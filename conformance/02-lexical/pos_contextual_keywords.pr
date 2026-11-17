@@ -1,7 +1,13 @@
 //@ stop-after: parse
 //@ expected-fail: T020 (item parser); runs once T024 wires `pyro check`
 // gpu, cpu, over and result are identifiers outside their special positions.
+struct S {
+    gpu: u32,
+    cpu: u32,
+    over: u32,
+    result: u32,
+}
 const gpu: u32 = 1;
 const cpu: u32 = 2;
 const over: u32 = 3;
-fn result(result: u32) -> u32 { result }
+const result: u32 = 4;
