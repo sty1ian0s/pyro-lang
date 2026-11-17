@@ -357,7 +357,7 @@ const Parser = struct {
         if (std.mem.eql(u8, tok, "false")) return .{ .boolean = false };
         if ((tok.len >= 5 and tok[4] == '-' and allDigits(tok[0..4])) or (tok.len >= 3 and tok[2] == ':' and allDigits(tok[0..2])))
             return .{ .datetime = parseDatetime(tok) orelse return p.fail(start, p.pos, "invalid date-time") };
-        return parseNumber(tok) orelse p.fail(start, p.pos, "invalid value");
+        return try parseNumber(p.arena, tok) orelse p.fail(start, p.pos, "invalid value");
     }
 
     fn scanToken(p: *Parser) void {
@@ -478,7 +478,7 @@ fn validDigits(s: []const u8, base: u8) bool {
     return true;
 }
 
-fn parseNumber(tok: []const u8) ?Data {
+fn parseNumber(arena: Allocator, tok: []const u8) Allocator.Error!?Data {
     const inf = std.math.inf(f64);
     const nan = std.math.nan(f64);
     const specials = [_]struct { []const u8, f64 }{
@@ -487,12 +487,11 @@ fn parseNumber(tok: []const u8) ?Data {
     };
     for (specials) |s| if (std.mem.eql(u8, tok, s[0])) return .{ .float = s[1] };
 
-    var buf: [128]u8 = undefined;
     for ([_]struct { []const u8, u8 }{ .{ "0x", 16 }, .{ "0o", 8 }, .{ "0b", 2 } }) |pre| {
         if (!std.mem.startsWith(u8, tok, pre[0])) continue;
         const digits = tok[2..];
         if (!validDigits(digits, pre[1])) return null;
-        return .{ .integer = std.fmt.parseInt(i64, stripUnderscores(&buf, digits) orelse return null, pre[1]) catch return null };
+        return .{ .integer = std.fmt.parseInt(i64, try stripUnderscores(arena, digits), pre[1]) catch return null };
     }
 
     const unsigned = if (tok.len > 0 and (tok[0] == '+' or tok[0] == '-')) tok[1..] else tok;
@@ -507,19 +506,21 @@ fn parseNumber(tok: []const u8) ?Data {
         if (exp.len > 0 and (exp[0] == '+' or exp[0] == '-')) exp = exp[1..];
         if (!validDigits(exp, 10)) return null;
     }
-    const clean = stripUnderscores(&buf, tok) orelse return null;
+    const clean = try stripUnderscores(arena, tok);
     if (dot_at == null and exp_at == null) return .{ .integer = std.fmt.parseInt(i64, clean, 10) catch return null };
     return .{ .float = std.fmt.parseFloat(f64, clean) catch return null };
 }
 
-fn stripUnderscores(buf: []u8, s: []const u8) ?[]const u8 {
+/// `s` without underscores; copies into `arena` only when there are any (TOML sets no length limit).
+fn stripUnderscores(arena: Allocator, s: []const u8) Allocator.Error![]const u8 {
+    if (std.mem.indexOfScalar(u8, s, '_') == null) return s;
+    const out = try arena.alloc(u8, s.len);
     var n: usize = 0;
     for (s) |c| if (c != '_') {
-        if (n == buf.len) return null;
-        buf[n] = c;
+        out[n] = c;
         n += 1;
     };
-    return buf[0..n];
+    return out[0..n];
 }
 
 fn parseDatetime(tok: []const u8) ?Datetime {
@@ -623,4 +624,27 @@ test "table redefinition rules" {
         var doc = try parse(std.testing.allocator, src, &diag);
         doc.deinit();
     }
+}
+
+test "long float literals have no length limit" {
+    const ones: [200]u8 = @splat('1');
+    const zeros: [200]u8 = @splat('0');
+    const src = "f = 0." ++ ones ++ "\ng = 1_0." ++ zeros ++ "1\n";
+    var diag: Diagnostic = undefined;
+    var doc = try parse(std.testing.allocator, src, &diag);
+    defer doc.deinit();
+    try std.testing.expectApproxEqRel(@as(f64, 1.0 / 9.0), doc.root.get("f").?.data.float, 1e-15);
+    try std.testing.expectEqual(@as(f64, 10.0), doc.root.get("g").?.data.float);
+}
+
+test "an edited value can be edited again" {
+    var diag: Diagnostic = undefined;
+    var doc = try parse(std.testing.allocator, "b = 2\n", &diag);
+    defer doc.deinit();
+    const b = doc.root.get("b").?;
+    const t = try doc.allocator().create(toml.Table);
+    t.* = .{};
+    try b.set(.{ .table = t });
+    try b.set(.{ .integer = 3 });
+    try std.testing.expectEqual(@as(i64, 3), b.data.integer);
 }

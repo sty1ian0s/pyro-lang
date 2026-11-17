@@ -54,7 +54,8 @@ pub const Value = struct {
     /// old source text. Parsed `[header]` tables and arrays of tables have no single
     /// source text to replace, so editing them whole fails; edit their entries instead.
     pub fn set(v: *Value, data: Data) error{EditNotRepresentable}!void {
-        const section = switch (v.data) {
+        // Judge from the parsed node only: an edited value is always spliced as an inline value.
+        const section = !v.edited and switch (v.data) {
             .table => |t| t.kind != .inline_table,
             .array => |a| a.kind == .tables,
             else => false,

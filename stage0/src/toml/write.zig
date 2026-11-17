@@ -161,8 +161,11 @@ fn writeString(s: []const u8, w: *Writer) Writer.Error!void {
 fn writeFloat(f: f64, w: *Writer) Writer.Error!void {
     if (std.math.isNan(f)) return w.writeAll("nan");
     if (std.math.isInf(f)) return w.writeAll(if (f > 0) "inf" else "-inf");
+    // Decimal form of very large or tiny magnitudes runs to hundreds of digits.
+    const a = @abs(f);
+    const mode: std.fmt.float.Mode = if (a >= 1e16 or (a != 0 and a < 1e-5)) .scientific else .decimal;
     var buf: [std.fmt.float.bufferSize(.decimal, f64)]u8 = undefined;
-    const s = std.fmt.float.render(&buf, f, .{ .mode = .decimal }) catch unreachable; // buffer sized for f64
+    const s = std.fmt.float.render(&buf, f, .{ .mode = mode }) catch unreachable; // buffer sized for f64
     try w.writeAll(s);
     // `{d}` prints integral floats without a fraction, which TOML would read as an integer.
     if (std.mem.indexOfAny(u8, s, ".e") == null) try w.writeAll(".0");
@@ -230,4 +233,23 @@ test "canonical output of a hand-built document" {
         "f = -0.0\n\n[[package]]\nname = \"a\\\"b\\n\"\n\"odd key\" = 1979-05-27T07:32:00.12-07:00\n",
         out.written(),
     );
+}
+
+test "extreme floats round-trip through canonical output" {
+    var doc = try toml.Document.init(std.testing.allocator);
+    defer doc.deinit();
+    const gpa = doc.allocator();
+    try doc.root.put(gpa, "f", .{ .data = .{ .float = 1e300 } });
+    try doc.root.put(gpa, "g", .{ .data = .{ .float = 5e-324 } });
+    try doc.root.put(gpa, "h", .{ .data = .{ .float = -1.5e16 } });
+
+    var out: Writer.Allocating = .init(std.testing.allocator);
+    defer out.deinit();
+    try doc.write(&out.writer);
+    var diag: toml.Diagnostic = undefined;
+    var back = try toml.parse(std.testing.allocator, out.written(), &diag);
+    defer back.deinit();
+    try std.testing.expectEqual(@as(f64, 1e300), back.root.get("f").?.data.float);
+    try std.testing.expectEqual(@as(f64, 5e-324), back.root.get("g").?.data.float);
+    try std.testing.expectEqual(@as(f64, -1.5e16), back.root.get("h").?.data.float);
 }
