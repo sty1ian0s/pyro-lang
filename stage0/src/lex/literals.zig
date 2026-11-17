@@ -255,16 +255,19 @@ fn scanQuoted(src: []const u8, start: u32, body: u32, quote: u8, kind: tok.Token
             return r.finish(kind, start, i);
         }
         if (src[i] == quote) break;
+        // Step one byte at a time so bad UTF-8 never skips a quote or LF;
+        // continuation bytes do not start a new scalar value.
+        if (src[i] & 0xC0 == 0x80) {
+            i += 1;
+            continue;
+        }
         if (count == 1) second = i;
         count += 1;
         if (src[i] == '\\') {
             const e = escape(src, i);
             if (e.value == null) r.fail(.bad_escape, i);
             i += e.len;
-        } else {
-            const n = std.unicode.utf8ByteSequenceLength(src[i]) catch 1;
-            i = @min(i + n, @as(u32, @intCast(src.len)));
-        }
+        } else i += 1;
     }
     i += 1;
     if (quote == '\'' and count != 1 and r.err == null) {
@@ -543,6 +546,11 @@ test "char literals" {
     try expectErr("'ab'", .unterminated, 2);
     try expectErr("'a\n'", .unterminated, 2);
     try expectErr("'\\q'", .bad_escape, 1);
+    // Truncated UTF-8 never jumps past the closing quote or the LF.
+    try expectScan("'\xC3' + 'b'", 0, .{}, .char_lit, 3);
+    try expectScan("\"\xE2\" x", 0, .{}, .string_lit, 3);
+    try expectErr("\"\xF0\nx = 1;\n", .unterminated, 2);
+    try testing.expectEqual(@as(u32, 2), scan("\"\xF0\nx", 0, .{}).len);
     try testing.expectEqual(DiagCode.E0109, diagCode(.unterminated));
 }
 
