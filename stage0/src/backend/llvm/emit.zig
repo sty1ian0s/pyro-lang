@@ -14,7 +14,8 @@
 //!
 //! The input must pass the P-IR verifier. Opcodes this stage does not cover
 //! (memory, calls, traps, vectors, atomics: T087) and globals give
-//! `error.Unsupported`.
+//! `error.Unsupported`. A `@name` operand naming a function is that
+//! function's address.
 //!
 //! Every function here references LLVM symbols, so only call it when
 //! `@import("build_options").llvm` is true.
@@ -48,7 +49,7 @@ pub fn emitModule(gpa: Allocator, ctx: c.ContextRef, m: *const ir.Module, name: 
     for (fns, m.functions.items) |*llfn, f| llfn.* = try declare(arena, ctx, mod, f);
     for (fns, m.functions.items) |llfn, f| {
         if (f.isDeclaration()) continue;
-        var e: FnEmitter = .{ .arena = arena, .ctx = ctx, .b = b, .f = f, .llfn = llfn };
+        var e: FnEmitter = .{ .arena = arena, .ctx = ctx, .b = b, .m = m, .fns = fns, .f = f, .llfn = llfn };
         try e.body();
     }
     return mod;
@@ -114,6 +115,9 @@ const FnEmitter = struct {
     arena: Allocator,
     ctx: c.ContextRef,
     b: c.BuilderRef,
+    m: *const ir.Module,
+    /// LLVM function per entry of `m.functions`.
+    fns: []const c.ValueRef,
     f: *const ir.Function,
     llfn: c.ValueRef,
     /// LLVM value per P-IR value; null until emitted.
@@ -167,12 +171,17 @@ const FnEmitter = struct {
                 c.LLVMConstReal(llType(e.ctx, ty), x)
             else
                 error.Unsupported,
-            else => error.Unsupported,
+            // Globals arrive with T087; verified P-IR names no other symbol.
+            .symbol => |name| for (e.m.functions.items, e.fns) |f, llfn| {
+                if (std.mem.eql(u8, f.name, name)) break llfn;
+            } else error.Unsupported,
+            .type, .order => error.Unsupported,
         };
     }
 
-    fn val(e: *FnEmitter, i: ir.Inst, n: usize) c.ValueRef {
-        return e.values[i.operands[n].value.index()].?;
+    /// The LLVM value of value operand `n` of `i` (a `%value` or `@symbol`).
+    fn val(e: *FnEmitter, i: ir.Inst, n: usize) Error!c.ValueRef {
+        return e.operand(i.operands[n], .void);
     }
 
     fn emitInst(e: *FnEmitter, i: ir.Inst, bi: u32) Error!void {
@@ -180,7 +189,7 @@ const FnEmitter = struct {
         const v: c.ValueRef = switch (i.op) {
             .@"const" => try e.operand(i.operands[0], ty),
             .add, .sub, .mul, .shl => blk: {
-                const r = c.LLVMBuildBinOp(e.b, binOpcode(i.op), e.val(i, 0), e.val(i, 1), "");
+                const r = c.LLVMBuildBinOp(e.b, binOpcode(i.op), try e.val(i, 0), try e.val(i, 1), "");
                 // A constant-folded result is not an instruction and has no flags.
                 if (c.LLVMIsAInstruction(r) != null) {
                     if (i.flags.nuw) c.LLVMSetNUW(r, 1);
@@ -188,12 +197,12 @@ const FnEmitter = struct {
                 }
                 break :blk r;
             },
-            .udiv, .sdiv, .urem, .srem, .@"and", .@"or", .xor, .lshr, .ashr => c.LLVMBuildBinOp(e.b, binOpcode(i.op), e.val(i, 0), e.val(i, 1), ""),
-            .fadd, .fsub, .fmul, .fdiv, .frem => fastMath(i, c.LLVMBuildBinOp(e.b, binOpcode(i.op), e.val(i, 0), e.val(i, 1), "")),
-            .fneg => fastMath(i, c.LLVMBuildFNeg(e.b, e.val(i, 0), "")),
-            .icmp => c.LLVMBuildICmp(e.b, intPred(i.pred), e.val(i, 0), e.val(i, 1), ""),
-            .fcmp => fastMath(i, c.LLVMBuildFCmp(e.b, realPred(i.pred), e.val(i, 0), e.val(i, 1), "")),
-            .trunc, .zext, .sext, .fptrunc, .fpext, .uitofp, .sitofp, .bitcast, .ptrtoint, .inttoptr => c.LLVMBuildCast(e.b, castOpcode(i.op), e.val(i, 0), llType(e.ctx, ty), ""),
+            .udiv, .sdiv, .urem, .srem, .@"and", .@"or", .xor, .lshr, .ashr => c.LLVMBuildBinOp(e.b, binOpcode(i.op), try e.val(i, 0), try e.val(i, 1), ""),
+            .fadd, .fsub, .fmul, .fdiv, .frem => fastMath(i, c.LLVMBuildBinOp(e.b, binOpcode(i.op), try e.val(i, 0), try e.val(i, 1), "")),
+            .fneg => fastMath(i, c.LLVMBuildFNeg(e.b, try e.val(i, 0), "")),
+            .icmp => c.LLVMBuildICmp(e.b, intPred(i.pred), try e.val(i, 0), try e.val(i, 1), ""),
+            .fcmp => fastMath(i, c.LLVMBuildFCmp(e.b, realPred(i.pred), try e.val(i, 0), try e.val(i, 1), "")),
+            .trunc, .zext, .sext, .fptrunc, .fpext, .uitofp, .sitofp, .bitcast, .ptrtoint, .inttoptr => c.LLVMBuildCast(e.b, castOpcode(i.op), try e.val(i, 0), llType(e.ctx, ty), ""),
             .br => blk: {
                 const from = e.blocks[bi].?;
                 break :blk c.LLVMBuildBr(e.b, try e.edgeTo(from, i.targets, 0));
@@ -203,19 +212,19 @@ const FnEmitter = struct {
                 const t = try e.edgeTo(from, i.targets, 0);
                 const f = try e.edgeTo(from, i.targets, 1);
                 c.LLVMPositionBuilderAtEnd(e.b, from);
-                break :blk c.LLVMBuildCondBr(e.b, e.val(i, 0), t, f);
+                break :blk c.LLVMBuildCondBr(e.b, try e.val(i, 0), t, f);
             },
             .@"switch" => blk: {
                 const from = e.blocks[bi].?;
                 const dests = try e.arena.alloc(c.BasicBlockRef, i.targets.len);
                 for (dests, 0..) |*d, n| d.* = try e.edgeTo(from, i.targets, n);
                 c.LLVMPositionBuilderAtEnd(e.b, from);
-                const sw = c.LLVMBuildSwitch(e.b, e.val(i, 0), dests[0], @intCast(dests.len - 1));
+                const sw = c.LLVMBuildSwitch(e.b, try e.val(i, 0), dests[0], @intCast(dests.len - 1));
                 const key_ty = llType(e.ctx, e.f.typeOf(i.operands[0].value));
                 for (i.targets[1..], dests[1..]) |t, d| c.LLVMAddCase(sw, c.LLVMConstInt(key_ty, @bitCast(t.key), 0), d);
                 break :blk sw;
             },
-            .ret => if (i.operands.len == 0) c.LLVMBuildRetVoid(e.b) else c.LLVMBuildRet(e.b, e.val(i, 0)),
+            .ret => if (i.operands.len == 0) c.LLVMBuildRetVoid(e.b) else c.LLVMBuildRet(e.b, try e.val(i, 0)),
             .@"unreachable" => c.LLVMBuildUnreachable(e.b),
             else => return error.Unsupported,
         };
@@ -653,6 +662,40 @@ test "switch with repeated parameterised target runs under JIT" {
             try testing.expectEqual(@as(i32, -1), f(-1));
             try testing.expectEqual(@as(i32, 10), f(5));
             try testing.expectEqual(@as(i32, 42), f(42));
+        }
+    }.run);
+}
+
+test "function symbols are values" {
+    try llvmTest(struct {
+        fn run() !void {
+            var x = try Emitted.init(
+                \\fn @g() -> void {
+                \\^entry:
+                \\  ret
+                \\}
+                \\fn @f(%p: ptr) -> i64 {
+                \\^entry:
+                \\  %a: i64 = ptrtoint @g
+                \\  %e: i1 = icmp eq %p, @f
+                \\  cond_br %e, ^b(@f), ^b(%p)
+                \\^b(%q: ptr):
+                \\  %r: i64 = ptrtoint %q
+                \\  %s: i64 = add %a, %r
+                \\  ret %s
+                \\}
+                \\fn @h() -> ptr {
+                \\^entry:
+                \\  ret @h
+                \\}
+            );
+            defer x.deinit();
+            try x.expect(&.{
+                "%e = icmp eq ptr %p, @f",
+                "%q = phi ptr [ @f, %entry ], [ %p, %edge ]",
+                "%s = add i64 ptrtoint (ptr @g to i64), %r",
+                "ret ptr @h",
+            }, &.{});
         }
     }.run);
 }
