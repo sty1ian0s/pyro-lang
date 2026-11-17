@@ -43,6 +43,7 @@ const files = [_][2][]const u8{
     .{ "conformance/03-run/da.prod.out", "hi\nwrapped\n" },
     .{ "examples/hello/src/main.pr", "//fake run: Hello from Pyro\n" },
     .{ "examples/hello/expected.out", "Hello from Pyro\n" },
+    .{ "examples/noexp/src/main.pr", "//fake run: x\n" },
     .{ "A-diagnostics.md", "## A.3 Registry\n| E0101 | a | 2.1 |\n| E0102 | b | 2.1 |\n| W0201 | c | 3.9 |\n" },
 };
 
@@ -65,7 +66,8 @@ test "harness against a fake compiler: match, missing, extra, wrong line, env mi
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const opts: main.Options = .{
-        .pyro = try std.fs.path.join(arena, &.{ root, "pyro" }),
+        // Relative, as `zig build conformance` passes it: examples run with another cwd.
+        .pyro = try std.fs.path.join(arena, &.{ std.testing.TmpDir.parent_dir_path, &tmp.sub_path, "pyro" }),
         .conformance = try std.fs.path.join(arena, &.{ root, "conformance" }),
         .examples = try std.fs.path.join(arena, &.{ root, "examples" }),
         .registry = try std.fs.path.join(arena, &.{ root, "A-diagnostics.md" }),
@@ -87,7 +89,8 @@ test "harness against a fake compiler: match, missing, extra, wrong line, env mi
         "FAIL  03-run/env.pr\n      env mismatch: prod output differs from dev\n      [prod] stdout differs at line 2\n",
         "PASS  03-run/same.pr\n",
         "PASS  examples/hello\n",
-        "conformance: 5 passed, 4 failed, 1 xfail, 0 xpass, 0 skipped\n",
+        "SKIP  examples/noexp (no expected.out)\n",
+        "conformance: 5 passed, 4 failed, 1 xfail, 0 xpass, 1 skipped\n",
         "coverage: 2 of 3 A.3 codes lack a passing or failing case\n  E0102  missing pass\n  W0201  missing pass\n",
     }) |want| {
         if (std.mem.indexOf(u8, text, want) == null) {

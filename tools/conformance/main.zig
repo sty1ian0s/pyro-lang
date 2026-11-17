@@ -103,7 +103,13 @@ pub fn run(gpa: Allocator, io: Io, opts: Options, w: *Writer) !Summary {
     const arena = arena_state.allocator();
     var case_arena: std.heap.ArenaAllocator = .init(gpa);
     defer case_arena.deinit();
-    const ctx: exec.Ctx = .{ .arena = case_arena.allocator(), .io = io, .pyro = opts.pyro };
+    // Examples run with their package as cwd, so a relative compiler path must be made absolute.
+    // A bare name (no separator) is left for PATH lookup.
+    const pyro = if (std.mem.indexOfAny(u8, opts.pyro, std.fs.path.sep_str ++ "/") != null)
+        try Io.Dir.cwd().realPathFileAlloc(io, opts.pyro, arena)
+    else
+        opts.pyro;
+    const ctx: exec.Ctx = .{ .arena = case_arena.allocator(), .io = io, .pyro = pyro };
 
     const coverage: ?Coverage = if (opts.registry) |path|
         try .init(arena, try parseRegistry(arena, try Io.Dir.cwd().readFileAlloc(io, path, arena, .unlimited)))
@@ -137,8 +143,10 @@ pub fn run(gpa: Allocator, io: Io, opts: Options, w: *Writer) !Summary {
         if (!selected(opts.filters, display)) continue;
         defer _ = case_arena.reset(.retain_capacity);
         const path = try std.fs.path.join(ctx.arena, &.{ dir, name });
-        if (!try exec.exists(ctx, try std.fs.path.join(ctx.arena, &.{ path, "expected.out" }))) continue;
-        const verdict = exec.runExample(ctx, path) catch |err| exec.Verdict{ .fail = @errorName(err) };
+        const verdict: exec.Verdict = if (!try exec.exists(ctx, try std.fs.path.join(ctx.arena, &.{ path, "expected.out" })))
+            .{ .skip = "no expected.out" }
+        else
+            exec.runExample(ctx, path) catch |err| .{ .fail = @errorName(err) };
         try report(w, &summary, display, verdict, null);
     };
 
