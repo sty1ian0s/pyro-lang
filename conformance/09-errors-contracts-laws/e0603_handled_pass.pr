@@ -21,7 +21,7 @@ fn run(xs: []u8) -> Result<u8, IoError> {
     send(1)?;
     match send(2) {
         .ok(_) => {},
-        .err(e) => return .err(e),
+        .err(e) => { return .err(e); }
     }
     if let .err(e) = send(3) { return .err(e); }
     _ = send(4);

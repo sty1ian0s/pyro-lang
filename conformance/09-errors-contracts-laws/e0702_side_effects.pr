@@ -19,6 +19,9 @@ pub struct Counter {
 
     @requires(self.bump() > 0) //~ E0702
     pub fn reset(mut self) { self.hits = 0; }
+
+    @requires({ self.hits = 0; true }) //~ E0702
+    pub fn clear(mut self) { self.hits = 0; }
 }
 
 fn zero_first(mut buf: []u8) -> bool {
@@ -31,4 +34,4 @@ fn zero_first(mut buf: []u8) -> bool {
 pub fn send(mut buf: []u8) { buf[0] = 1; }
 
 @requires(t.release()) //~ E0702
-pub fn finish(move t: Token) -> bool { t.release() }
+pub fn finish(move t: Token) -> bool { true }
