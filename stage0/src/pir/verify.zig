@@ -197,6 +197,8 @@ const Verifier = struct {
         const i = x.index();
         try v.want(i < v.def_block.len, .undefined_value, "defined value has no entry in the value table");
         try v.want(v.def_block[i] == none, .multiple_definition, "value defined twice");
+        // B.5.1: `void` is only a return type; LLVM cannot name, pass or phi it.
+        try v.want(isValue(v.f.typeOf(x)), .bad_result, "value of type void");
         v.def_block[i] = block;
         v.def_pos[i] = pos;
     }
@@ -385,6 +387,12 @@ const Verifier = struct {
         return t.scalar != .void;
     }
 
+    /// A type LLVM accepts for atomic access: a byte-sized-or-wider scalar
+    /// integer, a pointer, or (if `float_ok`) a float.
+    fn isAtomic(t: Type, float_ok: bool) bool {
+        return t.lanes == 0 and (t.scalar == .ptr or (isInt(t) and bits(t.scalar) >= 8) or (float_ok and isFloat(t)));
+    }
+
     fn bits(s: ir.Scalar) u32 {
         return switch (s) {
             .i1 => 1,
@@ -479,11 +487,15 @@ const Verifier = struct {
             .load => {
                 try v.nOps(inst, 1);
                 try v.ptr(inst, 0);
-                try v.want(isValue(try v.result(inst)), .bad_result, "load of void");
+                const r = try v.result(inst);
+                try v.want(isValue(r), .bad_result, "load of void");
+                if (inst.atomic != .none) try v.want(isAtomic(r, true), .bad_result, "atomic load of an unsupported type");
             },
             .store => {
                 try v.nOps(inst, 2);
-                try v.want(isValue(try v.val(inst, 0)), .operand_type, "store of void");
+                const t = try v.val(inst, 0);
+                try v.want(isValue(t), .operand_type, "store of void");
+                if (inst.atomic != .none) try v.want(isAtomic(t, true), .operand_type, "atomic store of an unsupported type");
                 try v.ptr(inst, 1);
                 try v.noResult(inst);
             },
@@ -641,7 +653,8 @@ const Verifier = struct {
                 try v.nOps(inst, 3);
                 try v.ptr(inst, 0);
                 const t = try v.val(inst, 1);
-                try v.want(t.lanes == 0 and (isInt(t) or t.scalar == .ptr or (isFloat(t) and inst.rmw == .xchg)), .operand_type, "atomic.rmw on an unsupported type");
+                const xchg = inst.rmw == .xchg;
+                try v.want(isAtomic(t, xchg) and (xchg or isInt(t)), .operand_type, "atomic.rmw on an unsupported type");
                 _ = try v.order(inst, 2);
                 try v.resultIs(inst, t);
             },
@@ -649,7 +662,7 @@ const Verifier = struct {
                 try v.nOps(inst, 5);
                 try v.ptr(inst, 0);
                 const t = try v.val(inst, 1);
-                try v.want(t.lanes == 0 and (isInt(t) or t.scalar == .ptr), .operand_type, "cmpxchg on an unsupported type");
+                try v.want(isAtomic(t, false), .operand_type, "cmpxchg on an unsupported type");
                 try v.want((try v.val(inst, 2)).eql(t), .operand_type, "operand types differ");
                 _ = try v.order(inst, 3);
                 const fo = try v.order(inst, 4);
@@ -660,7 +673,7 @@ const Verifier = struct {
             },
             .fence => {
                 try v.nOps(inst, 1);
-                _ = try v.order(inst, 0);
+                try v.want(try v.order(inst, 0) != .relaxed, .bad_operand, "fence cannot be relaxed");
                 try v.noResult(inst);
             },
             .@"const" => {
@@ -684,10 +697,18 @@ const Verifier = struct {
             },
             .@"switch" => {
                 try v.want(ops.len == 1 and inst.targets.len >= 1, .bad_operand, "switch takes a value and a default target");
-                try v.want(isScalarInt(try v.val(inst, 0)), .operand_type, "switch on a non-integer");
+                const t = try v.val(inst, 0);
+                try v.want(isScalarInt(t), .operand_type, "switch on a non-integer");
+                // Keys must fit the scrutinee (signed or unsigned) and differ once truncated to it.
+                const b: u6 = @intCast(bits(t.scalar) - 1);
+                const lo = -(@as(i64, 1) << b);
+                const key_mask = (@as(u64, 2) << b) -% 1;
                 const cases = inst.targets[1..];
-                for (cases, 0..) |c, i| for (cases[0..i]) |d|
-                    try v.want(c.key != d.key, .bad_operand, "duplicate switch case");
+                for (cases, 0..) |c, i| {
+                    try v.want(b == 63 or (c.key >= lo and c.key <= @as(i64, @intCast(key_mask))), .bad_operand, "switch case does not fit the scrutinee type");
+                    for (cases[0..i]) |d|
+                        try v.want((@as(u64, @bitCast(c.key)) ^ @as(u64, @bitCast(d.key))) & key_mask != 0, .bad_operand, "duplicate switch case");
+                }
                 try v.noResult(inst);
             },
             .ret => {
@@ -709,15 +730,22 @@ const Verifier = struct {
         const callee = v.m.findFunction(ops[0].symbol) orelse return v.fail(.bad_symbol, "callee is not a function");
         const params = callee.params.items;
         try v.want(ops.len - 1 == params.len, .bad_symbol, "wrong number of call arguments");
-        for (params, 1..) |p, i|
+        for (params, 1..) |p, i| {
+            // The callee may not be verified yet; do not trust its value table.
+            try v.want(p.value.index() < callee.values.items.len, .bad_symbol, "callee parameter has no entry in its value table");
             try v.want((try v.val(inst, i)).eql(callee.typeOf(p.value)), .bad_symbol, "call argument type differs from the parameter type");
+        }
         if (inst.op == .spawn or callee.ret.scalar == .void)
             try v.noResult(inst)
         else
             try v.resultIs(inst, callee.ret);
         if (inst.op == .@"call.tail") {
-            // musttail: the call must be directly returned, with matching types.
+            // musttail: the call must be directly returned, and caller and
+            // callee prototypes must match.
             try v.want(callee.ret.eql(v.f.ret), .bad_symbol, "call.tail callee return type differs from the caller's");
+            try v.want(params.len == v.f.params.items.len, .bad_symbol, "call.tail callee parameter count differs from the caller's");
+            for (params, v.f.params.items) |p, q|
+                try v.want(callee.typeOf(p.value).eql(v.f.typeOf(q.value)), .bad_symbol, "call.tail callee parameter types differ from the caller's");
             const ok = rest.len == 1 and rest[0].op == .ret and
                 (inst.results.len == 0 or (rest[0].operands.len == 1 and rest[0].operands[0] == .value and
                     rest[0].operands[0].value == inst.results[0]));
@@ -919,6 +947,12 @@ test "valid modules cover every opcode" {
         \\
         \\fn @callee(%a: i32) -> i32 inline cold
         \\
+        \\fn @tail(%b: i32) -> i32 {
+        \\^entry:
+        \\  %t: i32 = call.tail @callee(%b)
+        \\  ret %t
+        \\}
+        \\
         \\fn @calls(%fp: ptr, %a: i32, %n: i64, %p: ptr) -> i32 {
         \\^entry:
         \\  %r0: i32 = call @callee(%a)
@@ -939,7 +973,7 @@ test "valid modules cover every opcode" {
         \\  %more: i1 = icmp ult %next, %n
         \\  cond_br %more, ^loop(%next), ^tail
         \\^tail:
-        \\  %t: i32 = call.tail @callee(%a)
+        \\  %t: i32 = call @callee(%a)
         \\  ret %t
         \\^exit(%x: i32):
         \\  ret %x
@@ -1090,6 +1124,15 @@ test "operand types" {
         .{ .bad_operand, "fn @f(%u: i8) -> i8 {\n^entry:\n  %e: i8 = bf.extract %u, 4, 5\n  ret %e\n}\n" },
         .{ .bad_symbol, "fn @g(%a: i64) -> void\nfn @f(%a: i32) -> void {\n^entry:\n  call @g(%a)\n  ret\n}\n" },
         .{ .bad_symbol, "fn @f(%a: i32) -> ptr {\n^entry:\n  %p: ptr = inttoptr %a\n  ret @nowhere\n}\n" },
+        .{ .bad_symbol, "fn @g(%a: i32, %b: i32) -> i32\nfn @f(%a: i32) -> i32 {\n^entry:\n  %r: i32 = call.tail @g(%a, %a)\n  ret %r\n}\n" },
+        .{ .bad_result, "fn @f(%a: void) -> void {\n^entry:\n  ret\n}\n" },
+        .{ .bad_result, "fn @f(%p: ptr) -> void {\n^entry:\n  %r: void = call.indirect %p()\n  ret\n}\n" },
+        .{ .bad_operand, "fn @f() -> void {\n^entry:\n  fence relaxed\n  ret\n}\n" },
+        .{ .operand_type, "fn @f(%p: ptr, %q: ptr) -> ptr {\n^entry:\n  %r: ptr = atomic.rmw add %p, %q, seq_cst\n  ret %r\n}\n" },
+        .{ .operand_type, "fn @f(%p: ptr, %b: i1) -> i1 {\n^entry:\n  %r: i1 = atomic.rmw add %p, %b, seq_cst\n  ret %r\n}\n" },
+        .{ .bad_result, "fn @f(%p: ptr) -> vec<4 x f32> {\n^entry:\n  %r: vec<4 x f32> = load atomic(acquire) %p\n  ret %r\n}\n" },
+        .{ .bad_operand, "fn @f(%a: i8) -> void {\n^entry:\n  switch %a, default ^x, [0: ^x, 256: ^x]\n^x:\n  ret\n}\n" },
+        .{ .bad_operand, "fn @f(%a: i8) -> void {\n^entry:\n  switch %a, default ^x, [-1: ^x, 255: ^x]\n^x:\n  ret\n}\n" },
         .{ .bad_terminator, "fn @g() -> i32\nfn @f() -> i32 {\n^entry:\n  %r: i32 = call.tail @g()\n  %s: i32 = add %r, %r\n  ret %s\n}\n" },
     };
     for (cases) |c| {
@@ -1098,6 +1141,20 @@ test "operand types" {
             return e;
         };
     }
+}
+
+test "ssa: malformed callee does not crash the caller's check" {
+    var m = try ir.Module.init(testing.allocator);
+    defer m.deinit();
+    const f = try m.addFunction("f", .void);
+    const entry = try f.addBlock("entry");
+    var b: Builder = .init(f, entry);
+    const x = try b.constInt(.of(.i32), 1);
+    _ = try b.call("g", .void, &.{x});
+    try b.ret(null);
+    const g = try m.addFunction("g", .void);
+    try g.params.append(g.arena, .{ .value = @fromBackingInt(5) }); // no value table entry
+    try expectFailure(.bad_symbol, &m);
 }
 
 test "terminators" {
