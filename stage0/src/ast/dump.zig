@@ -23,6 +23,7 @@ const Ast = @import("Ast.zig");
 const Node = Ast.Node;
 const NodeKind = Ast.NodeKind;
 const Writer = std.Io.Writer;
+const token = @import("../lex/token.zig");
 
 /// Writes the tree under node 0 (the root), followed by a newline.
 pub fn dump(ast: *const Ast, w: *Writer) Writer.Error!void {
@@ -92,7 +93,7 @@ fn hasModifiers(k: NodeKind) bool {
     };
 }
 
-fn isModifier(t: @import("../lex/token.zig").TokenKind) bool {
+fn isModifier(t: token.TokenKind) bool {
     return switch (t) {
         .kw_pub, .kw_mut, .kw_move, .kw_comptime => true,
         else => false,
@@ -100,7 +101,6 @@ fn isModifier(t: @import("../lex/token.zig").TokenKind) bool {
 }
 
 const testing = std.testing;
-const token = @import("../lex/token.zig");
 
 /// Test helper: an `Ast` whose tokens are the space-separated words of `src`,
 /// kinded as keyword, punctuator or identifier.
