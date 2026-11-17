@@ -1,0 +1,15 @@
+//@ covers: E0508
+//@ expected-fail: T128
+// §10.6.2: single-alphabet swizzles read lanes (repeats allowed) and, without repeats,
+// are assignable places.
+
+fn swizzles(v: vec4<f32>, c: vec4<f32>) -> f32 {
+    let one: f32 = v.x;
+    let rev: vec3<f32> = v.zyx;
+    let col: vec4<f32> = c.rgba;
+    let splat: vec4<f32> = v.xxxx;
+    let mut w = v;
+    w.xy = .{ 1.0, 2.0 };
+    w.ba = .{ 3.0, 4.0 };
+    one + rev.x + col.a + splat.w + w.y
+}

@@ -1,0 +1,18 @@
+//@ expected-fail: T125
+// §10.2 rule 2: a spawned function must return `void`.
+
+enum Oops { failed }
+
+fn double(x: u32) -> u32 { x * 2 }
+
+fn fallible(x: u32) -> Result<u32, Oops> {
+    if x == 0 { return .err(.failed); }
+    return .ok(x);
+}
+
+fn spawns() {
+    nursery {
+        spawn double(1); //~ E0502
+        spawn fallible(2); //~ E0502
+    }
+}

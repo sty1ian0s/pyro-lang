@@ -1,0 +1,24 @@
+//@ covers: E0502
+//@ expected-fail: T125
+// §10.2 rule 2: results come back through `mut` arguments, errors through a `mut`
+// `Result` slot.
+
+enum Oops { failed }
+
+fn double(x: u32, mut out: u32) { out = x * 2; }
+
+fn checked(x: u32, mut out: Result<u32, Oops>) -> void {
+    if x == 0 { out = .err(.failed); } else { out = .ok(x); }
+}
+
+fn spawns() {
+    let mut a: u32 = 0;
+    let mut b: u32 = 0;
+    let mut r: Result<u32, Oops> = .err(.failed);
+    nursery {
+        spawn double(1, mut a);
+        spawn double(2, mut b);
+        spawn checked(3, mut r);
+    }
+    assert(a + b == 6, "both tasks wrote their result");
+}

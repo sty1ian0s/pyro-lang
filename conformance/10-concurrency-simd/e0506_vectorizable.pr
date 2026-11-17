@@ -1,0 +1,30 @@
+//@ covers: E0506
+//@ expected-fail: T156
+// §10.6.4: element-wise loops over slices and SoA data vectorize, including `where`
+// filters, inlinable calls, lane-wise branches and captured scalars.
+
+@soa
+struct Particle { pub mut x: f32, pub mut vx: f32, pub mut alive: bool }
+
+fn twice(x: f32) -> f32 { x * 2.0 }
+
+fn integrate(mut particles: []Particle, dt: f32) {
+    @simd
+    for p in particles where p.alive {
+        p.x += p.vx * dt;
+    }
+}
+
+fn scale(mut xs: []f32, k: f32) {
+    @simd
+    for x in xs {
+        x = twice(x) * k;
+    }
+}
+
+fn clamp_low(mut xs: []i32) {
+    @simd
+    for x in xs {
+        if x < 0 { x = 0; }
+    }
+}

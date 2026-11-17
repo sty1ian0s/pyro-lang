@@ -1,0 +1,23 @@
+//@ expected-fail: T026
+// §3.5, §10.2: `spawn` must be lexically inside a `nursery` body, without crossing a
+// `fn` or lambda boundary.
+
+fn work(x: u32) {}
+
+fn no_nursery() {
+    spawn work(1); //~ E0501
+}
+
+fn after_nursery() {
+    nursery {
+        spawn work(2);
+    }
+    spawn work(3); //~ E0501
+}
+
+fn inside_lambda() {
+    nursery {
+        let f = || { spawn work(4); }; //~ E0501
+        f();
+    }
+}

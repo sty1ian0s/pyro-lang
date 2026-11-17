@@ -1,0 +1,45 @@
+//@ expected-fail: T123
+// §10.3: outer variables are read-only in the body; `break`, `return`, `?` and labelled
+// `continue` are not allowed.
+
+enum Bad { negative }
+
+fn check(x: i32) -> Result<i32, Bad> {
+    if x < 0 { return .err(.negative); }
+    return .ok(x);
+}
+
+fn outer_write(xs: []u32) -> u32 {
+    let mut total: u32 = 0;
+    parallel_for x in xs {
+        total += x; //~ E0504
+    }
+    total
+}
+
+fn with_break(xs: []u32) {
+    parallel_for x in xs {
+        if x == 0 { break; } //~ E0504
+    }
+}
+
+fn with_return(xs: []u32) {
+    parallel_for x in xs {
+        if x == 0 { return; } //~ E0504
+    }
+}
+
+fn with_try(mut xs: []i32) -> Result<void, Bad> {
+    parallel_for x in xs {
+        x = check(x)?; //~ E0504
+    }
+    return .ok();
+}
+
+fn with_labelled_continue(xs: []u32) {
+    outer: for r in 0..4u32 {
+        parallel_for x in xs {
+            if x == r { continue :outer; } //~ E0504
+        }
+    }
+}

@@ -1,0 +1,20 @@
+//@ covers: W0401
+//@ expected-fail: T156
+// §10.6.4: `@soa` structs, `soa []T` views and slices of scalars do not warn.
+
+@soa
+struct Particle { pub mut x: f32, pub mut vx: f32 }
+
+struct Body { pub mut x: f32, pub mut vx: f32 }
+
+fn step_soa_struct(mut particles: []Particle, dt: f32) {
+    @simd for p in particles { p.x += p.vx * dt; }
+}
+
+fn step_soa_view(mut bodies: soa []Body, dt: f32) {
+    @simd for b in bodies { b.x += b.vx * dt; }
+}
+
+fn scale(mut xs: []f32, k: f32) {
+    @simd for x in xs { x *= k; }
+}

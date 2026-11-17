@@ -1,0 +1,23 @@
+//@ expected-fail: T133
+// §10.4.1 rule 2: each task gets a `Sender` of the channel the other task receives
+// from, so the nursery's channel graph has a cycle. The nursery is on one line so the
+// reported line is unambiguous.
+
+fn relay(inbox: Channel<u32, 4>, move out: Sender<u32>) {
+    defer out.close();
+    _ = out.send(1);
+    while let .some(v) = inbox.recv() {
+        if v > 10 { return; }
+        _ = out.send(v + 1);
+    }
+}
+
+fn ping_pong() {
+    let mut a: Channel<u32, 4> = .init();
+    defer a.deinit();
+    let mut b: Channel<u32, 4> = .init();
+    defer b.deinit();
+    let to_a = a.sender();
+    let to_b = b.sender();
+    nursery { spawn relay(a, move to_b); spawn relay(b, move to_a); } //~ W0501
+}

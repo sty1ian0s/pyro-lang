@@ -1,0 +1,20 @@
+//@ expected-fail: T124
+// §10.7: a `@no_alloc` function may not call an `@allocates` function, a function that
+// is not provably non-allocating, or a function pointer.
+
+fn append(mut xs: List<u32>, v: u32) { xs.push(v); }
+
+@no_alloc
+fn direct(mut xs: List<u32>) {
+    xs.push(1); //~ E0507
+}
+
+@no_alloc
+fn transitive(mut xs: List<u32>) {
+    append(mut xs, 2); //~ E0507
+}
+
+@no_alloc
+fn through_pointer(f: fn(u32) -> u32, x: u32) -> u32 {
+    f(x) //~ E0507
+}

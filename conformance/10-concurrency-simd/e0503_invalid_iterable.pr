@@ -1,0 +1,16 @@
+//@ expected-fail: T123
+// §10.3: the iterable must be a range, an array or slice (including SoA), or an
+// `IndexableMut` type whose elements are disjoint per index by contract. `chunks` is
+// only `Indexable`.
+
+fn read_only_chunks(xs: []u32) {
+    parallel_for c in xs.chunks(4) { //~ E0503
+        let n = c.len();
+    }
+}
+
+fn scalar(n: u32) {
+    parallel_for i in n { //~ E0503
+        let m = i;
+    }
+}
