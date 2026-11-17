@@ -1,10 +1,8 @@
 //@ covers: E1001
 //@ expected-fail: T176
 // §11.1.2, §11.2: a kernel returns `void` and takes uniform parameters (scalars,
-// vectors, plain structs), storage parameters (`[]T`, `soa []T`, `[]Atomic<u32>`) and,
-// when dispatched through a `gpu.ComputePipeline`, textures and samplers.
-
-use std.gpu;
+// vectors, plain structs) and storage parameters (`[]T`, `soa []T`, `[]Atomic<u32>`).
+// Texture and sampler parameters are in e1001_kernel_texture_params.pr (T203).
 
 pub struct Params { scale: f32, offset: vec2<f32>, count: u32 }
 
@@ -32,11 +30,3 @@ fn histogram(bins: []Atomic<u32>, xs: []u32) {
     if i >= xs.len() { return; }
     bins[(xs[i] as usize) % bins.len()].fetch_add(1);
 }
-
-@gpu_kernel(workgroup: (8, 8, 1))
-fn textured(src: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler, mut dst: gpu.StorageTexture2D<vec4<f32>>) {
-    let c = src.load(@global_invocation_id.xy, 0) + src.sample_level(smp, vec2(0.5, 0.5), 0.0);
-    dst.store(@global_invocation_id.xy, c);
-}
-
-const Textured = gpu.ComputePipeline(textured);

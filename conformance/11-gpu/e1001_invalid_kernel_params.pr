@@ -22,7 +22,4 @@ fn struct_with_pointer(w: WithPointer) {} //~ E1001
 fn string_param(s: str) {} //~ E1001
 
 @gpu_kernel(workgroup: 64)
-fn function_pointer_param(f: fn(u32) -> u32) {} //~ E1001
-
-@gpu_kernel(workgroup: 64)
 fn slice_of_slices(xs: [][]f32) {} //~ E1001

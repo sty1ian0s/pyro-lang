@@ -1,0 +1,20 @@
+//@ covers: E1008
+//@ expected-fail: T198
+// §11.1.2, §11.5.3: ray-tracing stages take their stage-specific parameters (miss
+// `payload` and `ray`) plus uniform, storage and `Tlas` parameters.
+
+use std.gpu;
+
+pub struct Shade { color: vec3<f32>, shadowed: bool }
+
+@gpu_miss
+fn miss_sky(mut s: Shade, ray: gpu.RayInfo, sky: vec3<f32>) {
+    s.color = sky * (ray.direction.y * 0.5 + 0.5);
+}
+
+@gpu_ray_gen
+fn rg_camera(scene: gpu.Tlas, mut image: []vec4<f32>, origin: vec3<f32>) {
+    let mut s = Shade { color: vec3(0.0, 0.0, 0.0), shadowed: false };
+    gpu.trace_ray(scene, .{ origin: origin, t_min: 0.0, direction: vec3(0.0, 0.0, 1.0), t_max: 100.0 }, mut s);
+    image[gpu.linear_id(@launch_id, @launch_size) as usize] = vec4(s.color.x, s.color.y, s.color.z, 1.0);
+}

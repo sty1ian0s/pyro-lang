@@ -1,7 +1,10 @@
 //@ expected-fail: T183
 // §11.1.3: binding resources (textures, samplers, `Tlas`, storage slices) may appear
 // only as read-only or `mut` parameters and arguments. They cannot be moved or
-// deinitialized.
+// deinitialized. A `move` texture parameter of a stage is a texture-class type in
+// the wrong mode: this case reads the specific binding-resource rule of §11.1.3 as
+// taking precedence, so it is E1003 only, not also E1001 (§11.1.2), which is for types
+// outside every parameter class.
 
 use std.gpu;
 

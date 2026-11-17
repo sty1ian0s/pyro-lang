@@ -1,7 +1,10 @@
 //@ expected-fail: T198
 // §11.5.2: ray-pipeline checks, each reported at the pipeline declaration: a stage in
 // the wrong role, miss and hit stages with different payload types, and a triangle hit
-// group whose attribute type is not `gpu.Barycentrics`.
+// group whose attribute type is not `gpu.Barycentrics`. In §11.5.2 the payload and
+// attribute bullets end with (**E1011**); this case reads that code as applying only to
+// the size limits (256 and 32 bytes, matching A.3 "out of range"), so a type mismatch
+// is E1009. T198 must confirm this reading or fix the spec.
 
 use std.gpu;
 

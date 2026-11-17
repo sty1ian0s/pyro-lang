@@ -29,8 +29,8 @@ fn vs_mesh(v: MeshVertex, cam: Camera) -> VsOut {
 }
 
 @gpu_fragment
-fn fs_lit(i: VsOut, cam: Camera, mat: Material, albedo: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler) -> vec4<f32> {
-    let base = albedo.sample(smp, i.uv);
+fn fs_lit(i: VsOut, cam: Camera, mat: Material, albedo: vec4<f32>) -> vec4<f32> {
+    let base = albedo * (i.uv.x + i.uv.y);
     let n_dot_l = math.max(simd.dot(simd.normalize(i.normal), mat.light_dir), 0.0);
     let fog = simd.dot(cam.eye, cam.eye) * 0.0001;
     base * (mat.ambient + n_dot_l) - vec4(fog, fog, fog, 0.0)

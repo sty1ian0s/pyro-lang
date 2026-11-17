@@ -1,7 +1,9 @@
 //@ expected-fail: T181
 // §11.1.6: non-atomic storage writes at an index not tied to the invocation id, any
 // vertex-stage write, non-atomic fragment writes, workgroup accesses at a foreign index
-// before a barrier, and other operations on a `fetch_add` slot counter.
+// before a barrier, and a `fetch_add` slot write whose counter receives another
+// operation (`store`) between the same barriers. §11.1.6 states the counter rule as a
+// condition for accepting the write, so E1006 is on the rejected write, not the store.
 
 pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
 pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
@@ -43,9 +45,9 @@ fn mixed_counter_ops(xs: []u32, mut out: []u32) {
     let i = @global_invocation_id.x as usize;
     if i < xs.len() && xs[i] != 0 {
         let slot = n.fetch_add(1);
-        kept[slot as usize] = xs[i];
+        kept[slot as usize] = xs[i]; //~ E1006
     }
-    n.store(0); //~ E1006
+    n.store(0);
     @workgroup_barrier();
     if i < out.len() { out[i] = kept[@local_invocation_id.x as usize]; }
 }

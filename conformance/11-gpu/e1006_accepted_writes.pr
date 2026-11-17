@@ -1,17 +1,15 @@
 //@ covers: E1006
 //@ expected-fail: T181
-// §11.1.6, §11.2, §11.4.2: writes indexed by the global invocation id (directly or
-// through a local equal to it), by `gpu.linear_id` in ray generation, atomic writes in
-// any writing stage, and workgroup writes indexed by the local invocation id or by a
-// `fetch_add` slot.
-
-use std.gpu;
+// §11.1.6, §11.2: compute writes indexed by the global invocation id (directly or
+// through a local equal to it), atomic fragment writes, and workgroup writes indexed by
+// the local invocation id or by a `fetch_add` slot. Task-payload writes are in
+// e1006_accepted_writes_task.pr (T197), ray-generation writes in
+// e1006_accepted_writes_ray_gen.pr (T198).
 
 @soa
 pub struct Particle { x: f32, y: f32, vx: f32, vy: f32 }
 
 pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
-pub struct CullPayload { visible: [32]u32 }
 
 @gpu_kernel(workgroup: 64)
 fn integrate(mut ps: []Particle, dt: f32) {
@@ -45,25 +43,8 @@ fn compact(xs: []u32, mut out: []u32, total: []Atomic<u32>) {
     if i < out.len() { out[i] = kept[@local_invocation_id.x as usize]; }
 }
 
-@gpu_task(workgroup: 32)
-fn ts_cull(mut payload: CullPayload, radii: []f32) -> vec3<u32> {
-    @workgroup let mut count: Atomic<u32> = .init(0);
-    let i = @global_invocation_id.x as usize;
-    if i < radii.len() && radii[i] > 0.0 {
-        let slot = count.fetch_add(1);
-        payload.visible[slot as usize] = i as u32;
-    }
-    @workgroup_barrier();
-    vec3(count.load(), 1, 1)
-}
-
 @gpu_fragment
 fn fs_count(i: VsOut, hits: []Atomic<u32>) -> vec4<f32> {
     hits[0].fetch_add(1);
     vec4(i.uv.x, i.uv.y, 0.0, 1.0)
-}
-
-@gpu_ray_gen
-fn rg_fill(mut image: []vec4<f32>) {
-    image[gpu.linear_id(@launch_id, @launch_size) as usize] = vec4(1.0, 0.0, 0.0, 1.0);
 }

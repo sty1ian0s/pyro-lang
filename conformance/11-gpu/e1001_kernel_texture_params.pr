@@ -1,0 +1,15 @@
+//@ covers: E1001
+//@ expected-fail: T203
+// §11.1.2, §11.6.1: a kernel dispatched through a `gpu.ComputePipeline` may take
+// texture, storage-texture and sampler parameters. Needs textures (T200) and
+// `gpu.ComputePipeline` (T203).
+
+use std.gpu;
+
+@gpu_kernel(workgroup: (8, 8, 1))
+fn textured(src: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler, mut dst: gpu.StorageTexture2D<vec4<f32>>) {
+    let c = src.load(@global_invocation_id.xy, 0) + src.sample_level(smp, vec2(0.5, 0.5), 0.0);
+    dst.store(@global_invocation_id.xy, c);
+}
+
+const Textured = gpu.ComputePipeline(textured);

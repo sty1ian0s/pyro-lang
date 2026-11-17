@@ -1,0 +1,20 @@
+//@ covers: E1008
+//@ expected-fail: T200
+// §11.1.2, §11.3.2: vertex and fragment stages take texture and sampler parameters.
+// Implicit-LOD sampling is used in a fragment stage, explicit-LOD sampling elsewhere.
+
+use std.gpu;
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+
+@gpu_vertex
+fn vs_height(v: Vertex, height: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler) -> VsOut {
+    let h = height.sample_level(smp, v.uv, 0.0).x;
+    VsOut { clip: vec4(v.pos.x, v.pos.y + h, v.pos.z, 1.0), uv: v.uv }
+}
+
+@gpu_fragment
+fn fs_tex(i: VsOut, albedo: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler, tint: vec4<f32>) -> vec4<f32> {
+    albedo.sample(smp, i.uv) * tint + albedo.sample_bias(smp, i.uv, 0.5)
+}

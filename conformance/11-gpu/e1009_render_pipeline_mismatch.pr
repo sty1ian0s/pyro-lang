@@ -2,7 +2,9 @@
 // §11.1.2, §11.3.2, §11.6.1: render-pipeline checks, each reported at the pipeline
 // declaration: a stage in the wrong role, a fragment input that is not the varyings
 // type, a same-name parameter with different types, both a vertex and a mesh stage, and
-// a strip topology with a mesh stage.
+// a strip topology with a mesh stage. Each pipeline fails exactly one check, so one
+// E1009 is expected per line: the wrong-role pipeline is depth-only, which has no
+// fragment input to mismatch.
 
 use std.gpu;
 
@@ -35,7 +37,7 @@ fn ms_triangle(mut out: gpu.MeshOut<VsOut, void, 3, 1>) {
     if t < 1 { out.triangle(t, vec3(0, 1, 2)); }
 }
 
-const WrongRole = gpu.RenderPipeline(.{ vertex: fs_basic, fragment: fs_basic, color: [.{ format: .bgra8_srgb, .. }], .. }); //~ E1009
+const WrongRole = gpu.RenderPipeline(.{ vertex: fs_basic, depth: .{ format: .depth32f, compare: .less, write: true }, .. }); //~ E1009
 const WrongInput = gpu.RenderPipeline(.{ vertex: vs_basic, fragment: fs_other, color: [.{ format: .bgra8_srgb, .. }], .. }); //~ E1009
 const SplitCamera = gpu.RenderPipeline(.{ vertex: vs_basic, fragment: fs_cam_is_light, color: [.{ format: .bgra8_srgb, .. }], .. }); //~ E1009
 const VertexAndMesh = gpu.RenderPipeline(.{ vertex: vs_basic, mesh: ms_triangle, fragment: fs_basic, color: [.{ format: .bgra8_srgb, .. }], .. }); //~ E1009
