@@ -1,0 +1,17 @@
+//@ expected-fail: T064
+//@ covers: E0329
+// §7.6.1: plain types satisfy `plain`: primitives, vectors, plain structs.
+
+struct Pair<T: plain> { pub mut a: T, pub mut b: T }
+struct Point { x: f32, y: f32 }
+
+type Ids = List<u32>;
+type Lanes = Pair<vec4<f32>>;
+type Points = Pair<Point>;
+
+fn keep<T: plain>(x: T) -> T { x }
+
+fn origin_x() -> f32 {
+    let p = keep(Point { x: 1.0, y: 2.0 });
+    p.x
+}

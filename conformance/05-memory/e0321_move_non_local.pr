@@ -1,0 +1,27 @@
+//@ expected-fail: T080
+// §5.3.2: `move` applies only to a local or a `move` parameter: not to a field,
+// a read-only parameter or a call result.
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+struct Holder { file: File }
+
+fn keep(move f: File) { f.close(); }
+
+fn steal_field(h: Holder) {
+    keep(move h.file); //~ E0321
+}
+
+fn steal_param(f: File) {
+    keep(move f); //~ E0321
+}
+
+fn move_temporary() {
+    keep(move File.open(1)); //~ E0321
+}

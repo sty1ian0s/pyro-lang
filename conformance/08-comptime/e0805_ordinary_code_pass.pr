@@ -1,0 +1,20 @@
+//@ expected-fail: T059
+//@ covers: E0805
+// §8.6: comptime runs ordinary code: loops, recursion, arrays and the
+// deterministic inputs.
+
+fn fib(n: u64) -> u64 {
+    if n < 2 { return n; }
+    fib(n - 1) + fib(n - 2)
+}
+
+fn ramp() -> [16]u8 {
+    let mut out: [16]u8 = [0; 16];
+    for i in 0..16 { out[i] = i as u8; }
+    out
+}
+
+const FIB10: u64 = fib(10);
+const RAMP: [16]u8 = ramp();
+const IS_DEBUG: bool = @env("debug_assertions");
+const POINTER_BITS = @target().pointer_bits;

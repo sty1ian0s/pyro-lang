@@ -1,0 +1,15 @@
+//@ expected-fail: T040
+//@ covers: E0309
+// §4.11.4, §7.4: `nop = 0, load, halt = 0xFF` gives 0, 1, 255.
+
+enum Opcode: u8 { nop = 0, load, halt = 0xFF }
+
+enum Level: i8 {
+    low = -1,
+    mid,
+    high,
+}
+
+fn check() -> bool {
+    (Opcode.load as u8) == 1 && (Opcode.halt as u8) == 255 && (Level.high as i8) == 1
+}

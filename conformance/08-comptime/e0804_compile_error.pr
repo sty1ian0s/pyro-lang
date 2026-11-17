@@ -1,0 +1,19 @@
+//@ expected-fail: T061
+// §8.5: an evaluated `@compile_error` aborts compilation with its message.
+
+struct HotParticle { pos: [16]f32, id: u32 }
+
+comptime {
+    if @size_of(HotParticle) > 64 {
+        @compile_error("HotParticle exceeds one 64-byte cache line"); //~ E0804
+    }
+}
+
+fn pick(comptime n: u32) -> u32 {
+    comptime if n > 3 {
+        @compile_error("n must be at most 3"); //~ E0804
+    }
+    n
+}
+
+fn demo() -> u32 { pick(5) }

@@ -1,0 +1,24 @@
+//@ expected-fail: T044
+// §7.5.1: an `impl` defines every required method with the exact signature
+// (same modes, types and return type).
+
+struct Canvas { pub mut count: u32 }
+
+pub protocol Renderable {
+    fn bounds(self) -> u32;
+    fn draw(self, mut canvas: Canvas);
+    fn is_visible(self) -> bool { true }
+}
+
+struct Sprite { w: u32 }
+
+impl Renderable for Sprite { //~ E0378
+    fn bounds(self) -> u32 { self.w }
+}
+
+struct Text { len: u32 }
+
+impl Renderable for Text {
+    fn bounds(self) -> u64 { self.len as u64 } //~ E0378
+    fn draw(self, canvas: Canvas) {} //~ E0378
+}

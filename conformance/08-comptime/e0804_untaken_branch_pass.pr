@@ -1,0 +1,23 @@
+//@ expected-fail: T061
+//@ covers: E0804
+// §8.5: a `@compile_error` that is not evaluated has no effect; the untaken
+// branch of `comptime if` is not even type-checked (`wrong` would be E0310).
+
+struct HotParticle { pos: [3]f32, id: u32 }
+
+comptime {
+    if @size_of(HotParticle) > 64 {
+        @compile_error("HotParticle exceeds one 64-byte cache line");
+    }
+}
+
+fn pick(comptime n: u32) -> u32 {
+    comptime if n > 3 {
+        let wrong: str = n;
+        @compile_error("n must be at most 3");
+    } else {
+        n
+    }
+}
+
+fn demo() -> u32 { pick(2) }

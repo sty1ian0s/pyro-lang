@@ -1,0 +1,15 @@
+//@ expected-fail: T039
+//@ covers: E0301
+// §6.3.1: a local may shadow another local, and names that merely contain a
+// prelude name (`u8_count`, `print_width`) are ordinary identifiers.
+
+fn area(w: u32, h: u32) -> u32 {
+    let total = w * h;
+    let total = total + 1;
+    total
+}
+
+fn widths(u8_count: u32, print_width: u32) -> u32 {
+    let str_len = u8_count + print_width;
+    str_len
+}

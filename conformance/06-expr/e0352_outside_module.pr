@@ -1,0 +1,15 @@
+//@ expected-fail: T046
+// §6.2.1, §7.3.3: outside its module, a struct with a field that is not
+// `pub mut` and has no default cannot be constructed. `std.meta.FieldInfo`
+// (§8.4) has only `pub` fields without defaults.
+
+const F: std.meta.FieldInfo = std.meta.FieldInfo { //~ E0352
+    name: "x",
+    ty: u32,
+    offset: 0,
+    bit_offset: 0,
+    bit_width: 0,
+    is_pub: true,
+    is_pub_mut: true,
+    has_default: false,
+};

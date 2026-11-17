@@ -1,0 +1,15 @@
+//@ expected-fail: T046
+// §5.8, §6.2.1: without `..`, every field is listed, even defaulted ones; with
+// `..`, a field without a default must still be listed.
+
+pub struct Player {
+    pub mut health: u8 = 100,
+    pub mut speed: f32 = 5.0,
+    pub mut name_id: u32,
+}
+
+fn make() {
+    let a = Player { name_id: 1 }; //~ E0340
+    let b = Player { health: 80, .. }; //~ E0340
+    let c: Player = .{ speed: 1.0, .. }; //~ E0340
+}

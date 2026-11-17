@@ -1,0 +1,26 @@
+//@ expected-fail: T080
+// §5.3.3: a consumed resource cannot be used again.
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+fn keep(move f: File) { f.close(); }
+
+fn descriptor(f: File) -> i32 { f.fd }
+
+fn twice() {
+    let a = File.open(1);
+    keep(move a);
+    a.close(); //~ E0323
+}
+
+fn read_after() -> i32 {
+    let b = File.open(2);
+    b.close();
+    descriptor(b) //~ E0323
+}

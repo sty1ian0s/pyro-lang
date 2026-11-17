@@ -1,0 +1,21 @@
+//@ expected-fail: T039
+// §4.1, §6.3.1: prelude type names and the formatting intrinsics `print`,
+// `eprint` and `format` cannot be shadowed, not even by a local or a parameter.
+
+fn area(w: u32, h: u32) -> u32 {
+    let u8 = w * h; //~ E0301
+    w * h
+}
+
+fn report(n: u32) {
+    let print = n + 1; //~ E0301
+}
+
+fn flag_count(bool: u32) -> u32 { //~ E0301
+    1
+}
+
+fn join(a: u32) -> u32 {
+    let format = a; //~ E0301
+    a
+}

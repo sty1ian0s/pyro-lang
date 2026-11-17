@@ -1,0 +1,18 @@
+//@ expected-fail: T040
+//@ covers: E0370
+// §7.2.3, §7.3.1, §8.1: defaults from literals, consts and comptime-evaluable
+// calls; field defaults are comptime contexts.
+
+const BASE: f32 = 2.0;
+
+fn double(x: u32) -> u32 { x * 2 }
+
+fn scale(x: f32, by: f32 = BASE * 2.0) -> f32 { x * by }
+
+struct Grid {
+    cells: u32 = double(8),
+    rows: [4]u8 = [0; 4],
+    ratio: f32 = BASE,
+}
+
+fn use_default() -> f32 { scale(1.0) }

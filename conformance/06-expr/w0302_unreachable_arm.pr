@@ -1,0 +1,21 @@
+//@ expected-fail: T052
+// §6.6.3: an arm after a catch-all, or for an already covered value, is
+// unreachable.
+
+enum Light { red, yellow, green }
+
+fn code(l: Light) -> u32 {
+    match l {
+        .red => 0,
+        _ => 1,
+        .green => 2, //~ W0302
+    }
+}
+
+fn digit(b: u8) -> u32 {
+    match b {
+        0 => 0,
+        0 => 1, //~ W0302
+        _ => 2,
+    }
+}

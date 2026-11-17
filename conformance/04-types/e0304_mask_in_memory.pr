@@ -1,0 +1,10 @@
+//@ expected-fail: T042
+// §4.3.2: a `mask<N>` lives only in locals and registers; it cannot be a struct
+// field or an array element.
+
+struct Hits {
+    lanes: mask<4>, //~ E0304
+    count: u32,
+}
+
+type MaskRow = [8]mask<4>; //~ E0304

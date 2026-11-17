@@ -1,0 +1,25 @@
+//@ expected-fail: T080
+//@ covers: E0321
+// §5.3.2, §14.3: `move` of a local and of a `move` parameter; a field is
+// replaced with `std.mem.replace`, which returns the old value.
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+struct Holder { file: File }
+
+fn keep(move f: File) { f.close(); }
+
+fn relay(move f: File) { keep(move f); }
+
+fn swap_file(mut h: Holder) {
+    let a = File.open(1);
+    relay(move a);
+    let old = std.mem.replace(mut h.file, File.open(9));
+    old.close();
+}

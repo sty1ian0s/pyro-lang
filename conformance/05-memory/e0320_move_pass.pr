@@ -1,0 +1,26 @@
+//@ expected-fail: T080
+//@ covers: E0320
+// §5.3.2: `move` transfers a resource, `return x;` moves implicitly, a
+// temporary needs no `move`, and a plain parameter receives a read-only view.
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+fn keep(move f: File) { f.close(); }
+
+fn descriptor(f: File) -> i32 { f.fd }
+
+fn open_two() -> File {
+    let a = File.open(3);
+    let n = descriptor(a);
+    keep(move a);
+    keep(File.open(n));
+    let b = File.open(4);
+    let c = move b;
+    return c;
+}

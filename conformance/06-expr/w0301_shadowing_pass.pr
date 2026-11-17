@@ -1,0 +1,18 @@
+//@ expected-fail: T039
+//@ covers: W0301
+// §6.3.1, A.2: shadowing a local is silent, and `@allow(W0301)` silences the
+// warning for one item.
+
+fn speed() -> u32 { 3 }
+
+fn run(n: u32) -> u32 {
+    let n = n + 1;
+    let n = n * 2;
+    n
+}
+
+@allow(W0301)
+fn quiet() -> u32 {
+    let speed = 4;
+    speed
+}

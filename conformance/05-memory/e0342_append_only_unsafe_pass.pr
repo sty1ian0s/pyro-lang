@@ -1,0 +1,16 @@
+//@ expected-fail: T082
+//@ covers: E0342
+// §5.4.2: an `@append_only` method whose body contains an `unsafe` block.
+
+@resource
+pub struct Bump {
+    used: usize,
+
+    @append_only
+    pub fn grab(mut self, n: usize) -> usize {
+        unsafe { self.used += n; }
+        return self.used;
+    }
+
+    pub fn deinit(move self) {}
+}

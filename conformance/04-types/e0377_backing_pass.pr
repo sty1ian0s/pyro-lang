@@ -1,0 +1,7 @@
+//@ expected-fail: T040
+//@ covers: E0377
+// §7.4, §4.11.4: backing types on payload-free enums; payload enums without one.
+
+enum Opcode: u8 { nop = 0, load = 1, store = 2, halt = 0xFF }
+enum Level: i8 { low = -1, mid, high }
+enum Msg { quit, move_to(i32, i32) }

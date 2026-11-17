@@ -1,0 +1,21 @@
+//@ expected-fail: T063
+//@ covers: E0801
+// §8.1, §8.2, §8.6.1: literals, consts, forwarded `comptime` parameters and
+// `comptime` expressions are comptime-known.
+
+const WIDTH: usize = 4;
+
+fn repeat(comptime n: usize, x: u8) -> [n]u8 { [x; n] }
+
+fn twice(comptime n: usize, x: u8) -> [n]u8 { repeat(n, x + x) }
+
+fn square(n: usize) -> usize { n * n }
+
+fn demo(x: u8) -> u8 {
+    let a = repeat(3, x);
+    let b = repeat(WIDTH, x);
+    let c = twice(2, x);
+    let d = repeat(comptime square(2), x);
+    let h = @hash("orc");
+    a[0] + b[0] + c[0] + d[0]
+}

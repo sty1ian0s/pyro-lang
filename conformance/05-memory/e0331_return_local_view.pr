@@ -1,0 +1,33 @@
+//@ expected-fail: T083
+// §5.4.3: a returned view must come from non-`move` parameters or `static`; a
+// `-> mut T` result must come from a `mut` parameter.
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+fn first_half() -> []u32 {
+    let local: [8]u32 = [0; 8];
+    return local[0..4]; //~ E0331
+}
+
+@resource
+pub struct Buffer {
+    bytes: [16]u8,
+
+    pub fn view(move self) -> []u8 {
+        return self.bytes[..]; //~ E0331
+    }
+}
+
+struct Counter {
+    pub mut n: u32,
+
+    pub fn peek(self) -> mut u32 {
+        return self.n; //~ E0331
+    }
+}

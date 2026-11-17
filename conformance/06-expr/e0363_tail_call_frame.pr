@@ -1,0 +1,21 @@
+//@ expected-fail: T078
+// §6.9: `return tail` must reuse the frame; a pending `defer` or a view
+// argument into the current frame's locals prevents that.
+
+struct Log { pub mut count: u32 }
+
+fn walk(n: u32, mut log: Log) -> u32 {
+    defer { log.count += 1; }
+    if n == 0 { return 0; }
+    return tail walk(n - 1, mut log); //~ E0363
+}
+
+fn scan(xs: []u32, i: usize) -> u32 {
+    if i >= xs.len() { return 0; }
+    return tail scan(xs, i + 1);
+}
+
+fn start() -> u32 {
+    let buf: [4]u32 = [1, 2, 3, 4];
+    return tail scan(buf[..], 0); //~ E0363
+}

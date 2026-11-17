@@ -1,0 +1,9 @@
+//@ expected-fail: T046
+// §6.2.1: naming a field twice in a struct literal is an error.
+
+struct Point { x: i32, y: i32 }
+
+fn make() {
+    let p = Point { x: 1, y: 2, x: 3 }; //~ E0351
+    let q: Point = .{ x: 1, x: 2, y: 0 }; //~ E0351
+}

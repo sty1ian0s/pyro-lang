@@ -1,0 +1,8 @@
+//@ expected-fail: T061
+// §8.5: a build that contains `@compile_log` gets W0801.
+
+struct Particle { x: f32, y: f32 }
+
+comptime {
+    @compile_log("Particle size", @size_of(Particle)); //~ W0801
+}

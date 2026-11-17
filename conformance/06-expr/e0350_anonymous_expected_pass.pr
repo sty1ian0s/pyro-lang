@@ -1,0 +1,18 @@
+//@ expected-fail: T046
+//@ covers: E0350
+// §6.2.2: expected types from an annotation, a parameter, a return type and a
+// field; a positional literal without one forms a tuple.
+
+struct Point { x: i32, y: i32 }
+struct Segment { a: Point, b: Point }
+
+fn length(p: Point) -> i32 { p.x + p.y }
+
+fn origin() -> Point { .{ x: 0, y: 0 } }
+
+fn make() -> i32 {
+    let p: Point = .{ x: 1, y: 2 };
+    let s = Segment { a: .{ x: 0, y: 0 }, b: p };
+    let pair = .{ 1, 2.0 };
+    length(.{ x: 3, y: 4 }) + origin().x + s.b.y
+}

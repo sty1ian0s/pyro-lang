@@ -1,0 +1,23 @@
+//@ expected-fail: T033
+//@ covers: E0307
+// §4.9.2: every row of the `as` table.
+
+enum Opcode: u8 { nop = 0, load, halt = 0xFF }
+type Meters = distinct f32;
+
+fn casts(n: i32, x: f64, b: bool, op: Opcode, m: Meters, v: vec4<i32>, p: *u8) -> u64 {
+    let narrow = n as u8;
+    let widened = n as i64;
+    let as_float = n as f32;
+    let truncated = x as i32;
+    let single = x as f32;
+    let one = b as u8;
+    let code = op as u8;
+    let code_wide = op as u32;
+    let raw = m as f32;
+    let back = raw as Meters;
+    let lanes = v as vec4<f32>;
+    let addr = p as usize;
+    let cp = p as *const u8;
+    addr as u64 + code_wide as u64
+}

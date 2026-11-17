@@ -1,0 +1,25 @@
+//@ expected-fail: T055
+//@ covers: E0337
+// §5.5.1: `let mut` allows writes; an immutable binding may be shadowed by a
+// new one.
+
+struct Point {
+    pub mut x: f32,
+    pub mut y: f32,
+
+    pub fn translate(mut self, dx: f32) { self.x += dx; }
+}
+
+fn nudge(mut p: Point) { p.y += 1.0; }
+
+fn edits() -> f32 {
+    let mut p = Point { x: 0.0, y: 0.0 };
+    p.y = 1.0;
+    p.translate(2.0);
+    nudge(mut p);
+    let mut xs: [3]u32 = [1, 2, 3];
+    xs[0] = 4;
+    let q = p.x;
+    let q = q + 1.0;
+    q
+}

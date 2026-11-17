@@ -1,0 +1,24 @@
+//@ expected-fail: T078
+// §6.8.1: a deferred statement must not leave itself with `return`, `break`,
+// `continue` or `?`.
+
+pub enum IoError { closed }
+
+fn flush() -> Result<void, IoError> { .ok() }
+
+fn early(flag: bool) {
+    defer {
+        if flag { return; } //~ E0360
+    }
+}
+
+fn in_loop() {
+    for i in 0..3 {
+        defer { break; } //~ E0360
+    }
+}
+
+fn propagate() -> Result<void, IoError> {
+    defer flush()?; //~ E0360
+    .ok()
+}

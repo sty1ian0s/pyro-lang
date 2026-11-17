@@ -1,0 +1,19 @@
+//@ expected-fail: T051
+//@ covers: E0303
+// §4.3.1: the lane-count bounds 1 and 64 are both valid, as are every allowed
+// element type.
+
+type One = vec<1, f64>;
+type Max = vec<64, u8>;
+type Rgb = vec<3, f32>;
+type Flags = vec<4, bool>;
+type Shorts = vec<8, i16>;
+
+fn scale(v: vec4<f32>) -> vec4<f32> {
+    v * 2.0
+}
+
+fn origin() -> vec3<f32> {
+    let p: vec3<f32> = .{ 0.0, 0.0, 0.0 };
+    p
+}

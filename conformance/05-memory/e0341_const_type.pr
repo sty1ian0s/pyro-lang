@@ -1,0 +1,6 @@
+//@ expected-fail: T040
+// §5.9: a `const` must be plain, `str`, a static array or slice of plain
+// values, or comptime-only; resources and shared cells are not allowed.
+
+const NAMES: List<u32> = .init(); //~ E0341
+const COUNTER: Atomic<u32> = .init(0); //~ E0341

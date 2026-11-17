@@ -1,0 +1,11 @@
+//@ expected-fail: T033
+// §4.8: an untyped constant must fit the type it converts to, and an untyped
+// float never converts to an integer type.
+
+const SMALL: u8 = 300; //~ E0306
+
+fn values() {
+    let half: i32 = 1.5; //~ E0306
+    let low: i8 = -129; //~ E0306
+    let neg: u32 = -1; //~ E0306
+}

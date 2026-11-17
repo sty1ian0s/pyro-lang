@@ -1,0 +1,6 @@
+//@ expected-fail: T066
+// §8.6.1: the argument of `@hash` must be comptime-known.
+
+fn key(name: str) -> u64 {
+    @hash(name) //~ E0801
+}

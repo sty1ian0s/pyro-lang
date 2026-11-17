@@ -1,0 +1,14 @@
+//@ expected-fail: T078
+// §6.8.2: `errdefer` needs the enclosing function to return `Result`.
+
+fn log_done() {}
+
+fn setup() {
+    errdefer log_done(); //~ E0362
+}
+
+fn first(xs: []u32) -> Option<u32> {
+    errdefer log_done(); //~ E0362
+    if xs.len() == 0 { return .none; }
+    .some(xs[0])
+}

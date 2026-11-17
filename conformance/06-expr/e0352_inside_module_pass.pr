@@ -1,0 +1,25 @@
+//@ expected-fail: T046
+//@ covers: E0352
+// §6.2.1, §7.3.3: inside its module a struct is constructed freely; this is the
+// parse-don't-validate pattern.
+
+pub enum ParseError { out_of_range }
+
+pub struct Port { pub value: u16 }
+
+pub fn parse_port(raw: u32) -> Result<Port, ParseError> {
+    if raw == 0 || raw > 65535 { return .err(.out_of_range); }
+    return .ok(Port { value: raw as u16 });
+}
+
+pub struct Endpoint {
+    pub mut host_id: u32,
+    pub mut port: u16 = 80,
+    retries: u8 = 3,
+}
+
+pub fn endpoints() -> u32 {
+    let a = Endpoint { host_id: 1, port: 8080, retries: 5 };
+    let b = Endpoint { host_id: 2, .. };
+    a.host_id + b.host_id
+}

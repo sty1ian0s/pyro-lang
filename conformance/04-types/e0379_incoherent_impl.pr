@@ -1,0 +1,12 @@
+//@ expected-fail: T044
+// §7.5.1: an `impl P for T` must be in the module of `P` or of `T`, and there
+// is at most one impl of `P` for `T`.
+
+pub protocol Area { fn area(self) -> f32; }
+
+struct Square { side: f32 }
+
+impl Area for Square { fn area(self) -> f32 { self.side * self.side } }
+impl Area for Square { fn area(self) -> f32 { 0.0 } } //~ E0379
+
+impl From<u8> for Order { fn from(e: u8) -> Self { .equal } } //~ E0379

@@ -1,0 +1,18 @@
+//@ expected-fail: T062
+//@ covers: W0802
+// §8.8, A.2: declaring a deprecated item is silent, and `@allow(W0802)` silences
+// a use.
+
+@deprecated("use area_of instead")
+fn area(w: f32, h: f32) -> f32 { w * h }
+
+fn area_of(w: f32, h: f32) -> f32 { w * h }
+
+fn room() -> f32 {
+    area_of(2.0, 3.0)
+}
+
+@allow(W0802)
+fn legacy_room() -> f32 {
+    area(4.0, 5.0)
+}

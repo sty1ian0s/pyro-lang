@@ -1,0 +1,16 @@
+//@ expected-fail: T046
+//@ covers: E0340
+// §6.2.1: every field listed, or `..` filling only defaulted fields.
+
+pub struct Player {
+    pub mut health: u8 = 100,
+    pub mut speed: f32 = 5.0,
+    pub mut name_id: u32,
+}
+
+fn make() -> u32 {
+    let a = Player { health: 90, speed: 4.0, name_id: 1 };
+    let b = Player { name_id: 2, .. };
+    let c: Player = .{ name_id: 3, speed: 1.0, .. };
+    a.name_id + b.name_id + c.name_id
+}

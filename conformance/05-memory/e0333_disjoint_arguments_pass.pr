@@ -1,0 +1,16 @@
+//@ expected-fail: T083
+//@ covers: E0333
+// §5.4.2, §5.4.3: the same place twice as read-only is fine, and different
+// fields of one struct do not overlap.
+
+fn add_into(mut dst: []u32, src: []u32) { dst[0] += src[0]; }
+fn sum(a: []u32, b: []u32) -> u32 { a[0] + b[0] }
+fn bump(mut x: f32, by: f32) { x += by; }
+
+struct Point { pub mut x: f32, pub mut y: f32 }
+
+fn demo(mut a: [4]u32, b: [4]u32, mut p: Point) -> u32 {
+    add_into(mut a, b);
+    bump(mut p.x, p.y);
+    sum(a, a)
+}

@@ -1,0 +1,16 @@
+//@ expected-fail: T043
+// §7.2.1: a non-`void` function must produce a value on every path. A bare
+// `return;` is reported where it is; falling off the end is reported at the
+// closing brace of the body.
+
+fn half(x: u32) -> u32 {
+    if x == 0 {
+        return; //~ E0371
+    }
+    x / 2
+}
+
+fn sign(x: i32) -> i32 {
+    if x < 0 { return -1; }
+    if x > 0 { return 1; }
+} //~ E0371

@@ -1,0 +1,14 @@
+//@ expected-fail: T074
+// §6.10, §5.4.1: a capturing lambda may only be passed directly to a `comptime`
+// parameter; storing or returning it is an error.
+
+fn store(base: u32) -> u32 {
+    let add = |x: u32| x + base; //~ E0330
+    3
+}
+
+struct Hooks { on_hit: fn(u32) -> u32 }
+
+fn make(base: u32) -> Hooks {
+    Hooks { on_hit: |x: u32| x + base } //~ E0330
+}

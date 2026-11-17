@@ -1,0 +1,19 @@
+//@ expected-fail: T067
+//@ covers: E0809
+// §8.8: arithmetic, local mutation, loops and calls to other effect-free
+// functions are pure.
+
+@pure
+fn square(x: f32) -> f32 { x * x }
+
+@pure
+fn length2(x: f32, y: f32) -> f32 {
+    square(x) + square(y)
+}
+
+@pure
+fn sum(xs: []u32) -> u32 {
+    let mut total: u32 = 0;
+    for x in xs { total += x; }
+    total
+}

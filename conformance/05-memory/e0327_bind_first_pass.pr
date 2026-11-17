@@ -1,0 +1,25 @@
+//@ expected-fail: T043
+//@ covers: E0327
+// §5.3.3, §6.11.1: bind a resource temporary and release it; `_ = e` is fine
+// for non-resource values.
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+fn make_list() -> List<u32> {
+    let mut l: List<u32> = .init();
+    l.push(1);
+    return l;
+}
+
+fn length() -> usize {
+    let l = make_list();
+    defer l.deinit();
+    _ = l.len();
+    l.len()
+}

@@ -1,0 +1,22 @@
+//@ expected-fail: T047
+//@ covers: E0338
+// §5.5.2: `mut` parameters may be written; a read-only parameter is copied to
+// a mutable local first.
+
+struct Point {
+    pub mut x: f32,
+    pub mut y: f32,
+
+    pub fn translate(mut self, dx: f32) { self.x += dx; }
+}
+
+fn reset(mut p: Point) {
+    p.x = 0.0;
+    p.translate(1.0);
+}
+
+fn grow(n: u32) -> u32 {
+    let mut m = n;
+    m += 1;
+    m
+}

@@ -1,0 +1,9 @@
+//@ expected-fail: T040
+// §7.3.1: containing a type in itself by value, directly or through a payload,
+// is an error; use a `Handle` or an index.
+
+struct Node { value: u32, next: Node } //~ E0376
+
+struct Tree { value: u32, left: Option<Tree> } //~ E0376
+
+enum Expr { num(i64), neg(Expr) } //~ E0376

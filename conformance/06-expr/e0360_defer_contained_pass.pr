@@ -1,0 +1,15 @@
+//@ expected-fail: T078
+//@ covers: E0360
+// §6.8.1: control flow that stays inside the deferred statement is fine.
+
+fn count() -> u32 {
+    let mut n: u32 = 0;
+    defer {
+        for i in 0..10 {
+            if i == 3 { break; }
+            if i == 1 { continue; }
+        }
+    }
+    n += 1;
+    n
+}

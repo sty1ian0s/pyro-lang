@@ -1,0 +1,27 @@
+//@ expected-fail: T052
+// §6.6.3: arms must cover every value; guards count as possibly failing, and
+// integer types need `_` unless every value is listed.
+
+enum Light { red, yellow, green }
+
+fn next(l: Light) -> Light {
+    match l { //~ E0357
+        .red => .green,
+        .green => .yellow,
+    }
+}
+
+fn describe(b: u8) -> u32 {
+    match b { //~ E0357
+        0 => 0,
+        1 => 1,
+    }
+}
+
+fn guarded(l: Light, ok: bool) -> u32 {
+    match l { //~ E0357
+        .red => 0,
+        .yellow => 1,
+        .green if ok => 2,
+    }
+}

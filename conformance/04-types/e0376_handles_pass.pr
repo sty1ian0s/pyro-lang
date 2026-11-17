@@ -1,0 +1,11 @@
+//@ expected-fail: T040
+//@ covers: E0376
+// §4.4.5, §7.3.1: links by handle or index are not containment by value.
+
+struct Node { value: u32, next: Option<Handle<Node>> }
+
+struct Tree { value: u32, left: u32, right: u32 }
+
+enum Expr { num(i64), neg(u32) }
+
+struct Empty {}

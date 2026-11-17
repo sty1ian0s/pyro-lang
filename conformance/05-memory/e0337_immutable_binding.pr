@@ -1,0 +1,21 @@
+//@ expected-fail: T055
+// §5.5.1: nothing reachable through an immutable binding may be written.
+
+struct Point {
+    pub mut x: f32,
+    pub mut y: f32,
+
+    pub fn translate(mut self, dx: f32) { self.x += dx; }
+}
+
+fn nudge(mut p: Point) { p.y += 1.0; }
+
+fn edits() {
+    let p = Point { x: 0.0, y: 0.0 };
+    p.y = 1.0; //~ E0337
+    p = Point { x: 1.0, y: 1.0 }; //~ E0337
+    p.translate(2.0); //~ E0337
+    nudge(mut p); //~ E0337
+    let xs: [3]u32 = [1, 2, 3];
+    xs[0] = 4; //~ E0337
+}

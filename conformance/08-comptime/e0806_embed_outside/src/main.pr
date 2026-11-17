@@ -1,0 +1,8 @@
+//@ expected-fail: T073
+// §8.6: `@embed_file` may not reach outside the package root.
+
+const SECRET = @embed_file("../outside.txt"); //~ E0806
+const SYSTEM = @embed_file("/etc/hostname"); //~ E0806
+const SNEAKY = @embed_file("assets/../../outside.txt"); //~ E0806
+
+pub fn main() {}

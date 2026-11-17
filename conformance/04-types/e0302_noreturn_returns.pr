@@ -1,0 +1,16 @@
+//@ expected-fail: T043
+// §4.2.4: a function declared `-> noreturn` must not return normally.
+
+fn stop(code: u8) -> noreturn {
+    if code == 0 {
+        return; //~ E0302
+    }
+    @trap("stopped");
+}
+
+fn finish(done: bool) -> noreturn {
+    if done {
+        return; //~ E0302
+    }
+    loop {}
+}

@@ -1,0 +1,22 @@
+//@ expected-fail: T047
+// §5.5.2: a parameter not declared `mut` cannot be written.
+
+struct Point {
+    pub mut x: f32,
+    pub mut y: f32,
+
+    pub fn translate(mut self, dx: f32) { self.x += dx; }
+}
+
+fn reset(p: Point) {
+    p.x = 0.0; //~ E0338
+}
+
+fn grow(n: u32) -> u32 {
+    n += 1; //~ E0338
+    n
+}
+
+fn shift(p: Point) {
+    p.translate(1.0); //~ E0338
+}

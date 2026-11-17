@@ -1,0 +1,10 @@
+//@ expected-fail: T068
+// §7.6.3: generic arguments are inferred from argument types only, never from
+// the expected result type.
+
+fn zero<T: plain>() -> T { @zero(T) }
+
+fn make() -> u32 {
+    let z: u32 = zero(); //~ E0372
+    z
+}

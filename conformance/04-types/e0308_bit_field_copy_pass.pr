@@ -1,0 +1,29 @@
+//@ expected-fail: T055
+//@ covers: E0308
+// §4.11.2, §4.11.3: bit fields and packed fields are read, computed and
+// assigned back; a view of the whole struct is unaffected.
+
+struct Flags {
+    visible: bool,
+    layer: u3,
+    id: u32,
+}
+
+@packed
+struct Header {
+    tag: u8,
+    len: u32,
+}
+
+fn reset(mut f: Flags) { f.layer = 0; }
+fn grow(mut n: u32) { n += 1; }
+
+fn edit(mut f: Flags, mut h: Header) {
+    f.visible = !f.visible;
+    f.layer += 1;
+    grow(mut f.id);
+    reset(mut f);
+    let mut len = h.len;
+    grow(mut len);
+    h.len = len;
+}

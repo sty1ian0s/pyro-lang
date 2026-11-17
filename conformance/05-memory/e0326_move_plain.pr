@@ -1,0 +1,13 @@
+//@ expected-fail: T047
+// §5.5.2: `move` on a parameter of a concrete plain type is an error: plain
+// values are always copied.
+
+struct Point { x: f32, y: f32 }
+
+fn consume(move n: u32) -> u32 { //~ E0326
+    n
+}
+
+fn take_point(move p: Point) -> f32 { //~ E0326
+    p.x
+}

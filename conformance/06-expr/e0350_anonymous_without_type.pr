@@ -1,0 +1,8 @@
+//@ expected-fail: T046
+// §6.2.2: a named anonymous literal takes its type from the expected type;
+// without one it is an error.
+
+fn make() {
+    let p = .{ x: 1, y: 2 }; //~ E0350
+    print("{}\n", .{ a: 1 }); //~ E0350
+}

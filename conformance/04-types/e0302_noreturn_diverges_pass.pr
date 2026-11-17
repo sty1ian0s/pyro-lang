@@ -1,0 +1,21 @@
+//@ expected-fail: T043
+//@ covers: E0302
+// §4.2.4, §6.7.1: a `noreturn` function may end in a trap or a `loop` without
+// `break`; a call to it converts to any type.
+
+fn fail_hard() -> noreturn {
+    @trap("unrecoverable state");
+}
+
+fn spin() -> noreturn {
+    loop {}
+}
+
+fn pick(flag: bool) -> u32 {
+    if flag { 1 } else { fail_hard() }
+}
+
+fn wait_for(ready: bool) -> f32 {
+    if ready { return 1.0; }
+    spin()
+}

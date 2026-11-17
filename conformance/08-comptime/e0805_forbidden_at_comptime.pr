@@ -1,0 +1,21 @@
+//@ expected-fail: T059
+// §8.6: comptime code may not run `unsafe` blocks or concurrency; each
+// top-level evaluation reports the operation it reached, with a trace.
+
+fn with_unsafe() -> u32 {
+    unsafe { //~ E0805
+        return 1;
+    }
+}
+
+fn worker(x: u32) {}
+
+fn fan_out() -> u32 {
+    nursery { //~ E0805
+        spawn worker(1);
+    }
+    return 0;
+}
+
+const A: u32 = with_unsafe();
+const B: u32 = fan_out();

@@ -1,0 +1,28 @@
+//@ expected-fail: T052
+//@ covers: E0356
+// §6.6.2: `return`, `continue`, `break` and a trap all diverge.
+
+fn find(xs: []u32, v: u32) -> Option<usize> {
+    for x, i in xs { if x == v { return .some(i); } }
+    .none
+}
+
+fn index_of(xs: []u32) -> usize {
+    guard let .some(i) = find(xs, 7) else { return 0; }
+    i
+}
+
+fn count_found(lists: [3][4]u32) -> u32 {
+    let mut n: u32 = 0;
+    for xs in lists {
+        guard let .some(i) = find(xs, 7) else { continue; }
+        n += 1;
+    }
+    loop {
+        guard let .some(i) = find(lists[0], 1) else { break; }
+        n += 1;
+        break;
+    }
+    guard let .some(i) = find(lists[1], 2) else { @trap("missing 2"); }
+    n
+}

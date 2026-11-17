@@ -1,0 +1,10 @@
+//@ expected-fail: T047
+// §5.5.2: a `mut` parameter needs `mut` at the call site.
+
+struct Player { pub mut health: u8 }
+
+fn heal(mut p: Player, amount: u8) { p.health += amount; }
+
+fn tick(mut p: Player) {
+    heal(p, 10); //~ E0334
+}

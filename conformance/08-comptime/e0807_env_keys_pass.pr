@@ -1,0 +1,7 @@
+//@ expected-fail: T073
+//@ covers: E0807
+// §8.6, §13.3: reserved keys are readable in every environment, and `@env_or`
+// supplies a default instead of failing.
+
+const CHECKED: bool = @env("debug_assertions");
+const LOG_LEVEL = @env_or("log_level", 2);

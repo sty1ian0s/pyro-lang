@@ -1,0 +1,12 @@
+//@ expected-fail: T059
+// §8.6: each top-level comptime evaluation may execute 10 000 000 backward
+// branches and calls; exceeding it is reported at the evaluation, with the
+// comptime trace.
+
+fn count_up(n: u64) -> u64 {
+    let mut i: u64 = 0;
+    while i < n { i += 1; }
+    i
+}
+
+const BIG: u64 = count_up(20_000_000); //~ E0808

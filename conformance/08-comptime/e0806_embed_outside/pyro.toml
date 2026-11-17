@@ -1,0 +1,5 @@
+# §8.6: `@embed_file` paths are relative to this package root and confined to it.
+[package]
+name = "embed_outside"
+version = "0.1.0"
+edition = "2026"

@@ -1,0 +1,13 @@
+//@ expected-fail: T074
+//@ covers: E0361
+// §6.10, §8.2: a capturing lambda passed to a `comptime` parameter reads its
+// captures; the caller writes its own locals.
+
+fn apply(x: u32, comptime f: fn(u32) -> u32) -> u32 { f(x) }
+
+fn tally() -> u32 {
+    let mut total: u32 = 0;
+    let step: u32 = 2;
+    total += apply(3, |v| v + step);
+    total
+}

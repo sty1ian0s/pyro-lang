@@ -1,0 +1,24 @@
+//@ expected-fail: T056
+//@ covers: E0802
+// §8.1, §8.6: comptime-only values used in comptime contexts, and plain values,
+// `str` and arrays computed at comptime and embedded in the program.
+
+struct Point { x: f32, y: f32 }
+
+const ELEM: type = u32;
+const KEY: FieldId<Point> = .x;
+
+fn squares() -> [8]u32 {
+    let mut out: [8]u32 = [0; 8];
+    for i in 0..8 { out[i] = (i * i) as u32; }
+    out
+}
+
+const TABLE: [8]u32 = squares();
+const NAME: str = "table";
+
+fn lookup(i: usize, p: Point) -> u32 {
+    let buf: [@size_of(ELEM)]u8 = [0; @size_of(ELEM)];
+    let x = @field(p, KEY);
+    TABLE[i] + buf.len() as u32 + NAME.len() as u32
+}

@@ -1,0 +1,25 @@
+//@ expected-fail: T080
+//@ covers: E0323
+// §5.3.3: after a move, a new binding with the same name is a new resource.
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+fn keep(move f: File) { f.close(); }
+
+fn descriptor(f: File) -> i32 { f.fd }
+
+fn twice() -> i32 {
+    let a = File.open(1);
+    let n = descriptor(a);
+    keep(move a);
+    let a = File.open(n + 1);
+    let m = descriptor(a);
+    a.close();
+    m
+}

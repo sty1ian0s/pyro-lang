@@ -1,0 +1,15 @@
+//@ expected-fail: T043
+// §4.7, §6.4.1, §6.6.1: distinct types do not mix, arithmetic needs one numeric
+// type, and an `if` condition must be `bool`.
+
+type Meters = distinct f32;
+type Seconds = distinct f32;
+
+fn mixes(d: Meters, t: Seconds, n: i32, x: f32, count: u32) {
+    let bad = d + t; //~ E0310
+    let sum = n + x; //~ E0310
+    if count { //~ E0310
+        return;
+    }
+    let s: str = n; //~ E0310
+}

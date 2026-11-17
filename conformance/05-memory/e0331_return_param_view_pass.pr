@@ -1,0 +1,25 @@
+//@ expected-fail: T083
+//@ covers: E0331
+// §5.4.3, §5.5.4: views of parameters and of `static` data may be returned;
+// `-> mut` results come from `mut` parameters.
+
+fn head(xs: []u32) -> []u32 {
+    return xs[0..1];
+}
+
+fn name() -> str {
+    "pyro"
+}
+
+fn largest(mut xs: []u32) -> mut u32 {
+    return xs[0];
+}
+
+struct Counter {
+    pub mut n: u32,
+
+    pub fn bump(mut self) -> mut Self {
+        self.n += 1;
+        return self;
+    }
+}

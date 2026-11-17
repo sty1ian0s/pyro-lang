@@ -1,0 +1,11 @@
+//@ expected-fail: T040
+// §7.2.3: parameter defaults must be comptime constant expressions; another
+// parameter is not one.
+
+fn pad(len: usize, width: usize = len) -> usize { //~ E0370
+    width - len
+}
+
+fn wait(ms: u32, until: u32 = ms * 2) -> u32 { //~ E0370
+    until
+}
