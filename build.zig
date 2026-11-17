@@ -155,9 +155,12 @@ fn addCommonImports(b: *std.Build, m: *std.Build.Module, c: Common) void {
 /// EDIT POINT: per-tree settings for the test module of `tree`.
 /// T010 adds its C harness wiring to the `runtime` branch.
 fn addTreeOptions(b: *std.Build, tree: []const u8, m: *std.Build.Module) void {
-    _ = b;
     if (std.mem.eql(u8, tree, "runtime")) {
         m.link_libc = true; // runtime tests call libc (getpid, abort paths)
+        // T010: C harness that calls pyro_rt_trap through the C ABI.
+        m.addCSourceFile(.{ .file = b.path("runtime/trap_harness.c") });
+        // T010: lets runtime/trap.zig @embedFile the prelude TrapKind to check the mirror.
+        m.addAnonymousImport("trap.pr", .{ .root_source_file = b.path("std/core/trap.pr") });
     }
 }
 
