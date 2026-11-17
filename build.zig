@@ -62,7 +62,8 @@ pub fn build(b: *std.Build) void {
     }
 
     // --- zig build conformance ------------------------------------------------
-    // Runs tools/conformance/main.zig as `<harness> <pyro> <conformance dir> [args...]`.
+    // Runs tools/conformance/main.zig as
+    // `<harness> <pyro> <conformance dir> --examples <dir> --registry <A-diagnostics.md> [args...]`.
     // Until that file exists, a stub prints a note and succeeds.
     const harness_src = if (fileExists(b, "tools/conformance/main.zig"))
         b.path("tools/conformance/main.zig")
@@ -85,6 +86,10 @@ pub fn build(b: *std.Build) void {
     const run_conf = b.addRunArtifact(harness);
     run_conf.addArtifactArg(exe);
     run_conf.addDirectoryArg(b.path("conformance"));
+    run_conf.addArg("--examples");
+    run_conf.addDirectoryArg(b.path("examples"));
+    run_conf.addArg("--registry");
+    run_conf.addFileArg(b.path("spec/A-diagnostics.md"));
     run_conf.addPassthruArgs();
     b.step("conformance", "Run the conformance suite (B.9)").dependOn(&run_conf.step);
 }
