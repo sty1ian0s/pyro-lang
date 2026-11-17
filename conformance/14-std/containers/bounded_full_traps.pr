@@ -1,0 +1,16 @@
+//@ expected-fail: T111
+// §14.4.5: `Bounded<T, N>` (prelude); `try_push` reports a full buffer, `push`
+// traps with kind `capacity`.
+
+pub fn main() {
+    let mut b: Bounded<u8, 3> = .empty();
+    b.push(1);
+    b.push(2);
+    print("{} {}\n", b.len(), b.capacity());
+    b.push(3);
+    print("{} {}\n", b.try_push(4).is_err(), b.pop().unwrap_or(0));
+    b.push(9);
+    print("{}\n", b.len());
+    b.push(10);
+    print("after\n");
+}

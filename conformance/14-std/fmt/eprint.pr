@@ -1,0 +1,7 @@
+//@ expected-fail: T112
+// §14.6: `print` writes to stdout, `eprint` to stderr.
+
+pub fn main() {
+    print("out {}\n", 1);
+    eprint("err {}\n", 2);
+}

@@ -1,0 +1,12 @@
+//@ expected-fail: T112
+// §14.6: the argument count must match the placeholders (E1401), for every
+// formatting intrinsic. `{{` and `}}` are not placeholders.
+
+pub fn main() {
+    let mut buf: [16]u8 = [0; 16];
+    print("{} {}\n", 1); //~ E1401 too few
+    print("{}\n", 1, 2); //~ E1401 too many
+    print("{{}}\n", 1); //~ E1401 escaped braces take no argument
+    eprint("{}\n"); //~ E1401
+    _ = format(mut buf[..], "{}{}", 1); //~ E1401
+}

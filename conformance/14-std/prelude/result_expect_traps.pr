@@ -1,0 +1,9 @@
+//@ expected-fail: T105
+// §14.1.2: `expect` on `.err` traps (kind `explicit`, exit status 134).
+
+pub fn main() {
+    let r: Result<i32, u8> = .err(1);
+    print("before\n");
+    _ = r.expect("must be ok");
+    print("after\n");
+}

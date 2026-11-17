@@ -1,0 +1,9 @@
+//@ expected-fail: T108
+// §14.6: `parse_int` and `parse_float`; invalid input and overflow give `.none`.
+
+pub fn main() {
+    print("{} {}\n", "42".parse_int(i32).unwrap_or(0), "-17".parse_int(i32).unwrap_or(0));
+    print("{} {}\n", "255".parse_int(u8).unwrap_or(0), "256".parse_int(u8).is_none());
+    print("{} {}\n", "12x".parse_int(i32).is_none(), "".parse_int(i32).is_none());
+    print("{:.3} {}\n", "2.5".parse_float(f64).unwrap_or(0.0), "abc".parse_float(f64).is_none());
+}

@@ -1,0 +1,10 @@
+//@ expected-fail: T105
+// §14.1, §9.3: `assert` is checked in every environment and traps when false.
+
+pub fn main() {
+    let n: i32 = 3;
+    assert(n < 5, "n is small");
+    print("passed\n");
+    assert(n > 5, "n is large");
+    print("after\n");
+}

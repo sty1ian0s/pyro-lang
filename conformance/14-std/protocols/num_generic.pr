@@ -1,0 +1,17 @@
+//@ expected-fail: T106
+// §14.2: `std.ops.Num` is implemented by every integer and float type.
+
+use std.ops.{Num};
+
+fn sum<T: Num>(xs: []T) -> T {
+    let mut acc = T.zero();
+    for x in xs { acc = acc.add(x); }
+    acc
+}
+
+pub fn main() {
+    let ints: [4]i32 = [1, 2, 3, 4];
+    let floats: [3]f64 = [0.5, 0.25, 1.25];
+    print("{} {:.2}\n", sum(ints[..]), sum(floats[..]));
+    print("{} {} {}\n", i32.one(), u8.zero(), i64.one().mul(7).sub(2).div(5));
+}

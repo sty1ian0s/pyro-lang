@@ -1,0 +1,16 @@
+//@ expected-fail: T105
+// §14.1.3: `Range`, `RangeInclusive`, `step`, `rev`.
+
+pub fn main() {
+    let half: Range<i32> = 2..6;
+    print("{} {} {}\n", half.start, half.end, half.len());
+    print("{} {} {}\n", half.contains(2), half.contains(5), half.contains(6));
+    let closed: RangeInclusive<i32> = 2..=6;
+    print("{} {}\n", closed.len(), closed.contains(6));
+    for i in (0..10).step(3) { print("{} ", i); }
+    print("\n");
+    for i in (1..=3).rev() { print("{} ", i); }
+    print("\n");
+    let empty: Range<u8> = 4..4;
+    print("{} {}\n", empty.len(), empty.contains(4));
+}

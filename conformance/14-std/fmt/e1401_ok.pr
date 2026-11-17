@@ -1,0 +1,23 @@
+//@ expected-fail: T112
+//@ covers: E1401
+// §14.6: format strings that match their arguments.
+
+struct Both { v: i32 }
+
+impl Display for Both {
+    fn fmt(self, mut w: std.fmt.Writer) { w.write_int(self.v as i64); }
+}
+
+impl Debug for Both {
+    fn debug(self, mut w: std.fmt.Writer) { w.write("Both"); }
+}
+
+pub fn main() {
+    let b = Both { v: 3 };
+    let mut buf: [32]u8 = [0; 32];
+    print("no placeholders\n");
+    print("{} {:?} {:>4}\n", b, b, 7);
+    print("{{}} {} {{\n", b);
+    eprint("{:x}\n", 255);
+    _ = format(mut buf[..], "{}-{:.2}", "a", 1.5);
+}

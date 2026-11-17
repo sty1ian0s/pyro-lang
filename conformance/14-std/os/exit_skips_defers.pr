@@ -1,0 +1,10 @@
+//@ expected-fail: T114
+// §14.7: `process.exit` ends the process with the given status and runs no defers.
+
+use std.process;
+
+pub fn main() {
+    defer print("deferred\n");
+    print("before\n");
+    process.exit(3);
+}

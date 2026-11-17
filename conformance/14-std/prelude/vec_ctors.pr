@@ -1,0 +1,11 @@
+//@ expected-fail: T105
+// §14.1: the `vec2`, `vec3`, `vec4` prelude constructors.
+
+pub fn main() {
+    let a = vec2(1.5, 2.5);
+    let b = vec3(1.0, 2.0, 3.0);
+    let c = vec4(0.5, 1.5, 2.5, 3.5);
+    print("{:.1} {:.1}\n", a.x, a.y);
+    print("{:.1} {:.1} {:.1}\n", b.x, b.y, b.z);
+    print("{:.1} {:.1} {:.1} {:.1}\n", c.x, c.y, c.z, c.w);
+}

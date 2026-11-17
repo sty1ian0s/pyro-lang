@@ -1,0 +1,14 @@
+//@ expected-fail: T108
+// §14.6: `text.Builder` is a growable string resource.
+
+use std.text;
+
+pub fn main() {
+    let mut b = text.Builder.init();
+    defer b.deinit();
+    b.append("abc");
+    b.append("def");
+    print("{} {}\n", b.as_str(), b.as_str().len());
+    b.clear();
+    print("[{}]\n", b.as_str());
+}

@@ -1,0 +1,17 @@
+//@ expected-fail: T105
+// §14.1.2: `Option<T>` methods.
+
+fn double(x: i32) -> i32 { x * 2 }
+
+pub fn main() {
+    let a: Option<i32> = .some(21);
+    let b: Option<i32> = .none;
+    print("{} {}\n", a.is_some(), a.is_none());
+    print("{} {}\n", b.is_some(), b.is_none());
+    print("{} {}\n", a.unwrap_or(0), b.unwrap_or(7));
+    print("{}\n", a.expect("a is set"));
+    print("{} {}\n", a.map(double).unwrap_or(0), b.map(double).unwrap_or(-1));
+    let missing: Result<i32, u8> = b.ok_or(9);
+    let present: Result<i32, u8> = a.ok_or(9);
+    print("{} {}\n", missing.is_err(), present.unwrap_or(0));
+}

@@ -1,0 +1,19 @@
+//@ expected-fail: T112
+// §14.6: each argument must implement the protocol its placeholder needs (E1401):
+// `{}` needs `Display`, `{:?}` needs `Debug`.
+
+struct OnlyDisplay { v: i32 }
+struct Neither { v: i32 }
+
+impl Display for OnlyDisplay {
+    fn fmt(self, mut w: std.fmt.Writer) { w.write_int(self.v as i64); }
+}
+
+pub fn main() {
+    let d = OnlyDisplay { v: 1 };
+    let n = Neither { v: 2 };
+    print("{}\n", n); //~ E1401 no Display
+    print("{:?}\n", d); //~ E1401 no Debug
+    print("{:?}\n", n); //~ E1401
+    print("{} {}\n", d, n); //~ E1401 second argument
+}

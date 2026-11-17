@@ -1,0 +1,17 @@
+//@ expected-fail: T113
+// §14.4.2: `Pool<T>` (prelude); stale handles behave as absent.
+
+pub fn main() {
+    let mut pool: Pool<u32> = .init();
+    defer pool.deinit();
+    let a = pool.insert(10);
+    let b = pool.insert(20);
+    print("{} {}\n", pool.len(), pool.get(a).unwrap_or(0));
+    print("{}\n", pool.remove(a));
+    print("{} {} {}\n", pool.contains(a), pool.get(a).is_none(), pool.remove(a));
+    print("{} {}\n", pool.len(), pool.get(b).unwrap_or(0));
+    let c = pool.insert(30);
+    print("{} {}\n", pool.contains(a), pool.get(c).unwrap_or(0));
+    pool.clear();
+    print("{} {} {}\n", pool.len(), pool.contains(b), pool.contains(c));
+}
