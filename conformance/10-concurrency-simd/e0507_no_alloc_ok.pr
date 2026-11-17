@@ -1,0 +1,26 @@
+//@ covers: E0507
+//@ expected-fail: T124
+// §10.7: arithmetic, writes into existing storage and calls to non-allocating functions
+// are allowed in `@no_alloc` code, including a `@no_alloc` test.
+
+fn add(a: u32, b: u32) -> u32 { a + b }
+
+@no_alloc
+fn sum(xs: []u32) -> u32 {
+    let mut total: u32 = 0;
+    for x in xs { total = add(total, x); }
+    total
+}
+
+@no_alloc
+fn fill(mut xs: []u32, v: u32) {
+    for x in xs { x = v; }
+}
+
+@no_alloc
+@test
+fn sum_is_allocation_free() {
+    let mut a: [3]u32 = [0; 3];
+    fill(mut a[..], 2);
+    assert(sum(a[..]) == 6, "three twos");
+}

@@ -1,0 +1,19 @@
+//@ expected-fail: T132
+// §10.4: channel messages must be plain: no views, no resources.
+
+struct Line { text: str }
+
+fn views() {
+    let mut ch: Channel<str, 8> = .init(); //~ E0505
+    defer ch.deinit();
+}
+
+fn view_fields() {
+    let mut ch: Channel<Line, 8> = .init(); //~ E0505
+    defer ch.deinit();
+}
+
+fn resources() {
+    let mut ch: Channel<List<u32>, 4> = .init(); //~ E0505
+    defer ch.deinit();
+}

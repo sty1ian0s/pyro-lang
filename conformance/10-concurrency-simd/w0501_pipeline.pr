@@ -1,0 +1,33 @@
+//@ covers: W0501
+//@ expected-fail: T133
+// §10.4.1 rule 2: a linear pipeline (source, stage, sink) has an acyclic channel graph.
+
+fn source(move out: Sender<u32>) {
+    defer out.close();
+    for i in 0..100u32 { _ = out.send(i); }
+}
+
+fn stage(inbox: Channel<u32, 16>, move out: Sender<u32>) {
+    defer out.close();
+    while let .some(v) = inbox.recv() { _ = out.send(v * 2); }
+}
+
+fn sink(inbox: Channel<u32, 16>, total: Atomic<u64>) {
+    while let .some(v) = inbox.recv() { _ = total.fetch_add(v as u64); }
+}
+
+fn pipeline() -> u64 {
+    let mut raw: Channel<u32, 16> = .init();
+    defer raw.deinit();
+    let mut doubled: Channel<u32, 16> = .init();
+    defer doubled.deinit();
+    let total: Atomic<u64> = .init(0);
+    let to_raw = raw.sender();
+    let to_doubled = doubled.sender();
+    nursery {
+        spawn source(move to_raw);
+        spawn stage(raw, move to_doubled);
+        spawn sink(doubled, total);
+    }
+    total.load()
+}

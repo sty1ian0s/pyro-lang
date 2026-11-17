@@ -1,0 +1,23 @@
+//@ covers: E0505
+//@ expected-fail: T132
+// §10.4, §5.2: plain messages: integers, plain enums and structs, fixed arrays,
+// vectors, options.
+
+enum Job { compress(u32), stop }
+
+struct Point { x: f32, y: f32 }
+
+fn plain_channels() {
+    let mut a: Channel<u32, 1> = .init();
+    defer a.deinit();
+    let mut b: Channel<Job, 64> = .init();
+    defer b.deinit();
+    let mut c: Channel<Point, 8> = .init();
+    defer c.deinit();
+    let mut d: Channel<[4]u8, 8> = .init();
+    defer d.deinit();
+    let mut e: Channel<vec4<f32>, 8> = .init();
+    defer e.deinit();
+    let mut f: Channel<Option<u32>, 8> = .init();
+    defer f.deinit();
+}

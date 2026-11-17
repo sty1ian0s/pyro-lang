@@ -1,0 +1,12 @@
+//@ expected-fail: T128
+// §10.6.2: one swizzle may not mix the `xyzw` and `rgba` alphabets.
+
+fn read(v: vec4<f32>) -> vec2<f32> {
+    v.xg //~ E0508
+}
+
+fn write(v: vec4<f32>) -> vec4<f32> {
+    let mut w = v;
+    w.rgz = .{ 1.0, 2.0, 3.0 }; //~ E0508
+    w
+}

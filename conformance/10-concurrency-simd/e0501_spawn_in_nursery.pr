@@ -1,0 +1,19 @@
+//@ covers: E0501
+//@ expected-fail: T026
+// §3.5: a `spawn` nested in blocks and loops of a `nursery` body is still inside it.
+
+fn work(x: u32) {}
+
+fn spawns() {
+    nursery {
+        spawn work(1);
+        if true { spawn work(2); }
+        for i in 0..4u32 { spawn work(i); }
+        {
+            spawn work(5);
+        }
+        nursery {
+            spawn work(6);
+        }
+    }
+}

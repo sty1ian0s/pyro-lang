@@ -1,0 +1,30 @@
+//@ covers: E0503
+//@ expected-fail: T123
+// §10.3: every allowed `parallel_for` iterable kind.
+
+@soa
+struct Particle { pub mut x: f32, pub mut vx: f32 }
+
+struct Pair { pub mut a: u32, pub mut b: u32 }
+
+fn ranges(out: Atomic<u64>) {
+    parallel_for i in 0..1000u64 { _ = out.fetch_add(i); }
+    parallel_for i in 0..=10u64 { _ = out.fetch_add(i); }
+}
+
+fn arrays() {
+    let mut a: [8]u32 = [0; 8];
+    parallel_for v in a { v += 1; }
+}
+
+fn slices(mut xs: []u32, mut ps: []Particle, mut pairs: soa []Pair, dt: f32) {
+    parallel_for x in xs { x *= 2; }
+    parallel_for p in ps { p.x += p.vx * dt; }
+    parallel_for q in pairs { q.a = q.b; }
+}
+
+fn chunks(mut xs: []u32) {
+    parallel_for c in xs.chunks_mut(64) {
+        for v in c { v += 1; }
+    }
+}
