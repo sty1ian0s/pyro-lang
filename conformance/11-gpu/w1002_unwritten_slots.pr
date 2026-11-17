@@ -1,0 +1,24 @@
+//@ expected-fail: T197
+// §11.4.3: when the compiler cannot prove that every slot below the counts is written,
+// it warns at `set_counts`.
+
+use std.gpu;
+
+pub struct VsOut { @position clip: vec4<f32> }
+pub struct Grid { nv: u32, np: u32 }
+
+@gpu_mesh(workgroup: 64, max_vertices: 4, max_primitives: 2)
+fn ms_missing_vertex(mut out: gpu.MeshOut<VsOut, void, 4, 2>) {
+    out.set_counts(4, 2); //~ W1002
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < 2 { out.triangle(t, vec3(0, 1, 2)); }
+}
+
+@gpu_mesh(workgroup: 64, max_vertices: 64, max_primitives: 64)
+fn ms_unrelated_guard(mut out: gpu.MeshOut<VsOut, void, 64, 64>, g: Grid) {
+    out.set_counts(g.nv, g.np); //~ W1002
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < g.np { out.triangle(t, vec3(0, 1, 2)); }
+}

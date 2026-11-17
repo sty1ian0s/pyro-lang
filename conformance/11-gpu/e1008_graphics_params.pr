@@ -1,0 +1,25 @@
+//@ covers: E1008
+//@ expected-fail: T179
+// §11.1.2, §11.3: vertex and fragment stages take their stage-specific parameters
+// (vertex input, `@instance`, fragment input) plus uniform and storage parameters.
+// Texture parameters are in e1008_texture_params.pr (T200), ray-tracing stages in
+// e1008_ray_stage_params.pr (T198).
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct Instance { offset: vec3<f32>, scale: f32 }
+pub struct Camera { view_proj: [4]vec4<f32> }
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+
+@gpu_vertex
+fn vs_inst(v: Vertex, @instance inst: Instance, cam: Camera, heights: []f32) -> VsOut {
+    let h = if heights.len() > 0 { heights[0] } else { 0.0 };
+    let p = v.pos * inst.scale + inst.offset;
+    let m = cam.view_proj;
+    VsOut { clip: m[0] * p.x + m[1] * (p.y + h) + m[2] * p.z + m[3], uv: v.uv }
+}
+
+@gpu_fragment
+fn fs_tint(i: VsOut, tint: vec4<f32>, palette: []vec4<f32>) -> vec4<f32> {
+    let base = if palette.len() > 0 { palette[0] } else { vec4(i.uv.x, i.uv.y, 0.0, 1.0) };
+    base * tint
+}

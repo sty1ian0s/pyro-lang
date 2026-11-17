@@ -1,0 +1,39 @@
+//@ expected-fail: T197
+// §11.4.3: `MeshOut` generic arguments that differ from the attribute values (reported
+// at the parameter), and, reported at the pipeline declaration, `@task_payload` without
+// a task stage and an output method that does not match the topology.
+
+use std.gpu;
+
+pub struct VsOut { @position clip: vec4<f32> }
+pub struct Payload { ids: [32]u32 }
+
+@gpu_mesh(workgroup: 32, max_vertices: 3, max_primitives: 1)
+fn ms_wrong_sizes(mut out: gpu.MeshOut<VsOut, void, 64, 124>) { //~ E1010
+    out.set_counts(3, 1);
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < 1 { out.triangle(t, vec3(0, 1, 2)); }
+}
+
+@gpu_mesh(workgroup: 32, max_vertices: 3, max_primitives: 1)
+fn ms_with_payload(mut out: gpu.MeshOut<VsOut, void, 3, 1>, @task_payload payload: Payload) {
+    out.set_counts(3, 1);
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(payload.ids[0] as f32, t as f32, 0.0, 1.0) }); }
+    if t < 1 { out.triangle(t, vec3(0, 1, 2)); }
+}
+
+@gpu_mesh(workgroup: 32, max_vertices: 2, max_primitives: 1)
+fn ms_line(mut out: gpu.MeshOut<VsOut, void, 2, 1>) {
+    out.set_counts(2, 1);
+    let t = @local_invocation_id.x;
+    if t < 2 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < 1 { out.line(t, vec2(0, 1)); }
+}
+
+@gpu_fragment
+fn fs_white(i: VsOut) -> vec4<f32> { vec4(1.0, 1.0, 1.0, 1.0) }
+
+const PayloadWithoutTask = gpu.RenderPipeline(.{ mesh: ms_with_payload, fragment: fs_white, color: [.{ format: .bgra8_srgb, .. }], .. }); //~ E1010
+const LinesAsTriangles = gpu.RenderPipeline(.{ mesh: ms_line, fragment: fs_white, topology: .triangle_list, color: [.{ format: .bgra8_srgb, .. }], .. }); //~ E1010

@@ -1,0 +1,29 @@
+//@ covers: E1011
+//@ expected-fail: T198
+// §11.5.2: a payload of exactly 256 bytes, a procedural attribute type of exactly 32
+// bytes, and `max_recursion: 1`.
+
+use std.gpu;
+
+pub struct Payload { data: [64]f32 }
+pub struct Attr { v: [8]f32 }
+
+@gpu_ray_gen
+fn rg(scene: gpu.Tlas, mut image: []f32) {
+    let mut p = Payload { data: [0.0; 64] };
+    gpu.trace_ray(scene, .{ origin: vec3(0.0, 0.0, 0.0), t_min: 0.0, direction: vec3(0.0, 0.0, 1.0), t_max: 100.0 }, mut p);
+    image[gpu.linear_id(@launch_id, @launch_size) as usize] = p.data[0];
+}
+
+@gpu_miss
+fn miss_clear(mut p: Payload, ray: gpu.RayInfo) { p.data[0] = 0.0; }
+
+@gpu_intersection
+fn isect(ray: gpu.RayInfo, prim: gpu.PrimitiveInfo) -> Option<(f32, Attr)> {
+    .some((ray.t_min, Attr { v: [1.0; 8] }))
+}
+
+@gpu_closest_hit
+fn hit(mut p: Payload, h: gpu.Hit<Attr>) { p.data[0] = h.attributes.v[0]; }
+
+const Procedural = gpu.RayPipeline(.{ ray_gen: rg, miss: [miss_clear], hit_groups: [.{ closest: hit, intersection: isect, .. }], max_recursion: 1, .. });

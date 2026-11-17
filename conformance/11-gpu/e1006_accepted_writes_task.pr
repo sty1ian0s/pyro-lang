@@ -1,0 +1,18 @@
+//@ covers: E1006
+//@ expected-fail: T197
+// §11.1.6, §11.4.2: a task stage writes its `payload` at a `fetch_add` slot of a
+// workgroup counter that receives only `fetch_add` and `load`.
+
+pub struct CullPayload { visible: [32]u32 }
+
+@gpu_task(workgroup: 32)
+fn ts_cull(mut payload: CullPayload, radii: []f32) -> vec3<u32> {
+    @workgroup let mut count: Atomic<u32> = .init(0);
+    let i = @global_invocation_id.x as usize;
+    if i < radii.len() && radii[i] > 0.0 {
+        let slot = count.fetch_add(1);
+        payload.visible[slot as usize] = i as u32;
+    }
+    @workgroup_barrier();
+    vec3(count.load(), 1, 1)
+}

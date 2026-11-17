@@ -1,0 +1,31 @@
+//@ covers: E1201
+//@ expected-fail: T097
+// §12.5, §12.6: every C-compatible type as an `extern` parameter or result, and as an
+// `@export` function's parameter or result.
+
+use std.c.{c_char, c_int, c_size_t};
+
+@c_layout
+pub struct Vec2 { x: f32, y: f32 }
+
+@c_layout
+pub struct Packet { id: u32, bytes: [16]u8, origin: Vec2, valid: bool }
+
+@c_layout
+pub enum Mode: u8 { off, on }
+
+extern "C" {
+    pub fn abs(x: c_int) -> c_int;
+    pub fn strlen(s: *const c_char) -> c_size_t;
+    pub fn memset(p: *u8, v: c_int, n: usize) -> *u8;
+    pub fn fill_packet(p: *Packet, mode: Mode) -> bool;
+    pub fn scale(v: Vec2, k: f64) -> Vec2;
+    pub fn widths(a: i8, b: u16, c: i64, d: isize, e: f32, f: u64, g: i32);
+    pub fn qsort(base: *u8, n: usize, size: usize, cmp: fn(*const u8, *const u8) -> c_int);
+}
+
+@export("pyro_add")
+pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+@export("pyro_scale")
+pub fn scale_twice(v: Vec2) -> Vec2 { Vec2 { x: v.x * 2.0, y: v.y * 2.0 } }

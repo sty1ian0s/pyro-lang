@@ -1,0 +1,11 @@
+//@ covers: E1005
+//@ expected-fail: T197
+// §11.1.7: compute builtin variables are available in a task stage.
+
+pub struct Payload { first: [32]u32 }
+
+@gpu_task(workgroup: 32)
+fn ts_ids(mut payload: Payload) -> vec3<u32> {
+    payload.first[@local_invocation_id.x as usize] = @global_invocation_id.x;
+    vec3(@num_workgroups.x, 1, 1)
+}

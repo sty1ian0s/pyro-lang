@@ -1,0 +1,23 @@
+//@ expected-fail: T176
+// §11.1.2: a parameter of a non-compute stage outside every parameter class is E1008.
+
+use std.gpu;
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+pub struct Shade { color: vec3<f32>, shadowed: bool }
+
+@gpu_vertex
+fn vs_list(v: Vertex, extra: List<u32>) -> VsOut { //~ E1008
+    VsOut { clip: vec4(v.pos.x, v.pos.y, v.pos.z, 1.0), uv: v.uv }
+}
+
+@gpu_fragment
+fn fs_pointer(i: VsOut, p: *const f32) -> vec4<f32> { //~ E1008
+    vec4(i.uv.x, i.uv.y, 0.0, 1.0)
+}
+
+@gpu_miss
+fn miss_named(mut s: Shade, ray: gpu.RayInfo, name: str) { //~ E1008
+    s.color = ray.direction;
+}

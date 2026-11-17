@@ -1,0 +1,29 @@
+//@ covers: E1012
+//@ expected-fail: T183
+// §11.1.3, §11.5.5: a `gpu.RayQuery` lives as a local of a stage-reachable function and
+// is used in place.
+
+use std.gpu;
+
+fn sphere_t(info: gpu.PrimitiveInfo) -> Option<f32> {
+    if info.primitive_index == 0 { .some(1.0) } else { .none }
+}
+
+fn in_shadow(scene: gpu.Tlas, p: vec3<f32>, to_light: vec3<f32>) -> bool {
+    let mut q: gpu.RayQuery = .init(scene, .{ origin: p, t_min: 0.001, direction: to_light, t_max: 1.0 },
+                                    .{ flags: .{ terminate_on_first_hit: true, .. }, .. });
+    while q.proceed() {
+        match q.candidate() {
+            .triangle(_) => q.commit_triangle(),
+            .aabb(info) => { if let .some(t) = sphere_t(info) { q.commit_aabb(t); } },
+        }
+    }
+    q.committed().is_some()
+}
+
+@gpu_kernel(workgroup: 64)
+fn shadows(scene: gpu.Tlas, points: []vec3<f32>, mut lit: []u32, light: vec3<f32>) {
+    let i = @global_invocation_id.x as usize;
+    if i >= points.len() || i >= lit.len() { return; }
+    lit[i] = if in_shadow(scene, points[i], light) { 0 } else { 1 };
+}

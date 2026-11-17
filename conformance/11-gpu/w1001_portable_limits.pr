@@ -1,0 +1,16 @@
+//@ covers: W1001
+//@ expected-fail: T197
+// §11.4.5: `max_vertices` and `max_primitives` at the portable minimum of 256 and a
+// 128-invocation mesh workgroup compile without a warning.
+
+use std.gpu;
+
+pub struct VsOut { @position clip: vec4<f32> }
+
+@gpu_mesh(workgroup: 128, max_vertices: 256, max_primitives: 256)
+fn ms_at_limit(mut out: gpu.MeshOut<VsOut, void, 256, 256>) {
+    out.set_counts(3, 1);
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < 1 { out.triangle(t, vec3(0, 1, 2)); }
+}

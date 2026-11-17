@@ -1,0 +1,26 @@
+//@ covers: E1013
+//@ expected-fail: T180
+// §11.1.5: barriers as top-level statements, including inside plain blocks,
+// `inline for` and `comptime if`; loops wholly between barriers; `return` only after
+// the last barrier. Mesh `set_counts` is in e1013_mesh_set_counts_ok.pr (T197).
+
+@gpu_kernel(workgroup: 64)
+fn phases(mut xs: []f32) {
+    @workgroup let mut tile: [64]f32 = [0.0; 64];
+    let i = @global_invocation_id.x as usize;
+    let l = @local_invocation_id.x as usize;
+    tile[l] = if i < xs.len() { xs[i] } else { 0.0 };
+    {
+        @workgroup_barrier();
+    }
+    let mut acc: f32 = 0.0;
+    for k in 0..64 { acc += tile[k]; }
+    inline for _ in 0..2 {
+        @workgroup_barrier();
+    }
+    comptime if true {
+        @workgroup_barrier();
+    }
+    if i >= xs.len() { return; }
+    xs[i] = acc;
+}

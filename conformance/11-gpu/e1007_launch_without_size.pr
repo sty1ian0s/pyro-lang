@@ -1,0 +1,10 @@
+//@ expected-fail: T202
+// §11.2.3: a `launch` without `over` needs a slice or `Buffer` argument.
+
+@gpu_kernel(workgroup: 64)
+fn idle(k: f32) {}
+
+pub fn main() {
+    launch gpu idle(1.0); //~ E1007
+    launch cpu idle(2.0); //~ E1007
+}

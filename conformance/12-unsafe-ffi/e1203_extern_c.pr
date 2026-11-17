@@ -1,0 +1,10 @@
+//@ covers: E1203
+//@ expected-fail: T097
+// §12.6: the ABI string `"C"`, as in the libm example.
+
+@link("m")
+extern "C" {
+    pub fn cos(x: f64) -> f64;
+}
+
+pub fn cosine(x: f64) -> f64 { unsafe { cos(x) } }

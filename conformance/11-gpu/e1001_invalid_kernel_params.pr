@@ -1,0 +1,25 @@
+//@ expected-fail: T176
+// §11.1.2, §11.2: a kernel must return `void`, and every parameter must be uniform,
+// storage, texture/sampler or acceleration-structure class.
+
+pub struct WithPointer { p: *u32, n: u32 }
+
+@gpu_kernel(workgroup: 64)
+fn returns_value(xs: []f32) -> f32 { //~ E1001
+    xs[0]
+}
+
+@gpu_kernel(workgroup: 64)
+fn list_param(xs: List<f32>) {} //~ E1001
+
+@gpu_kernel(workgroup: 64)
+fn pointer_param(p: *u32) {} //~ E1001
+
+@gpu_kernel(workgroup: 64)
+fn struct_with_pointer(w: WithPointer) {} //~ E1001
+
+@gpu_kernel(workgroup: 64)
+fn string_param(s: str) {} //~ E1001
+
+@gpu_kernel(workgroup: 64)
+fn slice_of_slices(xs: [][]f32) {} //~ E1001

@@ -1,0 +1,26 @@
+//@ covers: E1004
+//@ expected-fail: T197
+// §11.1.1, §11.4: this case is the root module of the package beside it, whose
+// pyro.toml configures Vulkan and WebGPU. Vulkan provides mesh shaders, so the program
+// compiles; on WebGPU the pipeline's `init` returns `.err(.unsupported)`. The check is
+// T183's, but the case also needs `gpu.RenderPipeline` (T190) and mesh stages (T197),
+// which land last.
+
+use std.gpu;
+
+pub struct VsOut { @position clip: vec4<f32> }
+
+@gpu_mesh(workgroup: 64, max_vertices: 3, max_primitives: 1)
+fn ms_triangle(mut out: gpu.MeshOut<VsOut, void, 3, 1>) {
+    out.set_counts(3, 1);
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < 1 { out.triangle(t, vec3(0, 1, 2)); }
+}
+
+@gpu_fragment
+fn fs_white(i: VsOut) -> vec4<f32> { vec4(1.0, 1.0, 1.0, 1.0) }
+
+const MeshPipe = gpu.RenderPipeline(.{ mesh: ms_triangle, fragment: fs_white, color: [.{ format: .bgra8_srgb, .. }], .. });
+
+pub fn main() {}

@@ -1,0 +1,22 @@
+//@ covers: E1205
+//@ expected-fail: T096
+// §12.9: volatile reads and writes of integers of storage size 1, 2, 4 and 8.
+
+const UART_DR: usize = 0x3F20_1000;
+const REGS: usize = 0x4000_0000;
+
+pub fn uart_write(byte: u8) {
+    unsafe { @volatile_write(@ptr_from_int(u32, UART_DR), byte as u32); }
+}
+
+pub fn poke_all() -> u64 {
+    unsafe {
+        @volatile_write(@ptr_from_int(u8, REGS), 1);
+        @volatile_write(@ptr_from_int(i16, REGS + 2), -2);
+        @volatile_write(@ptr_from_int(i32, REGS + 4), 3);
+        let a = @volatile_read(@ptr_from_int(u16, REGS + 8));
+        let b = @volatile_read(@ptr_from_int(u64, REGS + 16));
+        let c = @volatile_read(@ptr_from_int(i64, REGS + 24));
+        b + (a as u64) + (c as u64)
+    }
+}

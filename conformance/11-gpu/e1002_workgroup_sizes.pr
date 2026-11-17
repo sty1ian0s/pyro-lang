@@ -1,0 +1,29 @@
+//@ covers: E1002
+//@ expected-fail: T176
+// §11.1.1: the workgroup product may be up to 1024 for compute and up to 128 for task
+// and mesh stages.
+
+pub struct Payload { n: u32 }
+
+@gpu_kernel(workgroup: 1024)
+fn flat(mut xs: []f32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] *= 2.0; }
+}
+
+@gpu_kernel(workgroup: (32, 32, 1))
+fn square(mut xs: []f32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] += 1.0; }
+}
+
+@gpu_kernel(workgroup: (4, 4, 64))
+fn cube(mut xs: []f32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] -= 1.0; }
+}
+
+@gpu_task(workgroup: 128)
+fn ts_wide(mut payload: Payload) -> vec3<u32> {
+    vec3(1, 1, 1)
+}

@@ -1,0 +1,8 @@
+//@ expected-fail: T099
+// §12.6: parameters and results of an `@export` function must be C-compatible.
+
+@export("pyro_text_len")
+pub fn text_len(s: str) -> usize { s.len() } //~ E1201
+
+@export("pyro_pair")
+pub fn pair(a: i32) -> (i32, i32) { (a, a) } //~ E1201

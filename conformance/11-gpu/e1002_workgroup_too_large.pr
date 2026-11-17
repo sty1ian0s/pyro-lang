@@ -1,0 +1,14 @@
+//@ expected-fail: T176
+// §11.1.1: a compute workgroup product above 1024 is an error.
+
+@gpu_kernel(workgroup: 2048) //~ E1002
+fn too_wide(mut xs: []f32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] *= 2.0; }
+}
+
+@gpu_kernel(workgroup: (32, 32, 2)) //~ E1002
+fn too_many(mut xs: []f32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] *= 2.0; }
+}

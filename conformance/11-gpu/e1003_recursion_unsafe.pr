@@ -1,0 +1,21 @@
+//@ expected-fail: T183
+// §11.1.3: no recursion and no `unsafe` in stage-reachable code. Recursion is reported
+// at the recursive call.
+
+fn sum_to(n: u32) -> u32 {
+    if n == 0 { 0 } else { n + sum_to(n - 1) } //~ E1003
+}
+
+@gpu_kernel(workgroup: 64)
+fn recursive(mut xs: []u32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] = sum_to(xs[i]); }
+}
+
+@gpu_kernel(workgroup: 64)
+fn uses_unsafe(mut xs: []u32) {
+    let i = @global_invocation_id.x as usize;
+    if i >= xs.len() { return; }
+    let v = unsafe { xs[i] }; //~ E1003
+    xs[i] = v + 1;
+}

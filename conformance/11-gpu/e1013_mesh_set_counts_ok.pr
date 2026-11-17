@@ -1,0 +1,16 @@
+//@ covers: E1013
+//@ expected-fail: T197
+// §11.1.5: `out.set_counts(...)` as a top-level statement of a mesh stage, before any
+// conditional output.
+
+use std.gpu;
+
+pub struct VsOut { @position clip: vec4<f32> }
+
+@gpu_mesh(workgroup: 64, max_vertices: 3, max_primitives: 1)
+fn ms_triangle(mut out: gpu.MeshOut<VsOut, void, 3, 1>) {
+    out.set_counts(3, 1);
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < 1 { out.triangle(t, vec3(0, 1, 2)); }
+}

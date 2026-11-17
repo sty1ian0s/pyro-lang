@@ -1,0 +1,17 @@
+//@ expected-fail: T202
+// §11.2: a kernel with a texture parameter is valid for a `gpu.ComputePipeline`, but
+// through `launch` only uniform and storage parameters are allowed. The error is at
+// the `launch`.
+
+use std.gpu;
+
+@gpu_kernel(workgroup: 64)
+fn copy_row(src: gpu.Texture2D<vec4<f32>>, mut dst: []vec4<f32>) {
+    let i = @global_invocation_id.x;
+    if i as usize >= dst.len() { return; }
+    dst[i as usize] = src.load(vec2(i, 0), 0);
+}
+
+fn run(src: gpu.Texture2D<vec4<f32>>, mut dst: []vec4<f32>) {
+    launch gpu copy_row(src, mut dst); //~ E1001
+}

@@ -1,0 +1,41 @@
+//@ expected-fail: T198
+// §11.5.2: a payload above 256 bytes, an attribute type above 32 bytes and
+// `max_recursion` outside 1..=31, each reported at the pipeline declaration.
+
+use std.gpu;
+
+pub struct Small { v: f32 }
+pub struct Big { data: [65]f32 }
+pub struct WideAttr { v: [9]f32 }
+
+@gpu_ray_gen
+fn rg_small(scene: gpu.Tlas, mut image: []f32) {
+    let mut p = Small { v: 0.0 };
+    gpu.trace_ray(scene, .{ origin: vec3(0.0, 0.0, 0.0), t_min: 0.0, direction: vec3(0.0, 0.0, 1.0), t_max: 100.0 }, mut p);
+    image[gpu.linear_id(@launch_id, @launch_size) as usize] = p.v;
+}
+
+@gpu_ray_gen
+fn rg_big(scene: gpu.Tlas, mut image: []f32) {
+    let mut p = Big { data: [0.0; 65] };
+    gpu.trace_ray(scene, .{ origin: vec3(0.0, 0.0, 0.0), t_min: 0.0, direction: vec3(0.0, 0.0, 1.0), t_max: 100.0 }, mut p);
+    image[gpu.linear_id(@launch_id, @launch_size) as usize] = p.data[0];
+}
+
+@gpu_miss
+fn miss_small(mut p: Small, ray: gpu.RayInfo) { p.v = 0.0; }
+
+@gpu_miss
+fn miss_big(mut p: Big, ray: gpu.RayInfo) { p.data[0] = 0.0; }
+
+@gpu_intersection
+fn isect_wide(ray: gpu.RayInfo, prim: gpu.PrimitiveInfo) -> Option<(f32, WideAttr)> {
+    .some((ray.t_min, WideAttr { v: [1.0; 9] }))
+}
+
+@gpu_closest_hit
+fn hit_wide(mut p: Small, h: gpu.Hit<WideAttr>) { p.v = h.attributes.v[0]; }
+
+const BigPayload = gpu.RayPipeline(.{ ray_gen: rg_big, miss: [miss_big], .. }); //~ E1011
+const WideAttributes = gpu.RayPipeline(.{ ray_gen: rg_small, miss: [miss_small], hit_groups: [.{ closest: hit_wide, intersection: isect_wide, .. }], .. }); //~ E1011
+const NoRecursion = gpu.RayPipeline(.{ ray_gen: rg_small, miss: [miss_small], max_recursion: 0, .. }); //~ E1011

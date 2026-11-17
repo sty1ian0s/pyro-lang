@@ -1,0 +1,29 @@
+//@ covers: E1202
+//@ expected-fail: T054
+// §12.1, §12.2, §8.7: raw-pointer operations, `extern` calls, `@unsafe` calls and
+// `@bit_cast` to a type with invalid bit patterns inside `unsafe`; pointer-to-integer
+// conversion, pointer comparison and `@bit_cast` to a type without invalid bit
+// patterns outside it.
+
+extern "C" {
+    pub fn abs(x: i32) -> i32;
+}
+
+/// Reads `*p`. The caller guarantees that `p` points to a live, initialized `u32`.
+@unsafe
+fn read_raw(p: *const u32) -> u32 {
+    unsafe { *p }
+}
+
+fn all_ok(x: u32, addr: usize) -> u32 {
+    let p = unsafe { &x };
+    let q = unsafe { @ptr_from_int(u32, addr) };
+    let r = unsafe { @ptr_add(q, 1) };
+    let same = (p as usize) == @int_from_ptr(p);
+    let below = q < r;
+    let v = unsafe { *p + read_raw(p) + q[0] + (abs(-3) as u32) };
+    let one: f32 = 1.0;
+    let bits = @bit_cast(u32, one);
+    let flag = unsafe { @bit_cast(bool, 1 as u8) };
+    if same && below && flag { v + bits } else { v }
+}

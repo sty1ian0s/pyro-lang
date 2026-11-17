@@ -1,0 +1,50 @@
+//@ covers: E1006
+//@ expected-fail: T181
+// §11.1.6, §11.2: compute writes indexed by the global invocation id (directly or
+// through a local equal to it), atomic fragment writes, and workgroup writes indexed by
+// the local invocation id or by a `fetch_add` slot. Task-payload writes are in
+// e1006_accepted_writes_task.pr (T197), ray-generation writes in
+// e1006_accepted_writes_ray_gen.pr (T198).
+
+@soa
+pub struct Particle { x: f32, y: f32, vx: f32, vy: f32 }
+
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+
+@gpu_kernel(workgroup: 64)
+fn integrate(mut ps: []Particle, dt: f32) {
+    let i = @global_invocation_id.x as usize;
+    if i >= ps.len() { return; }
+    ps[i].x += ps[i].vx * dt;
+    ps[i].y += ps[i].vy * dt;
+}
+
+@gpu_kernel(workgroup: 64)
+fn reverse_tile(mut xs: []f32) {
+    @workgroup let mut tile: [64]f32 = [0.0; 64];
+    let i = @global_invocation_id.x as usize;
+    let l = @local_invocation_id.x as usize;
+    tile[l] = if i < xs.len() { xs[i] } else { 0.0 };
+    @workgroup_barrier();
+    if i < xs.len() { xs[i] = tile[63 - l]; }
+}
+
+@gpu_kernel(workgroup: 64)
+fn compact(xs: []u32, mut out: []u32, total: []Atomic<u32>) {
+    @workgroup let mut kept: [64]u32 = [0; 64];
+    @workgroup let mut n: Atomic<u32> = .init(0);
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() && xs[i] != 0 {
+        let slot = n.fetch_add(1);
+        kept[slot as usize] = xs[i];
+    }
+    @workgroup_barrier();
+    if @local_invocation_id.x == 0 { total[0].fetch_add(n.load()); }
+    if i < out.len() { out[i] = kept[@local_invocation_id.x as usize]; }
+}
+
+@gpu_fragment
+fn fs_count(i: VsOut, hits: []Atomic<u32>) -> vec4<f32> {
+    hits[0].fetch_add(1);
+    vec4(i.uv.x, i.uv.y, 0.0, 1.0)
+}

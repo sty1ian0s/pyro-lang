@@ -1,0 +1,32 @@
+//@ covers: E1001
+//@ expected-fail: T176
+// §11.1.2, §11.2: a kernel returns `void` and takes uniform parameters (scalars,
+// vectors, plain structs) and storage parameters (`[]T`, `soa []T`, `[]Atomic<u32>`).
+// Texture and sampler parameters are in e1001_kernel_texture_params.pr (T203).
+
+pub struct Params { scale: f32, offset: vec2<f32>, count: u32 }
+
+@soa
+pub struct Body { x: f32, y: f32, vx: f32, vy: f32 }
+
+@gpu_kernel(workgroup: 64)
+fn uniforms_and_storage(mut out: []f32, xs: []f32, p: Params, k: f32, dir: vec3<f32>) {
+    let i = @global_invocation_id.x as usize;
+    if i >= out.len() || i >= xs.len() { return; }
+    out[i] = xs[i] * p.scale * k + dir.x + p.offset.y;
+}
+
+@gpu_kernel(workgroup: 64)
+fn soa_storage(mut bodies: soa []Body, dt: f32) {
+    let i = @global_invocation_id.x as usize;
+    if i >= bodies.len() { return; }
+    bodies[i].x += bodies[i].vx * dt;
+    bodies[i].y += bodies[i].vy * dt;
+}
+
+@gpu_kernel(workgroup: 64)
+fn histogram(bins: []Atomic<u32>, xs: []u32) {
+    let i = @global_invocation_id.x as usize;
+    if i >= xs.len() { return; }
+    bins[(xs[i] as usize) % bins.len()].fetch_add(1);
+}

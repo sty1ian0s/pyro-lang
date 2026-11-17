@@ -1,0 +1,10 @@
+//@ covers: E1005
+//@ expected-fail: T198
+// §11.1.7: `@launch_id` and `@launch_size` are available in a ray-generation stage.
+
+use std.gpu;
+
+@gpu_ray_gen
+fn rg_ids(mut image: []u32) {
+    image[gpu.linear_id(@launch_id, @launch_size) as usize] = @launch_id.x;
+}
