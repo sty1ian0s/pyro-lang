@@ -1,6 +1,8 @@
 name: CI
 
-# Tags only, to save Actions minutes. Check locally in Docker: tools/ci/docker.sh
+# Tags only, to save Actions minutes. Check locally in Docker: tools/ci/docker.sh,
+# or the real workflow with act:
+#   act push -e <(echo '{"ref":"refs/tags/v0"}') -P ubuntu-latest=catthehacker/ubuntu:act-latest
 on:
   push:
     tags: ['*']
