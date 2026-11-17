@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    # Front end only: no LLVM is installed here, and none may be required.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+      - run: zig build
+      - name: pyro with no arguments prints usage and exits 2
+        run: |
+          set +e
+          out=$(./zig-out/bin/pyro 2>&1); rc=$?
+          set -e
+          printf '%s\n' "$out"
+          test $rc -eq 2
+          grep -q '^usage: pyro' <<<"$out"
+      - run: zig build test --summary all
+      - run: zig build conformance

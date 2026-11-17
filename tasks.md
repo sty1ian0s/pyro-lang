@@ -140,7 +140,7 @@ graph TD
 
 ## M0. Scaffolding and shared infrastructure
 
-- [ ] **T001** Repo bootstrap: Zig stage-0 skeleton, build steps, CI **[CRITICAL]** **[GATE]**
+- [x] **T001** Repo bootstrap: Zig stage-0 skeleton, build steps, CI **[CRITICAL]** **[GATE]**
   - Spec: B.6.1, B.1, B.9
   - Deliverable: `build.zig`, `build.zig.zon` (pinned Zig version); dirs `stage0/src/{base,source,diag,lex,parse,ast,sema,tir,comptime,lower,pir,opt,backend,driver,cli,gpu}`, `runtime/`, `std/`, `conformance/`, `examples/`, `tools/`; steps `zig build`, `zig build test`, `zig build conformance`; `-Dllvm=true` flag (LLVM linkage only behind it); `.github/workflows/ci.yml`; `CONTRIBUTING.md` with per-directory ownership rules.
   - Acceptance: `zig build` yields `pyro` that prints usage and exits 2; `zig build test` green in CI; front-end build needs no LLVM.
@@ -161,7 +161,7 @@ graph TD
   - Size: M · Parallel: W01
   - Blocked by: T001
   - Blocks: T011, T012, T013, T017, T019, T027, T029
-  - Conflicts: Owns the core files in `stage0/src/diag/` and the generated code enum; T017 (renderers) and T027 (levels) add their own files there and never edit core files.
+  - Conflicts: Owns the core files in `stage0/src/diag/` and the generated code enum; T017 (renderers) and T027 (levels) add their own files there and never edit core files. `build.zig`: edits only `addCommonImports` (one `diag_codes` import line).
 - [ ] **T004** Conformance harness (B.9) and e2e example runner **[GATE]**
   - Spec: B.9, A.2, §1.2, §13.3, Appendix D
   - Deliverable: `tools/conformance/` (Zig, `zig build conformance`): walks `conformance/<NN-chapter>/*.pr`; parses line-anchored `//~ E0332`/`//~ W0201`; runs `pyro check --message-format json` and matches code+line sets exactly; `<case>.out` run-pass cases run in dev/test/prod (identical output unless marked `debug_assertions`); per-directory `stop-after` (lex/parse/check/run); expected-fail tag; path filter; A.3 coverage report (codes lacking a pass and a fail case); also drives `examples/<name>/` packages via `pyro run`/`pyro test` against `expected.out`.
@@ -169,6 +169,7 @@ graph TD
   - Size: M · Parallel: W01
   - Blocked by: T001
   - Blocks: T015, T016, T095, T104, T120, T134, T157, T175, T209, T216
+  - Conflicts: `build.zig`: edits only the `zig build conformance` block (harness arguments).
 - [ ] **T005** Token kinds and keyword perfect hash
   - Spec: §2.2, §2.4.1-§2.4.3, §2.7, B.2
   - Deliverable: `stage0/src/lex/token.zig`: `TokenKind` u8 enum (all keywords, literal classes, BUILTIN, punctuators incl. `.{`, DOC_COMMENT, EOF, Invalid); SoA `TokenBuffer{kind,start,len}`; build-time perfect hash; future-reserved set; literal sub-scanner signatures (contract for literal lexer).
@@ -213,6 +214,7 @@ graph TD
   - Size: S · Parallel: W01
   - Blocked by: T001
   - Blocks: T086, T088, T119, T136, T174
+  - Conflicts: `build.zig`: edits only the `runtime` branch of `addTreeOptions` (C harness wiring).
 
 ## M1. Front end: source, lexer, parser, diagnostics, CLI shell
 
