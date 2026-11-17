@@ -18,9 +18,12 @@ a `pyro.toml`. Conventions these cases rely on:
   is needed. Fixtures with dependencies carry no `pyro.lock`, except the E0911
   ones. If `pyro check` writes a lock file, T159 commits the generated files.
 - E0911 assumes the lock records a SHA-256 for path dependencies too, with keys
-  `name`, `version`, `source`, `sha256` in `[[package]]`. T159 owns the lock
-  format and adjusts these two fixtures to it; `e0911_ok_no_dependencies/`
-  should then gain a dependency with a real hash.
+  `name`, `version`, `source`, `sha256` in `[[package]]`. §13.4 only requires
+  hashes of source archives and git trees, so both E0911 cases are
+  placeholders. T159 must replace both: the fail case with a tampered cached
+  registry or git source (its "tampered cache E0911" acceptance), and
+  `e0911_ok_no_dependencies/` with a pass case that has a dependency whose
+  lock hash is real.
 - E0907 assumes `pyro check` runs build scripts (their generated modules are
   needed for name resolution).
 

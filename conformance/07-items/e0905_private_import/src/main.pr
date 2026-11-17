@@ -2,6 +2,4 @@
 // `area` is private to module `shapes`, so it cannot be imported (§7.8.2).
 use shapes.{area}; //~ E0905
 
-pub fn main() {
-    _ = area(2.0);
-}
+pub fn main() {}

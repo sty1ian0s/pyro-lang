@@ -3,5 +3,5 @@
 // line 7 of both manifests.
 use b;
 
-pub fn main() {}
+pub fn ping() {}
 // pyro.toml line 7: b = { path = "../b" } //~ E0906
