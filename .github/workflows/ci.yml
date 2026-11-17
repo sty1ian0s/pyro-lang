@@ -1,9 +1,9 @@
 name: CI
 
+# Tags only, to save Actions minutes. Check locally in Docker: tools/ci/docker.sh
 on:
   push:
-    branches: [main]
-  pull_request:
+    tags: ['*']
 
 jobs:
   build:
