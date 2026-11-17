@@ -154,6 +154,8 @@ fn addTreeOptions(b: *std.Build, tree: []const u8, m: *std.Build.Module) void {
         m.link_libc = true; // runtime tests call libc (getpid, abort paths)
         // T010: C harness that calls pyro_rt_trap through the C ABI.
         m.addCSourceFile(.{ .file = b.path("runtime/trap_harness.c") });
+        // T010: lets runtime/trap.zig @embedFile the prelude TrapKind to check the mirror.
+        m.addAnonymousImport("trap.pr", .{ .root_source_file = b.path("std/core/trap.pr") });
     }
 }
 

@@ -42,18 +42,24 @@ pub const exit_status = 134;
 var trapping: std.atomic.Value(bool) = .init(false);
 
 /// C-ABI trap entry called by compiled code. `msg` and `file` are Pyro `str`
-/// values passed as pointer and length (not NUL-terminated). An out-of-range
-/// `kind` prints as `unknown` instead of being trusted.
+/// values passed as pointer and length (not NUL-terminated); a pointer may be
+/// null when its length is 0 (an empty `str`). An out-of-range `kind` prints
+/// as `unknown` instead of being trusted.
 pub export fn pyro_rt_trap(
     kind: u32,
-    msg_ptr: [*]const u8,
+    msg_ptr: ?[*]const u8,
     msg_len: usize,
-    file_ptr: [*]const u8,
+    file_ptr: ?[*]const u8,
     file_len: usize,
     line: u32,
 ) callconv(.c) noreturn {
     const name = if (std.enums.fromInt(TrapKind, kind)) |k| @tagName(k) else "unknown";
-    trapNamed(name, msg_ptr[0..msg_len], file_ptr[0..file_len], line);
+    trapNamed(name, strArg(msg_ptr, msg_len), strArg(file_ptr, file_len), line);
+}
+
+/// A C-ABI `str` argument as a slice; a null pointer is the empty string.
+fn strArg(ptr: ?[*]const u8, len: usize) []const u8 {
+    return if (ptr) |p| p[0..len] else "";
 }
 
 /// Zig-side trap entry for runtime code (allocator, scheduler, GPU readback).
@@ -125,11 +131,19 @@ test "pyro_rt_trap called from C prints the trap diagnostic and exits 134" {
 }
 
 test "every TrapKind has the discriminant of std/core/trap.pr" {
-    const names = [_][]const u8{
-        "bounds",   "overflow", "div_zero",      "shift",         "assert",
-        "todo_err", "contract", "unreachable",   "explicit",      "stack_overflow",
-        "capacity", "deadlock", "out_of_memory", "ray_recursion", "gpu_limit",
-    };
-    try std.testing.expectEqual(names.len, @typeInfo(TrapKind).@"enum".field_names.len);
-    for (names, 0..) |name, i| try std.testing.expectEqualStrings(name, @tagName(@as(TrapKind, @fromBackingInt(@intCast(i)))));
+    const src = @embedFile("trap.pr"); // std/core/trap.pr, wired by build.zig
+
+    var count: usize = 0;
+    var lines = std.mem.tokenizeScalar(u8, src, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        // Variant lines have the shape `name = N,`.
+        const name, const rest = std.mem.cut(u8, line, " = ") orelse continue;
+        const num = std.mem.trimEnd(u8, rest, ",");
+        const value = std.fmt.parseInt(u8, num, 10) catch continue;
+        const kind = std.meta.stringToEnum(TrapKind, name) orelse return error.UnknownTrapKind;
+        try std.testing.expectEqual(value, @backingInt(kind));
+        count += 1;
+    }
+    try std.testing.expectEqual(@typeInfo(TrapKind).@"enum".field_names.len, count);
 }
