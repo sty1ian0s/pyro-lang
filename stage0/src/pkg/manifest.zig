@@ -32,12 +32,14 @@ pub const Manifest = struct {
     metadata: ?*const toml.Table,
     workspace: ?Workspace,
 
+    /// Frees the document and every slice that points into it.
     pub fn deinit(m: *Manifest) void {
         m.doc.deinit();
         m.* = undefined;
     }
 };
 
+/// `[package]` (§13.2).
 pub const Package = struct {
     /// Matches `[a-z][a-z0-9_]*`, at most 64 bytes.
     name: []const u8,
@@ -83,6 +85,7 @@ pub const GitRef = union(enum) {
     branch: []const u8,
 };
 
+/// `[build]` (§13.2).
 pub const Build = struct {
     /// Empty means the host.
     targets: []const target.Target = &.{},
@@ -92,8 +95,10 @@ pub const Build = struct {
     trusted_build_scripts: []const []const u8 = &.{},
 };
 
+/// Code generation backends `build.backend` accepts.
 pub const Backend = enum { llvm, native };
 
+/// `[gpu]` (§13.2).
 pub const Gpu = struct {
     /// Shader forms to embed; null means the toolchain default.
     backends: ?[]const GpuBackend = null,
@@ -101,15 +106,19 @@ pub const Gpu = struct {
     fallback: bool = true,
 };
 
+/// Shader forms `gpu.backends` accepts.
 pub const GpuBackend = enum { vulkan, metal, webgpu };
 
+/// `[link]` (§13.2).
 pub const Link = struct {
     /// Null means the toolchain default.
     mode: ?LinkMode = null,
 };
 
+/// Linking modes `link.mode` accepts.
 pub const LinkMode = enum { static, dynamic };
 
+/// One `[env.<name>]` table, unvalidated (§13.3).
 pub const Env = struct {
     name: []const u8,
     table: *const toml.Table,
@@ -117,11 +126,13 @@ pub const Env = struct {
     span: toml.Span,
 };
 
+/// `[workspace]` (§13.2).
 pub const Workspace = struct {
     /// Member package directories, relative to the manifest's directory.
     members: []const []const u8,
 };
 
+/// Errors `load` returns.
 pub const LoadError = error{ InvalidManifest, OutOfMemory };
 
 /// Parses and validates `source`, the text of the `pyro.toml` registered as `file`.
@@ -393,6 +404,10 @@ const Loader = struct {
             return .{ .path = try l.string(pv, where) orelse return null };
         }
         try l.checkKeys(t, &.{ "version", "registry" }, where);
+        if (t.get("version") == null) {
+            try l.report(v.span, "`{s}` needs one of `version`, `git` or `path`", .{where});
+            return null;
+        }
         const rv = try l.required(t, v, "version", where) orelse return null;
         const req = try l.requirement(rv, where) orelse return null;
         const registry = if (t.get("registry")) |r| try l.string(r, where) orelse return null else null;
@@ -604,4 +619,9 @@ test "messages name the problem" {
     const ds = sink.finish();
     try testing.expectEqualStrings("`package.version` \"x\" is not a Semantic Versioning 2.0 version (`MAJOR.MINOR.PATCH`)", ds[0].message);
     try testing.expectEqualStrings("`link.mode` is \"shared\"; expected one of \"static\", \"dynamic\"", ds[1].message);
+
+    var sink2: diag.Sink = .init(testing.allocator, testing.io);
+    defer sink2.deinit();
+    try testing.expectError(error.InvalidManifest, load(testing.allocator, pkg_head ++ "[dependencies]\nx = {}\n", test_file, &sink2));
+    try testing.expectEqualStrings("`dependencies.x` needs one of `version`, `git` or `path`", sink2.finish()[0].message);
 }
