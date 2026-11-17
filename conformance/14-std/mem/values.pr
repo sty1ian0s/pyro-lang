@@ -1,4 +1,4 @@
-//@ expected-fail: T107
+//@ expected-fail: T112
 // §14.3: `mem.swap`, `mem.replace`, `mem.copy`, `mem.fill`, `mem.eql`.
 
 use std.mem;

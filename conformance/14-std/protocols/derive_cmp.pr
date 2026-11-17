@@ -1,4 +1,4 @@
-//@ expected-fail: T106
+//@ expected-fail: T112
 // §14.2: `Ord` implemented with `std.derive.cmp` compares fields lexicographically
 // in declaration order.
 

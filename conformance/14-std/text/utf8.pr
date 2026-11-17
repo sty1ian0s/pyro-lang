@@ -1,4 +1,4 @@
-//@ expected-fail: T108
+//@ expected-fail: T112
 // §14.6: `text.next_char` decodes scalar values; `text.validate` checks UTF-8.
 
 use std.text;

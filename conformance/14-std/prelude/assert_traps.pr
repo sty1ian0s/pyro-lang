@@ -1,4 +1,5 @@
-//@ expected-fail: T105
+//@ expected-fail: T112
+//@ debug_assertions
 // §14.1, §9.3: `assert` is checked in every environment and traps when false.
 
 pub fn main() {

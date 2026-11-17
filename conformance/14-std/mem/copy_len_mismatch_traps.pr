@@ -1,4 +1,5 @@
-//@ expected-fail: T107
+//@ expected-fail: T112
+//@ debug_assertions
 // §14.3: `mem.copy` traps when the lengths differ.
 
 pub fn main() {

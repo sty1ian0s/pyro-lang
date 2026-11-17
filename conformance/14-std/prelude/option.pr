@@ -1,4 +1,4 @@
-//@ expected-fail: T105
+//@ expected-fail: T112
 // §14.1.2: `Option<T>` methods.
 
 fn double(x: i32) -> i32 { x * 2 }

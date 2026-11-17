@@ -1,4 +1,4 @@
-//@ expected-fail: T105
+//@ expected-fail: T112
 // §14.1.2: `Result<T, E>` methods.
 
 pub enum Fault { bad, worse }

@@ -1,4 +1,4 @@
-//@ expected-fail: T105
+//@ expected-fail: T112
 // §14.1: the `vec2`, `vec3`, `vec4` prelude constructors.
 
 pub fn main() {

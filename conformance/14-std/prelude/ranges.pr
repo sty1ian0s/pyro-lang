@@ -1,4 +1,4 @@
-//@ expected-fail: T105
+//@ expected-fail: T112
 // §14.1.3: `Range`, `RangeInclusive`, `step`, `rev`.
 
 pub fn main() {

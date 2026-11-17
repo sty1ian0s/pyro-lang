@@ -1,4 +1,4 @@
-//@ expected-fail: T066
+//@ expected-fail: T112
 // §14.9: `hash.fnv1a64` is `@hash` at runtime; `std` is reachable without `use`.
 
 pub fn main() {

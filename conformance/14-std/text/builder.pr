@@ -1,4 +1,4 @@
-//@ expected-fail: T108
+//@ expected-fail: T112
 // §14.6: `text.Builder` is a growable string resource.
 
 use std.text;
