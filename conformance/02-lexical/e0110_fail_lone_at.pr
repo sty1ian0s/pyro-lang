@@ -1,0 +1,6 @@
+//@ expected-fail: T012 (lexer core); runs once T024 wires `pyro check`
+@ inline //~ E0110
+fn f() -> usize { @ size_of(u32) } //~ E0110
+const A: u32 = 1 @ 2; //~ E0110
+const B: u32 = @1; //~ E0110
+const C: u32 = 1; @ //~ E0110

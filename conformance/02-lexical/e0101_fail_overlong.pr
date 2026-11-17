@@ -1,0 +1,3 @@
+//@ expected-fail: T011 (source loading); runs once T024 wires `pyro check`
+// an overlong encoding of '/': À¯ //~ E0101
+const A: u32 = 1;

@@ -1,0 +1,6 @@
+//@ expected-fail: T012 (lexer core); runs once T024 wires `pyro check`
+const r#type: u32 = 1;
+const r#match: u32 = r#type;
+const r: u32 = 2;
+const rx: u32 = r;
+const s: str = r"raw";

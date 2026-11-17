@@ -1,0 +1,12 @@
+//@ covers: E0108
+//@ expected-fail: T013 (literal lexer); runs once T024 wires `pyro check`
+const A: u8 = 255u8;
+const B: u3 = 5u3;
+const C: u1 = 1u1;
+const D: u64 = 18446744073709551615u64;
+const E: u64 = 0xFFFF_FFFF_FFFF_FFFFu64;
+const F: usize = 5usize;
+const G: isize = 5isize;
+const H: i64 = 9223372036854775807i64;
+const I: f32 = 1.5f32;
+const J: f64 = 2e3f64;

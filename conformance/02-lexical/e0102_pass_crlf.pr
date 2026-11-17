@@ -1,0 +1,5 @@
+//@ covers: E0102
+//@ expected-fail: T011 (source loading); runs once T024 wires `pyro check`
+// Every line of this file ends with CR LF.
+const A: u32 = 1;
+const B: str = "crlf";

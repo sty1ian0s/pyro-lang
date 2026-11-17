@@ -1,0 +1,6 @@
+//@ stop-after: parse
+//@ expected-fail: T023 (expression parser); runs once T024 wires `pyro check`
+const A: i8 = 128i8; //~ E0108
+const B: u8 = 256u8; //~ E0108
+const C: u1 = 2u1; //~ E0108
+const D: i64 = 9223372036854775808i64; //~ E0108

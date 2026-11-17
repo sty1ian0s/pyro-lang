@@ -1,0 +1,3 @@
+//@ expected-fail: T011 (source loading); runs once T024 wires `pyro check`
+// a lone CR inside a comment //~ E0102
+const A: u32 = 1;

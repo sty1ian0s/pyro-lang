@@ -1,0 +1,30 @@
+//@ covers: W0101
+//@ stop-after: parse
+//@ expected-fail: T020 (item parser); runs once T024 wires `pyro check`
+//! Module documentation at the start of the file.
+
+/// Documents the struct.
+struct Point {
+    /// Documents a field.
+    x: i32,
+    y: i32,
+}
+
+/// Documents the enum.
+enum Color {
+    /// Documents a variant.
+    Red,
+    Green,
+}
+
+/// Documents the protocol.
+protocol Shape {
+    /// Documents a required method.
+    fn area(
+        /// Documents a parameter.
+        w: u32,
+        h: u32,
+    ) -> u32;
+}
+
+//// Four slashes make an ordinary comment, so this documents nothing and is fine.

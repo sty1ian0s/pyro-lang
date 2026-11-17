@@ -1,0 +1,2 @@
+# Cases hold exact bytes (BOM, CR, NUL, invalid UTF-8): never convert them.
+* -text
