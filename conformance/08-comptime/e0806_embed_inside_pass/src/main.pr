@@ -1,5 +1,6 @@
 //@ expected-fail: T073
 //@ covers: E0806
+// single-file check uses the nearest pyro.toml above the file as the package root (T073).
 // §8.6: a file inside the package root embeds as `[N]u8`; `assets/greeting.txt`
 // holds the six bytes "hello\n".
 

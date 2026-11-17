@@ -9,10 +9,10 @@ fn sort_key<T>(xs: soa []T, comptime f: FieldId<T>, i: usize) -> @field_type(T, 
 }
 
 const HEALTH: FieldId<Monster> = .health;
+const OPT: Option<FieldId<Monster>> = .threat;
 
 fn demo(ms: soa []Monster, mut m: Monster) -> u32 {
     @field(m, HEALTH) = 10.0;
     let t = sort_key(ms, .threat, 0);
-    let opt: Option<FieldId<Monster>> = .threat;
     t
 }

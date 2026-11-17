@@ -4,7 +4,8 @@
 
 fn any_closer(a: vec4<f32>, b: vec4<f32>) -> bool {
     let m: mask<4> = a < b;
-    let both = m & (a > @splat(4, 0.0));
+    let zero: vec4<f32> = @splat(4, 0.0);
+    let both = m & (a > zero);
     @any(both)
 }
 

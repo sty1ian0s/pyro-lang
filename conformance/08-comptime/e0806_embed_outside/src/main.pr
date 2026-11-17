@@ -1,4 +1,5 @@
 //@ expected-fail: T073
+// single-file check uses the nearest pyro.toml above the file as the package root (T073).
 // §8.6: `@embed_file` may not reach outside the package root.
 
 const SECRET = @embed_file("../outside.txt"); //~ E0806
