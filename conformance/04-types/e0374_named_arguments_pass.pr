@@ -1,0 +1,12 @@
+//@ expected-fail: T047
+//@ covers: E0374
+// §7.2.4: positional, named, positional-then-named, and named in any order.
+
+fn spawn_actor(position: vec2<f32>, scale: f32 = 1.0, layer: u8 = 0) {}
+
+fn place(p: vec2<f32>) {
+    spawn_actor(p);
+    spawn_actor(position: p, scale: 2.0);
+    spawn_actor(p, layer: 3);
+    spawn_actor(layer: 2, position: p);
+}

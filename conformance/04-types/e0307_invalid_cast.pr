@@ -1,0 +1,14 @@
+//@ expected-fail: T033
+// §4.9.2: integer to `bool` is not a cast, payload enums have no discriminant
+// cast, a payload-free enum casts only to its backing type or wider, and
+// `str` is not a cast target.
+
+enum Shape { circle(f32), empty }
+enum Wide: u16 { small = 1, large = 300 }
+
+fn casts(n: i32, x: f32, s: Shape, w: Wide) {
+    let flag = n as bool; //~ E0307
+    let text = x as str; //~ E0307
+    let tag = s as u8; //~ E0307
+    let narrow = w as u8; //~ E0307
+}

@@ -1,0 +1,36 @@
+//@ expected-fail: T067
+// §8.8: an `@pure` function has no `mut` parameters, no `Atomic`/`Channel`
+// access, no I/O, no `extern` calls and no impure calls.
+
+extern "C" { fn rand() -> i32; }
+
+@pure
+fn bump(mut x: u32) { //~ E0809
+    x += 1;
+}
+
+@pure
+fn log_sum(a: u32, b: u32) -> u32 {
+    print("{}\n", a + b); //~ E0809
+    a + b
+}
+
+@pure
+fn hits(c: Atomic<u32>) -> u32 {
+    c.load() //~ E0809
+}
+
+@pure
+fn roll() -> i32 {
+    unsafe { rand() } //~ E0809
+}
+
+fn noisy(a: u32) -> u32 {
+    eprint("{}\n", a);
+    a
+}
+
+@pure
+fn quiet(a: u32) -> u32 {
+    noisy(a) //~ E0809
+}

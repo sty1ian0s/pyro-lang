@@ -1,0 +1,15 @@
+//@ expected-fail: T083
+// §5.4.3: a `mut` argument must not overlap any other argument of the same
+// call, including the receiver.
+
+fn add_into(mut dst: []u32, src: []u32) { dst[0] += src[0]; }
+
+struct Point { pub mut x: f32, pub mut y: f32 }
+
+fn shift(mut p: Point, by: Point) { p.x += by.x; }
+
+fn same_place(mut a: [4]u32, mut p: Point, mut xs: List<u32>) {
+    add_into(mut a, a); //~ E0333
+    shift(mut p, p); //~ E0333
+    xs.extend(xs[..]); //~ E0333
+}

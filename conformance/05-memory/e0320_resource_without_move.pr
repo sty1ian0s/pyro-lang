@@ -1,0 +1,25 @@
+//@ expected-fail: T080
+// §5.3.2: using a resource place as a value needs `move`; a field is taken out
+// with `std.mem.replace`, not by copying it.
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+struct Holder { file: File }
+
+fn keep(move f: File) { f.close(); }
+
+fn pass_without_move() {
+    let a = File.open(3);
+    keep(a); //~ E0320
+    a.close();
+}
+
+fn take(h: Holder) -> File {
+    return h.file; //~ E0320
+}

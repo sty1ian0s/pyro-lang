@@ -1,0 +1,27 @@
+//@ expected-fail: T044
+//@ covers: E0378
+// §7.5.1: every required method with the exact signature; a default method may
+// be inherited or overridden.
+
+struct Canvas { pub mut count: u32 }
+
+pub protocol Renderable {
+    fn bounds(self) -> u32;
+    fn draw(self, mut canvas: Canvas);
+    fn is_visible(self) -> bool { true }
+}
+
+struct Sprite { w: u32 }
+
+impl Renderable for Sprite {
+    fn bounds(self) -> u32 { self.w }
+    fn draw(self, mut canvas: Canvas) { canvas.count += 1; }
+}
+
+struct Ghost { w: u32 }
+
+impl Renderable for Ghost {
+    fn bounds(self) -> u32 { self.w }
+    fn draw(self, mut canvas: Canvas) {}
+    fn is_visible(self) -> bool { false }
+}

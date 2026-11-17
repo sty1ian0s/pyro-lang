@@ -1,0 +1,18 @@
+//@ expected-fail: T073
+//@ covers: E0806
+// single-file check uses the nearest pyro.toml above the file as the package root (T073).
+// §8.6: a file inside the package root embeds as `[N]u8`; `assets/greeting.txt`
+// holds the six bytes "hello\n".
+
+const GREETING = @embed_file("assets/greeting.txt");
+const SAME = @embed_file("src/../assets/greeting.txt");
+
+comptime {
+    if GREETING.len() != 6 || GREETING[0] != 104 {
+        @compile_error("unexpected greeting bytes");
+    }
+}
+
+pub fn main() {
+    print("{}\n", GREETING.len() + SAME.len());
+}

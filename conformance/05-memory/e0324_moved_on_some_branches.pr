@@ -1,0 +1,21 @@
+//@ expected-fail: T080
+// §5.3.3: a resource consumed on one branch must be consumed on every branch;
+// the error points at the branching construct. (`List` is declared in `std`, so
+// the owner's release rule does not apply.)
+
+fn keep(move l: List<u32>) { l.deinit(); }
+
+fn maybe(flag: bool) {
+    let l: List<u32> = .init();
+    if flag { //~ E0324
+        keep(move l);
+    }
+}
+
+fn by_mode(mode: u8) {
+    let l: List<u32> = .init();
+    match mode { //~ E0324
+        0 => l.deinit(),
+        _ => {},
+    }
+}

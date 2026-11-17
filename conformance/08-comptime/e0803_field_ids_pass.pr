@@ -1,0 +1,18 @@
+//@ expected-fail: T072
+//@ covers: E0803
+// §8.4.2: valid field identifiers, `@field` as a place, and on a SoA slice.
+
+struct Monster { pub mut health: f32, pub mut threat: u32 }
+
+fn sort_key<T>(xs: soa []T, comptime f: FieldId<T>, i: usize) -> @field_type(T, f) {
+    @field(xs, f)[i]
+}
+
+const HEALTH: FieldId<Monster> = .health;
+const OPT: Option<FieldId<Monster>> = .threat;
+
+fn demo(ms: soa []Monster, mut m: Monster) -> u32 {
+    @field(m, HEALTH) = 10.0;
+    let t = sort_key(ms, .threat, 0);
+    t
+}

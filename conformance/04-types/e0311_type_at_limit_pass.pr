@@ -1,0 +1,7 @@
+//@ expected-fail: T041
+//@ covers: E0311
+// §4.12: a type of exactly 2^48 - 1 bytes is within the limit.
+
+type Largest = [281474976710655]u8;
+
+struct Halves { a: [140737488355327]u8, b: [140737488355328]u8 }

@@ -1,0 +1,13 @@
+//@ expected-fail: T052
+//@ covers: W0302
+// §6.6.3: guarded arms may fail, so later arms for the same value stay reachable.
+
+enum Light { red, yellow, green }
+
+fn code(l: Light, urgent: bool) -> u32 {
+    match l {
+        .red if urgent => 0,
+        .red => 1,
+        _ => 2,
+    }
+}

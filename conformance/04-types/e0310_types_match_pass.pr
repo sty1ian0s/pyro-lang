@@ -1,0 +1,21 @@
+//@ expected-fail: T043
+//@ covers: E0310
+// §4.7, §4.9.1, §6.4.1: explicit conversions, implicit widening and scalar
+// broadcast type-check.
+
+type Meters = distinct f32;
+type Seconds = distinct f32;
+
+fn speed(d: Meters, t: Seconds) -> f32 {
+    (d as f32) / (t as f32)
+}
+
+fn widen(small: u8, x: f32) -> f64 {
+    let w: u16 = small + 1;
+    let y: f64 = x;
+    y * 2.0
+}
+
+fn scale(v: vec4<f32>, count: u32) -> vec4<f32> {
+    if count != 0 { v * 2.0 } else { v }
+}

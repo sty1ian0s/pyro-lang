@@ -1,0 +1,8 @@
+//@ expected-fail: T077
+// §6.2.5: a comprehension needs a `[N]T` or `Bounded<T, N>` destination, and
+// `where` is not allowed for `[N]T`.
+
+fn doubled(src: [4]u32) {
+    let xs = [x * 2 for x in src]; //~ E0354
+    let d: [4]u32 = [x for x in src where x > 1]; //~ E0354
+}

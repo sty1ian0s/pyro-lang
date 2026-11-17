@@ -1,0 +1,11 @@
+//@ expected-fail: T077
+//@ covers: E0354
+// §6.2.5: `[N]T` and `Bounded<T, N>` destinations, and a `[N]T` argument.
+
+fn sum4(xs: [4]f32) -> f32 { xs[0] + xs[1] + xs[2] + xs[3] }
+
+fn demo(quad: [4]f32, speeds: []f32) -> f32 {
+    let doubled: [4]f32 = [x * 2.0 for x in quad];
+    let mut fast: Bounded<f32, 256> = [v for v in speeds where v > 10.0];
+    sum4([x + 1.0 for x in quad]) + doubled[0]
+}

@@ -1,0 +1,20 @@
+//@ expected-fail: T033
+//@ covers: E0306
+// §4.8: untyped constants have arbitrary precision until they meet a type;
+// boundary values fit; untyped floats round to nearest even into `f32`.
+
+const MAX: u8 = 255;
+const HUGE = 1 << 100;
+const BACK: u8 = HUGE >> 95;
+const PI = 3.14159265358979;
+
+type Meters = distinct f32;
+
+fn values() -> f32 {
+    let low: i8 = -128;
+    let big = 1 << 62;
+    let tenth: f32 = 0.1;
+    let d: Meters = 100.0;
+    let r: f32 = PI;
+    tenth + r + (d as f32)
+}

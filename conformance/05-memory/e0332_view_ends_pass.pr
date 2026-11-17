@@ -1,0 +1,33 @@
+//@ expected-fail: T082
+//@ covers: E0332
+// §5.4.2, §5.4.4, §5.6: deferred resets run at exit, `@append_only`
+// allocations may be live together, and split halves are disjoint.
+
+struct Entity { x: f32, y: f32 }
+
+fn frame(mut scratch: Arena, entities: soa []Entity) {
+    defer scratch.reset();
+    let mut grid = scratch.alloc_slice(i32, 4096);
+    grid.fill(-1);
+    grid[0] = entities.len() as i32;
+}
+
+fn two_allocs(mut arena: Arena) {
+    let mut a = arena.alloc_slice(u32, 4);
+    let mut b = arena.alloc_slice(u32, 4);
+    a[0] = 1;
+    b[0] = a[0];
+    arena.reset();
+}
+
+fn halves(mut xs: []u32) {
+    let (lo, hi) = xs.split_at_mut(2);
+    lo[0] = hi[0];
+}
+
+fn last_use_first(mut a: [4]u32) -> u32 {
+    let s: []u32 = a[..];
+    let first = s[0];
+    a[0] = 9;
+    first
+}

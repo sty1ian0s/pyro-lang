@@ -1,0 +1,22 @@
+//@ expected-fail: T044
+//@ covers: E0373
+// §7.5.2: bounds with one and with two protocols, satisfied by explicit impls.
+
+pub protocol Shape { fn area(self) -> f32; }
+pub protocol Named { fn id(self) -> u32; }
+
+struct Square { side: f32 }
+impl Shape for Square { fn area(self) -> f32 { self.side * self.side } }
+impl Named for Square { fn id(self) -> u32 { 4 } }
+
+fn total<T: Shape>(xs: []T) -> f32 {
+    let mut sum: f32 = 0.0;
+    for x in xs { sum += x.area(); }
+    sum
+}
+
+fn tagged<T: Shape + Named>(x: T) -> u32 { x.id() }
+
+fn squares(xs: []Square) -> f32 {
+    total(xs) + tagged(xs[0]) as f32
+}

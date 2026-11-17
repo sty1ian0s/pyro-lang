@@ -1,0 +1,12 @@
+//@ expected-fail: T047
+// §4.5.3: `mut T` is not a parameter type; parameters use the `mut` mode.
+
+struct Player { pub mut health: u8 }
+
+fn heal(p: mut Player) { //~ E0339
+    p.health += 1;
+}
+
+fn pick(a: u32, b: mut u32) -> u32 { //~ E0339
+    a
+}

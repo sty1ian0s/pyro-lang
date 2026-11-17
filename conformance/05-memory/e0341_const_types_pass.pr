@@ -1,0 +1,13 @@
+//@ expected-fail: T040
+//@ covers: E0341
+// §5.9, §7.7: every allowed `const` type.
+
+struct Point { x: i32, y: i32 }
+
+const LIMIT: u32 = 64;
+const PI = 3.14159265358979;
+const GREETING: str = "hello";
+const SMALL_PRIMES: [4]u32 = [2, 3, 5, 7];
+const FIRST_TWO: []u32 = SMALL_PRIMES[0..2];
+const ORIGIN: Point = .{ x: 0, y: 0 };
+const ELEM: type = u32;

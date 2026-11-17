@@ -1,0 +1,31 @@
+//@ expected-fail: T042
+//@ covers: E0330
+// §5.4.1, §6.10: views live in locals, parameters, results, view structs,
+// tuples and payloads; non-capturing lambdas convert to function pointers and
+// capturing ones go to `comptime` parameters.
+
+struct Token { text: str, line: u32 }
+
+const GREETING: str = "hello";
+
+fn first_token(src: str) -> Token {
+    Token { text: src, line: 1 }
+}
+
+fn halves(xs: []u8) -> ([]u8, []u8) {
+    (xs[0..1], xs[1..])
+}
+
+fn maybe(xs: []u8) -> Option<[]u8> {
+    if xs.len() == 0 { .none } else { .some(xs) }
+}
+
+struct Hooks { on_hit: fn(u32) -> u32 }
+
+fn apply(x: u32, comptime f: fn(u32) -> u32) -> u32 { f(x) }
+
+fn demo(base: u32) -> u32 {
+    let h = Hooks { on_hit: |x: u32| x + 1 };
+    let g: fn(u32) -> u32 = |x: u32| x * 2;
+    apply(3, |v| v + base) + g(1) + (h.on_hit)(2)
+}

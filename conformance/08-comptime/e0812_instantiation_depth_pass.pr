@@ -1,0 +1,13 @@
+//@ expected-fail: T064
+//@ covers: E0812
+// §4.12: a chain of 201 nested instantiations is within the limit of 256.
+
+fn depth(comptime n: usize) -> usize {
+    comptime if n == 0 {
+        0
+    } else {
+        depth(n - 1) + 1
+    }
+}
+
+fn demo() -> usize { depth(200) }

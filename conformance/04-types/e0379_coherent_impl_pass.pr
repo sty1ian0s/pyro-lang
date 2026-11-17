@@ -1,0 +1,16 @@
+//@ expected-fail: T044
+//@ covers: E0379
+// §7.5.1: a local protocol for a prelude type, and a prelude protocol for a
+// local type, are both in an allowed module.
+
+pub protocol Area { fn area(self) -> f32; }
+
+impl Area for u32 { fn area(self) -> f32 { (self * self) as f32 } }
+
+struct Point { x: i32, y: i32 }
+
+impl Ord for Point {
+    fn cmp(self, other: Self) -> Order {
+        if self.x < other.x { .less } else if self.x > other.x { .greater } else { .equal }
+    }
+}

@@ -1,0 +1,26 @@
+//@ expected-fail: T080
+// §5.3.3: outside the module that declares a resource type, every resource local
+// must be consumed on every path out of its scope; the error points at the
+// binding. A `move self` method must consume every resource field of `self`.
+// `List` is declared in `std`, so the owner's release rule does not apply here.
+
+fn forget() {
+    let l: List<u32> = .init(); //~ E0322
+}
+
+fn early(flag: bool) {
+    let l: List<u32> = .init(); //~ E0322
+    if flag { return; }
+    l.deinit();
+}
+
+@resource
+pub struct Lists {
+    a: List<u32>,
+    b: List<u32>,
+
+    pub fn deinit(move self) {
+        let Lists { a, b } = move self; //~ E0322
+        a.deinit();
+    }
+}

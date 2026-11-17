@@ -1,0 +1,22 @@
+//@ expected-fail: T080
+//@ covers: E0324
+// §5.3.3: consuming on every branch of `if` and `match`.
+
+fn keep(move l: List<u32>) { l.deinit(); }
+
+fn maybe(flag: bool) {
+    let l: List<u32> = .init();
+    if flag {
+        keep(move l);
+    } else {
+        l.deinit();
+    }
+}
+
+fn by_mode(mode: u8) {
+    let l: List<u32> = .init();
+    match mode {
+        0 => l.deinit(),
+        _ => keep(move l),
+    }
+}

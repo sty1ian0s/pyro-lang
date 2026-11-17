@@ -1,0 +1,18 @@
+//@ expected-fail: T042
+// §5.1, §10.5: a shared cell (`Atomic`, or a struct containing one) is never
+// copied; using its place as a value is an error.
+
+struct Stats { hits: Atomic<u64> }
+
+fn snapshot(s: Stats) {
+    let copy = s.hits; //~ E0328
+}
+
+fn local_copy() {
+    let n: Atomic<u64> = .init(0);
+    let m = n; //~ E0328
+}
+
+fn whole(s: Stats) {
+    let t = s; //~ E0328
+}

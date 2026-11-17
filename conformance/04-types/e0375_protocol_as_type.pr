@@ -1,0 +1,12 @@
+//@ expected-fail: T044
+// §7.5: a protocol is not a type; use a bound or an enum instead.
+
+pub protocol Shape { fn area(self) -> f32; }
+
+fn describe(s: Shape) -> f32 { //~ E0375
+    s.area()
+}
+
+struct Scene {
+    main: Shape, //~ E0375
+}

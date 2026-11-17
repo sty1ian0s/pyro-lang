@@ -1,0 +1,8 @@
+//@ expected-fail: T045
+// §4.4.2: the element type of `soa [N]T` and `soa []T` must be a struct.
+
+type Bad = soa [4]u32; //~ E0305
+
+fn total(xs: soa []f32) -> usize { //~ E0305
+    xs.len()
+}

@@ -1,0 +1,13 @@
+//@ expected-fail: T066
+//@ covers: E0811
+// §8.6.1: `@hash` is FNV-1a; hashing the same string twice is not a collision.
+
+const ORC: u64 = @hash("orc");
+const ORC_AGAIN: u64 = @hash("orc");
+const GOBLIN: u64 = @hash("goblin");
+
+comptime {
+    if ORC != 0x19fb901921bfa625 || ORC != ORC_AGAIN || ORC == GOBLIN {
+        @compile_error("@hash is not FNV-1a");
+    }
+}

@@ -1,0 +1,16 @@
+//@ expected-fail: T082
+// §5.4.2: `@append_only` is an unsafe promise, allowed only on a method whose
+// body contains an `unsafe` block.
+
+@resource
+pub struct Bump {
+    used: usize,
+
+    @append_only //~ E0342
+    pub fn grab(mut self, n: usize) -> usize {
+        self.used += n;
+        return self.used;
+    }
+
+    pub fn deinit(move self) {}
+}

@@ -1,0 +1,45 @@
+//@ expected-fail: T080
+//@ covers: E0322
+// §5.3.3, §6.8: release by `defer`, by `errdefer` on error paths plus a move on
+// success, by destructuring, and by the owner's release rule (`File` is
+// declared in this module and has no resource fields).
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+pub enum IoError { closed }
+
+fn deferred(flag: bool) {
+    let l: List<u32> = .init();
+    defer l.deinit();
+    if flag { return; }
+}
+
+fn make_checked(n: u32) -> Result<List<u32>, IoError> {
+    let mut l: List<u32> = .init();
+    errdefer l.deinit();
+    if n == 0 { return .err(.closed); }
+    l.push(n);
+    return .ok(move l);
+}
+
+fn owner_release() {
+    let f = File.open(1);
+}
+
+@resource
+pub struct Lists {
+    a: List<u32>,
+    b: List<u32>,
+
+    pub fn deinit(move self) {
+        let Lists { a, b } = move self;
+        a.deinit();
+        b.deinit();
+    }
+}

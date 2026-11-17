@@ -1,0 +1,18 @@
+//@ expected-fail: T042
+//@ covers: E0328
+// §5.1, §10.5: shared cells are used through their methods and passed to
+// read-only parameters as views.
+
+struct Stats { hits: Atomic<u64> }
+
+fn record(s: Stats) -> u64 {
+    s.hits.fetch_add(1)
+}
+
+fn peek(c: Atomic<u64>) -> u64 { c.load() }
+
+fn demo(s: Stats) -> u64 {
+    let n: Atomic<u64> = .init(0);
+    n.store(5);
+    record(s) + peek(s.hits) + peek(n)
+}

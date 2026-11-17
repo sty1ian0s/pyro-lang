@@ -1,0 +1,13 @@
+//@ expected-fail: T047
+//@ covers: E0335
+// §5.5.2: a read-only parameter is passed without a marker, also from a
+// mutable place.
+
+struct Player { pub mut health: u8 }
+
+fn show(p: Player) -> u8 { p.health }
+
+fn tick(mut p: Player) -> u8 {
+    p.health += 1;
+    show(p)
+}

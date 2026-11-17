@@ -1,0 +1,16 @@
+//@ expected-fail: T047
+// §5.5.2: a `mut` argument must be a mutable place, not a call result, a
+// literal or a `const`.
+
+struct Player { pub mut health: u8 }
+
+const DEFAULT_PLAYER: Player = Player { health: 100 };
+
+fn heal(mut p: Player, amount: u8) { p.health += amount; }
+fn spawn() -> Player { Player { health: 1 } }
+
+fn tick() {
+    heal(mut spawn(), 1); //~ E0336
+    heal(mut Player { health: 5 }, 1); //~ E0336
+    heal(mut DEFAULT_PLAYER, 1); //~ E0336
+}

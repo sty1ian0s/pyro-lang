@@ -1,0 +1,11 @@
+//@ expected-fail: T039
+// §6.3.1: a local that shadows a module item, or a prelude name that is not a
+// type or formatting intrinsic, gets W0301.
+
+fn speed() -> u32 { 3 }
+
+fn run() -> u32 {
+    let speed = 4; //~ W0301
+    let assert = 1; //~ W0301
+    7
+}

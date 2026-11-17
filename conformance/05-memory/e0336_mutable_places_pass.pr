@@ -1,0 +1,21 @@
+//@ expected-fail: T047
+//@ covers: E0336
+// §5.5.2: mutable locals, their fields and elements, and `mut` parameters are
+// mutable places.
+
+struct Player { pub mut health: u8 }
+
+fn heal(mut p: Player, amount: u8) { p.health += amount; }
+fn bump(mut x: u8) { x += 1; }
+
+fn forward(mut p: Player) {
+    heal(mut p, 1);
+    heal(mut p, 1);
+}
+
+fn tick(mut team: [4]Player) {
+    let mut p = Player { health: 5 };
+    heal(mut p, 1);
+    bump(mut p.health);
+    heal(mut team[0], 1);
+}

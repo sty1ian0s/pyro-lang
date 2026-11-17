@@ -1,0 +1,5 @@
+//@ expected-fail: T073
+// §8.6, §13.3: `@env` of a key the build environment does not define is an
+// error.
+
+const LEVEL = @env("no_such_key"); //~ E0807

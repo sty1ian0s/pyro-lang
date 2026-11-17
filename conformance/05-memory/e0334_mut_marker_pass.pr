@@ -1,0 +1,18 @@
+//@ expected-fail: T047
+//@ covers: E0334
+// §5.5.2, §6.3.3: `mut` at the call site; receivers and UFCS first arguments
+// need no marker.
+
+struct Player {
+    pub mut health: u8,
+
+    pub fn hurt(mut self, amount: u8) { self.health -= amount; }
+}
+
+fn heal(mut p: Player, amount: u8) { p.health += amount; }
+
+fn tick(mut p: Player) {
+    heal(mut p, 10);
+    p.hurt(1);
+    p.heal(2);
+}

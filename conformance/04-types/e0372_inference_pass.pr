@@ -1,0 +1,16 @@
+//@ expected-fail: T068
+//@ covers: E0372
+// §7.6.3: `larger(1, x)` infers `f32` from `x`; `larger(1, 2)` defaults to
+// `i64`; a parameter only in the result is passed as `comptime T: type`.
+
+fn larger<T: Ord>(a: T, b: T) -> T {
+    if a.cmp(b) == .greater { a } else { b }
+}
+
+fn zero(comptime T: type) -> T { @zero(T) }
+
+fn demo(x: f32) -> f32 {
+    let i = larger(1, 2);
+    let z: u32 = zero(u32);
+    larger(1, x)
+}

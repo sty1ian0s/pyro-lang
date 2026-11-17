@@ -1,0 +1,38 @@
+//@ expected-fail: T052
+//@ covers: E0357
+// §6.6.3: every variant, `_`, a binding arm, all four values of `u2`, and both
+// `bool` values.
+
+enum Light { red, yellow, green }
+
+fn next(l: Light) -> Light {
+    match l {
+        .red => .green,
+        .green => .yellow,
+        .yellow => .red,
+    }
+}
+
+fn describe(b: u8) -> u32 {
+    match b {
+        0 => 0,
+        n => n as u32 + 1,
+    }
+}
+
+fn quarter(q: u2) -> u32 {
+    match q {
+        0 => 0,
+        1 => 90,
+        2 => 180,
+        3 => 270,
+    }
+}
+
+fn flag(b: bool, l: Light) -> u32 {
+    let x: u32 = match b { true => 1, false => 0 };
+    match l {
+        .red if x == 1 => 2,
+        _ => x,
+    }
+}

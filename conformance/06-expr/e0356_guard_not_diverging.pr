@@ -1,0 +1,12 @@
+//@ expected-fail: T052
+// §6.6.2: the `else` block of `guard let` must have type `noreturn`.
+
+fn find(xs: []u32, v: u32) -> Option<usize> {
+    for x, i in xs { if x == v { return .some(i); } }
+    .none
+}
+
+fn index_of(xs: []u32) -> usize {
+    guard let .some(i) = find(xs, 7) else { print("missing\n"); } //~ E0356
+    i
+}

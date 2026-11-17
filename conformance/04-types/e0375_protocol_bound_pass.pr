@@ -1,0 +1,19 @@
+//@ expected-fail: T044
+//@ covers: E0375
+// §7.5, §7.5.3: protocols appear only as bounds; runtime variety uses an enum.
+
+pub protocol Shape { fn area(self) -> f32; }
+
+struct Circle { r: f32 }
+impl Shape for Circle { fn area(self) -> f32 { 3.14159265 * self.r * self.r } }
+
+fn describe<T: Shape>(s: T) -> f32 { s.area() }
+
+enum AnyShape { circle(Circle), empty }
+
+fn area_of(s: AnyShape) -> f32 {
+    match s {
+        .circle(c) => describe(c),
+        .empty => 0.0,
+    }
+}

@@ -1,0 +1,29 @@
+//@ expected-fail: T043
+//@ covers: E0371
+// §7.2.1, §6.11: final expressions, returns on every path, `match` arms and a
+// diverging tail all provide the result.
+
+fn sign(x: i32) -> i32 {
+    if x < 0 { return -1; }
+    if x > 0 { return 1; }
+    0
+}
+
+fn pick(b: bool) -> u8 {
+    match b {
+        true => 1,
+        false => 0,
+    }
+}
+
+fn never(x: u32) -> u32 {
+    if x > 0 { return x; }
+    @trap("x must be positive");
+}
+
+fn first_even(xs: []u32) -> u32 {
+    for x in xs {
+        if x % 2 == 0 { return x; }
+    }
+    return 0;
+}

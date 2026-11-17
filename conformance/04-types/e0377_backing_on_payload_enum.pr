@@ -1,0 +1,4 @@
+//@ expected-fail: T040
+// §7.4: an explicit backing type is allowed only for payload-free enums.
+
+enum Msg: u8 { quit, move_to(i32, i32) } //~ E0377

@@ -1,0 +1,24 @@
+//@ expected-fail: T055
+// §4.11.2, §4.11.3: bit fields and fields of `@packed` structs are not
+// addressable: they cannot be `mut` arguments or `mut` views.
+
+struct Flags {
+    visible: bool,
+    layer: u3,
+    id: u32,
+}
+
+@packed
+struct Header {
+    tag: u8,
+    len: u32,
+}
+
+fn clear(mut b: bool) { b = false; }
+fn grow(mut n: u32) { n += 1; }
+
+fn edit(mut f: Flags, mut h: Header) {
+    clear(mut f.visible); //~ E0308
+    grow(mut h.len); //~ E0308
+    let v: mut bool = f.visible; //~ E0308
+}

@@ -1,0 +1,13 @@
+//@ expected-fail: T064
+// §4.12, §8.2: each `comptime` argument value is a separate instantiation;
+// a chain deeper than 256 is an error, reported at the call that exceeds it.
+
+fn depth(comptime n: usize) -> usize {
+    comptime if n == 0 {
+        0
+    } else {
+        depth(n - 1) + 1 //~ E0812
+    }
+}
+
+fn demo() -> usize { depth(300) }

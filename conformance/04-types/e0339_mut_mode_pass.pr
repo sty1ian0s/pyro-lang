@@ -1,0 +1,22 @@
+//@ expected-fail: T047
+//@ covers: E0339
+// §4.5.3, §5.5.4: the `mut` parameter mode, `-> mut Self` results and
+// `Option<mut T>` payloads.
+
+struct Player {
+    pub mut health: u8,
+
+    pub fn heal(mut self, amount: u8) -> mut Self {
+        self.health = @add_sat(self.health, amount);
+        return self;
+    }
+}
+
+fn heal_twice(mut p: Player) {
+    p.heal(1).heal(1);
+}
+
+fn first(mut team: []Player) -> Option<mut Player> {
+    if team.len() == 0 { return .none; }
+    return .some(team[0]);
+}

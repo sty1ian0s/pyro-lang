@@ -1,0 +1,10 @@
+//@ expected-fail: T046
+// §6.2.3: an inferred member needs an expected type that has it.
+
+enum GameState { idle, playing }
+
+fn make() {
+    let s: GameState = .paused; //~ E0353
+    let n = .idle; //~ E0353
+    let c: u32 = .zero; //~ E0353
+}

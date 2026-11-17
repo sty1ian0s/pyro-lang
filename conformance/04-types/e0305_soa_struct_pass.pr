@@ -1,0 +1,16 @@
+//@ expected-fail: T045
+//@ covers: E0305
+// §4.4.2, §4.11.5: SoA arrays and slices of a struct type; `a.f` is a column view.
+
+struct Particle { x: f32, y: f32, alive: bool }
+
+type Particles = soa [16]Particle;
+
+fn first_x(ps: soa []Particle) -> f32 {
+    let xs: []f32 = ps.x;
+    xs[0]
+}
+
+fn count(ps: soa []Particle) -> usize {
+    ps.len()
+}

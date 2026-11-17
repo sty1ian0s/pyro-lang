@@ -1,0 +1,6 @@
+//@ expected-fail: T066
+// §8.6.1: two distinct strings with the same 64-bit FNV-1a hash are an error.
+// Both strings below hash to 0x227addae96a78f3d; the second one is reported.
+
+const A: u64 = @hash("cfce3eaa8d97691a");
+const B: u64 = @hash("6f98c950bd676157"); //~ E0811

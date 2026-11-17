@@ -1,0 +1,23 @@
+//@ expected-fail: T046
+//@ covers: E0353
+// §6.2.3: variants, `const` members of type `T`, constructor functions, the
+// other operand of a binary operator, and `Option<U>` lookup in `U`.
+
+enum GameState { idle, playing }
+
+struct Vec2 {
+    x: f32,
+    y: f32,
+
+    pub const ZERO: Vec2 = Vec2 { x: 0.0, y: 0.0 };
+    pub fn unit() -> Vec2 { Vec2 { x: 1.0, y: 0.0 } }
+}
+
+fn make(state: GameState) -> bool {
+    let s: GameState = .playing;
+    let z: Vec2 = .ZERO;
+    let u: Vec2 = .unit();
+    let maybe: Option<GameState> = .idle;
+    let none: Option<GameState> = .none;
+    state == .playing && s == .playing && maybe == .some(.idle)
+}

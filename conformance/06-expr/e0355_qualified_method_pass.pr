@@ -1,0 +1,22 @@
+//@ expected-fail: T050
+//@ covers: E0355
+// §6.3.3: `Protocol.m(e)` resolves the ambiguity, and a type member beats a
+// free function of the same name.
+
+pub protocol Walk { fn step(self) -> u32; }
+pub protocol Dance { fn step(self) -> u32; }
+
+struct Bot {
+    n: u32,
+
+    pub fn speed(self) -> u32 { self.n }
+}
+
+impl Walk for Bot { fn step(self) -> u32 { self.n } }
+impl Dance for Bot { fn step(self) -> u32 { self.n * 2 } }
+
+fn speed(b: Bot) -> u32 { 0 }
+
+fn move_bot(b: Bot) -> u32 {
+    Walk.step(b) + Dance.step(b) + b.speed()
+}

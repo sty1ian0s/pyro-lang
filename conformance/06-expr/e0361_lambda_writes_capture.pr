@@ -1,0 +1,9 @@
+//@ expected-fail: T074
+// §6.10: captures are read-only views; a lambda cannot write them.
+
+fn apply(x: u32, comptime f: fn(u32) -> u32) -> u32 { f(x) }
+
+fn tally() -> u32 {
+    let mut total: u32 = 0;
+    apply(3, |v| { total += v; v }) //~ E0361
+}

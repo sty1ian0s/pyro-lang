@@ -1,0 +1,21 @@
+//@ expected-fail: T080
+// §5.3.3: a resource-typed temporary whose value is discarded is an error, as in
+// `make_list().len()`; bind it first.
+
+@resource
+pub struct File {
+    fd: i32,
+
+    pub fn open(fd: i32) -> File { File { fd } }
+    pub fn close(move self) {}
+}
+
+fn make_list() -> List<u32> {
+    let mut l: List<u32> = .init();
+    l.push(1);
+    return l;
+}
+
+fn length() -> usize {
+    make_list().len() //~ E0327
+}

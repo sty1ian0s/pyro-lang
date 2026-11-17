@@ -1,0 +1,17 @@
+//@ expected-fail: T062
+// §8.8, A.2: using a `@deprecated` item warns; `@deny(W0802)` makes that use an
+// error with the same code.
+
+@deprecated("use area_of instead")
+fn area(w: f32, h: f32) -> f32 { w * h }
+
+fn area_of(w: f32, h: f32) -> f32 { w * h }
+
+fn room() -> f32 {
+    area(2.0, 3.0) //~ W0802
+}
+
+@deny(W0802)
+fn strict_room() -> f32 {
+    area(4.0, 5.0) //~ W0802
+}
