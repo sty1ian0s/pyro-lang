@@ -68,7 +68,8 @@ fn collect(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: enum 
         var cells = std.mem.splitScalar(u8, line[1..], '|');
         const code = std.mem.trim(u8, cells.first(), " ");
         if (code.len == 0 or (code[0] != 'E' and code[0] != 'W')) continue; // header or separator row
-        if (code.len != 5 or std.fmt.parseInt(u16, code[1..], 10) catch null == null)
+        // Exactly 4 ASCII digits: parseInt alone would also accept `_` separators.
+        if (code.len != 5 or !allDigits(code[1..]))
             std.process.fatal("{s}:{d}: malformed code '{s}'", .{ path, line_no, code });
         const impl_range = code[0] == 'W' and code[1] == '9';
         if (impl_range != (source == .impl))
@@ -81,6 +82,11 @@ fn collect(arena: std.mem.Allocator, io: std.Io, path: []const u8, source: enum 
         found += 1;
     }
     if (source == .spec and found == 0) std.process.fatal("{s}: no A.3 registry rows found", .{path});
+}
+
+fn allDigits(s: []const u8) bool {
+    for (s) |ch| if (!std.ascii.isDigit(ch)) return false;
+    return true;
 }
 
 fn value(code: []const u8) u16 {

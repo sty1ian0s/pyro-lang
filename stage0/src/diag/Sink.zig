@@ -118,23 +118,67 @@ fn isCascade(s: *const Sink, d: Diagnostic) bool {
     return s.poisoned.contains(node);
 }
 
-/// Total order: location, then code, severity and message, so diagnostics
-/// emitted by different threads at the same offset still sort the same way.
+/// Total order over everything a renderer prints: location, code, severity
+/// and message first, then labels, help, fixes, trace and subject, so
+/// diagnostics emitted by different threads always sort the same way.
 fn lessThan(_: void, a: Diagnostic, b: Diagnostic) bool {
+    return order(a, b) == .lt;
+}
+
+fn order(a: Diagnostic, b: Diagnostic) std.math.Order {
+    const ord = std.math.order;
     const sa = a.primarySpan();
     const sb = b.primarySpan();
-    if ((sa == null) != (sb == null)) return sa == null;
-    if (sa) |x| {
-        const y = sb.?;
-        if (x.file != y.file) return @backingInt(x.file) < @backingInt(y.file);
-        if (x.start != y.start) return x.start < y.start;
-        if (x.end != y.end) return x.end < y.end;
-    }
+    if ((sa == null) != (sb == null)) return if (sa == null) .lt else .gt;
     const ca: u32 = if (a.code) |c| @backingInt(c) else 0;
     const cb: u32 = if (b.code) |c| @backingInt(c) else 0;
-    if (ca != cb) return ca < cb;
-    if (a.severity != b.severity) return @backingInt(a.severity) < @backingInt(b.severity);
-    return std.mem.lessThan(u8, a.message, b.message);
+    return (if (sa) |x| orderSpan(x, sb.?).differ() else null) orelse
+        ord(ca, cb).differ() orelse
+        ord(@backingInt(a.severity), @backingInt(b.severity)).differ() orelse
+        orderStr(a.message, b.message).differ() orelse
+        orderSlices(diag.Label, a.spans, b.spans, orderLabel).differ() orelse
+        orderSlices([]const u8, a.help, b.help, orderStr).differ() orelse
+        orderSlices(diag.Fix, a.fixes, b.fixes, orderFix).differ() orelse
+        orderSlices(diag.TraceFrame, a.trace, b.trace, orderFrame).differ() orelse
+        orderSubject(a.subject, b.subject);
+}
+
+fn orderSpan(x: Span, y: Span) std.math.Order {
+    return std.math.order(@backingInt(x.file), @backingInt(y.file)).differ() orelse
+        std.math.order(x.start, y.start).differ() orelse
+        std.math.order(x.end, y.end);
+}
+
+fn orderStr(x: []const u8, y: []const u8) std.math.Order {
+    return std.mem.order(u8, x, y);
+}
+
+fn orderLabel(x: diag.Label, y: diag.Label) std.math.Order {
+    return orderSpan(x.span, y.span).differ() orelse
+        std.math.order(@intFromBool(x.primary), @intFromBool(y.primary)).differ() orelse
+        orderStr(x.label, y.label);
+}
+
+fn orderFix(x: diag.Fix, y: diag.Fix) std.math.Order {
+    return orderSpan(x.span, y.span).differ() orelse orderStr(x.replacement, y.replacement);
+}
+
+fn orderFrame(x: diag.TraceFrame, y: diag.TraceFrame) std.math.Order {
+    return orderSpan(x.span, y.span).differ() orelse orderStr(x.note, y.note);
+}
+
+fn orderSubject(x: ?NodeRef, y: ?NodeRef) std.math.Order {
+    const nx = x orelse return if (y == null) .eq else .lt;
+    const ny = y orelse return .gt;
+    return std.math.order(@backingInt(nx.file), @backingInt(ny.file)).differ() orelse
+        std.math.order(nx.node, ny.node);
+}
+
+/// Lexicographic order of two slices under `elem`.
+fn orderSlices(comptime T: type, x: []const T, y: []const T, comptime elem: fn (T, T) std.math.Order) std.math.Order {
+    const n = @min(x.len, y.len);
+    for (x[0..n], y[0..n]) |p, q| if (elem(p, q).differ()) |o| return o;
+    return std.math.order(x.len, y.len);
 }
 
 fn copy(a: std.mem.Allocator, d: Diagnostic) error{OutOfMemory}!Diagnostic {
@@ -211,6 +255,28 @@ test "4-thread emission prints in stable order" {
         defer got.deinit(testing.allocator);
         try dump(&got, s.finish());
         try testing.expectEqualStrings(expected.items, got.items);
+    }
+}
+
+fn emitTraced(s: *Sink, note: []const u8) !void {
+    try s.emit(.{
+        .code = .E0310,
+        .severity = .@"error",
+        .message = "same",
+        .spans = &.{.{ .span = at(0, 4), .primary = true }},
+        .trace = &.{.{ .span = at(1, 7), .note = note }},
+    });
+}
+
+test "diagnostics tied on location and message still sort by trace" {
+    const orders = [2][2][]const u8{ .{ "inst A", "inst B" }, .{ "inst B", "inst A" } };
+    for (orders) |notes| {
+        var s: Sink = .init(testing.allocator, testing.io);
+        defer s.deinit();
+        for (notes) |n| try emitTraced(&s, n);
+        const ds = s.finish();
+        try testing.expectEqualStrings("inst A", ds[0].trace[0].note);
+        try testing.expectEqualStrings("inst B", ds[1].trace[0].note);
     }
 }
 
