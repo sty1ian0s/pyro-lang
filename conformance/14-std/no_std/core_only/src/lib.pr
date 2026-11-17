@@ -1,0 +1,28 @@
+//@ expected-fail: T116
+//@ covers: E0912
+// §14.1.1: a `no_std` package (see ../pyro.toml) keeps `std.mem.FixedArena`,
+// `Bounded`, `std.math`, `std.simd` and `std.meta`.
+
+use std.mem.{FixedArena};
+use std.math;
+use std.simd;
+use std.meta;
+
+@trap_handler
+pub fn on_trap(kind: TrapKind, msg: str, file: str, line: u32) -> noreturn {
+    loop {}
+}
+
+/// Copies the square roots of `xs` into scratch memory from `buf` and sums them.
+pub fn root_sum(mut buf: []u8, xs: []f32) -> f32 {
+    let mut arena = FixedArena.init(mut buf);
+    let mut roots = arena.alloc_slice(f32, xs.len()).expect("scratch buffer too small");
+    let mut seen: Bounded<f32, 8> = .empty();
+    let mut total: f32 = 0.0;
+    for i in 0..xs.len() {
+        roots[i] = math.sqrt(xs[i]);
+        if seen.len() < seen.capacity() { seen.push(roots[i]); }
+        total += roots[i];
+    }
+    total
+}

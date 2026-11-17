@@ -1,0 +1,20 @@
+//@ expected-fail: T112
+// §14.3: `mem.swap`, `mem.replace`, `mem.copy`, `mem.fill`, `mem.eql`.
+
+use std.mem;
+
+pub fn main() {
+    let mut a: i32 = 1;
+    let mut b: i32 = 2;
+    mem.swap(mut a, mut b);
+    print("{} {}\n", a, b);
+    let old = mem.replace(mut a, 10);
+    print("{} {}\n", old, a);
+
+    let src: [3]u8 = [1, 2, 3];
+    let mut dst: [3]u8 = [0, 0, 0];
+    mem.copy(mut dst[..], src[..]);
+    print("{} {} {} {}\n", dst[0], dst[1], dst[2], mem.eql(dst[..], src[..]));
+    mem.fill(mut dst[..], 7);
+    print("{} {} {} {}\n", dst[0], dst[1], dst[2], mem.eql(dst[..], src[..]));
+}

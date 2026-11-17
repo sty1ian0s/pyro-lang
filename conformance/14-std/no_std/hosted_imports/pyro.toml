@@ -1,0 +1,7 @@
+# Fixture package for src/lib.pr: `pyro check` on a file inside a package reads
+# `no_std` from that package's manifest (§13.2, §14.1.1).
+[package]
+name = "no_std_hosted_imports"
+version = "0.1.0"
+edition = "2026"
+no_std = true

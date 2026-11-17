@@ -1,0 +1,28 @@
+//@ expected-fail: T112
+// §14.2, §14.6: user `Display` and `Debug` impls through `fmt.Writer`.
+
+struct Money { cents: u32 }
+
+impl Display for Money {
+    fn fmt(self, mut w: std.fmt.Writer) {
+        w.write("$");
+        w.write_uint((self.cents / 100) as u64);
+        w.write_byte(46);
+        w.write_uint((self.cents % 100) as u64);
+    }
+}
+
+impl Debug for Money {
+    fn debug(self, mut w: std.fmt.Writer) {
+        w.write("Money(");
+        w.write_int(self.cents as i64);
+        w.write(", ");
+        w.write_float(self.cents as f64 / 100.0, 1);
+        w.write(")");
+    }
+}
+
+pub fn main() {
+    let m = Money { cents: 1234 };
+    print("{} {:?}\n", m, m);
+}

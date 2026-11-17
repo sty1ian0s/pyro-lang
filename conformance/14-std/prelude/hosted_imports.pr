@@ -1,0 +1,11 @@
+//@ expected-fail: T116
+//@ covers: E0912
+// §14.1.1: a hosted package (no `no_std`) may import every hosted-only module.
+
+use std.fs;
+use std.process;
+use std.net;
+use std.gpu;
+use std.time.{Instant};
+
+pub fn main() {}

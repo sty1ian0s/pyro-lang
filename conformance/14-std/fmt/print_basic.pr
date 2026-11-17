@@ -1,0 +1,10 @@
+//@ expected-fail: T112
+// §14.6: `print` with Display placeholders and `{{`/`}}` escapes.
+
+pub fn main() {
+    print("plain\n");
+    print("{} {} {} {}\n", 42, -7, true, "str");
+    print("{{}} {{{}}}\n", 5);
+    let big: u64 = 18446744073709551615;
+    print("{}\n", big);
+}

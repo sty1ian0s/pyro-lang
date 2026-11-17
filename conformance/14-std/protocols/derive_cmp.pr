@@ -1,0 +1,25 @@
+//@ expected-fail: T112
+// §14.2: `Ord` implemented with `std.derive.cmp` compares fields lexicographically
+// in declaration order.
+
+struct Point { x: i32, y: i32 }
+
+impl Ord for Point {
+    fn cmp(self, other: Self) -> Order { std.derive.cmp(self, other) }
+}
+
+fn name(o: Order) -> str {
+    match o {
+        .less => "less",
+        .equal => "equal",
+        .greater => "greater",
+    }
+}
+
+pub fn main() {
+    let a = Point { x: 1, y: 9 };
+    let b = Point { x: 2, y: 0 };
+    let c = Point { x: 1, y: 9 };
+    let d = Point { x: 1, y: 3 };
+    print("{} {} {} {}\n", name(a.cmp(b)), name(b.cmp(a)), name(a.cmp(c)), name(a.cmp(d)));
+}

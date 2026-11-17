@@ -1,0 +1,15 @@
+//@ expected-fail: T116
+// §14.1.1: a `no_std` package (see ../pyro.toml) cannot import `std.fs`,
+// `std.process`, `std.net`, `std.gpu` or `std.time` (E0912).
+
+use std.fs; //~ E0912
+use std.process; //~ E0912
+use std.net; //~ E0912
+use std.gpu; //~ E0912
+use std.time.{Instant}; //~ E0912
+use std.fs.{File}; //~ E0912 item import from a hosted-only module
+
+@trap_handler
+pub fn on_trap(kind: TrapKind, msg: str, file: str, line: u32) -> noreturn {
+    loop {}
+}

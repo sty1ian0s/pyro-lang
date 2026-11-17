@@ -1,0 +1,11 @@
+//@ expected-fail: T114
+// §14.7: `time.Instant` is monotonic.
+
+use std.time;
+
+pub fn main() {
+    let start = time.Instant.now();
+    let a = start.elapsed();
+    let b = start.elapsed();
+    print("{} {}\n", a.as_secs_f64() >= 0.0, b.as_secs_f64() >= a.as_secs_f64());
+}

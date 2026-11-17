@@ -1,0 +1,15 @@
+//@ expected-fail: T112
+// §14.6: `str` methods.
+
+pub fn main() {
+    let s = "  hello, world  ";
+    let t = s.trim();
+    print("[{}] [{}] [{}]\n", t, s.trim_start(), s.trim_end());
+    print("{} {} {}\n", t.len(), "".is_empty(), t.is_empty());
+    print("{} {}\n", t.starts_with("hello"), t.ends_with("hello"));
+    print("{} {}\n", t.eql("hello, world"), t.eql("hello"));
+    print("{} {}\n", t.find("o").unwrap_or(99), t.find("z").is_none());
+    if let .some((k, v)) = "key=value".split_once("=") { print("{}|{}\n", k, v); }
+    print("{}\n", "nokey".split_once("=").is_none());
+    print("{} {}\n", "abc".bytes()[1], "é".len());
+}

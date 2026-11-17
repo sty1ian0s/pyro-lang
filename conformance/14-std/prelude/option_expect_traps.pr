@@ -1,0 +1,10 @@
+//@ expected-fail: T112
+//@ debug_assertions
+// §14.1.2: `expect` on `.none` traps (kind `explicit`, exit status 134).
+
+pub fn main() {
+    let o: Option<i32> = .none;
+    print("before\n");
+    _ = o.expect("value required");
+    print("after\n");
+}

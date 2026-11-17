@@ -1,0 +1,16 @@
+//@ expected-fail: T112
+// §14.6: `text.next_char` decodes scalar values; `text.validate` checks UTF-8.
+
+use std.text;
+
+pub fn main() {
+    let s = "aé€";
+    let mut at: usize = 0;
+    while let .some((c, next)) = text.next_char(s, at) {
+        print("{} {}\n", c, next);
+        at = next;
+    }
+    let good: [2]u8 = [0x68, 0x69];
+    let bad: [2]u8 = [0xC3, 0x28];
+    print("{} {}\n", text.validate(good[..]).unwrap_or("?"), text.validate(bad[..]).is_none());
+}

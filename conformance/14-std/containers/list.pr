@@ -1,0 +1,23 @@
+//@ expected-fail: T110
+// §14.4.1: `List<T>` (prelude).
+
+fn even(x: i32) -> bool { x % 2 == 0 }
+
+pub fn main() {
+    let mut xs: List<i32> = .init();
+    defer xs.deinit();
+    for i in 0..6 { xs.push(5 - (i as i32)); }
+    print("{} {}\n", xs.len(), xs.is_empty());
+    xs.sort();
+    for x in xs { print("{} ", x); }
+    print("\n");
+    print("{}\n", xs.remove(0));      // [1 2 3 4 5]
+    print("{}\n", xs.swap_remove(0)); // [5 2 3 4]
+    xs.insert(1, 9);                  // [5 9 2 3 4]
+    for x in xs { print("{} ", x); }
+    print("\n");
+    xs.retain(even);                  // [2 4]
+    print("{} {}\n", xs.len(), xs.pop().unwrap_or(-1));
+    xs.clear();
+    print("{} {}\n", xs.len(), xs.pop().is_none());
+}

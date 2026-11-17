@@ -1,0 +1,11 @@
+//@ expected-fail: T112
+//@ debug_assertions
+// §14.3: `mem.copy` traps when the lengths differ.
+
+pub fn main() {
+    let src: [3]u8 = [1, 2, 3];
+    let mut dst: [2]u8 = [0, 0];
+    print("before\n");
+    std.mem.copy(mut dst[..], src[..]);
+    print("after\n");
+}

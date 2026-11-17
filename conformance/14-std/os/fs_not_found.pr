@@ -1,0 +1,13 @@
+//@ expected-fail: T114
+// §14.7: a missing file maps to `IoError.not_found`.
+
+use std.fs;
+
+pub fn main() {
+    let mut buf: [8]u8 = [0; 8];
+    match fs.read_into("conformance/14-std/os/does-not-exist.txt", mut buf[..]) {
+        .ok(_) => print("ok\n"),
+        .err(e) => print("{}\n", e == .not_found),
+    }
+    print("{}\n", fs.exists("conformance/14-std/os/does-not-exist.txt"));
+}

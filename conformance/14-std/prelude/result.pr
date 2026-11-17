@@ -1,0 +1,29 @@
+//@ expected-fail: T112
+// §14.1.2: `Result<T, E>` methods.
+
+pub enum Fault { bad, worse }
+
+fn code(f: Fault) -> u8 {
+    match f {
+        .bad => 1,
+        .worse => 2,
+    }
+}
+
+fn inc(x: i32) -> i32 { x + 1 }
+
+pub fn main() {
+    let a: Result<i32, Fault> = .ok(5);
+    let b: Result<i32, Fault> = .err(.worse);
+    print("{} {}\n", a.is_ok(), a.is_err());
+    print("{} {}\n", b.is_ok(), b.is_err());
+    print("{} {}\n", a.unwrap_or(0), b.unwrap_or(-3));
+    print("{}\n", a.expect("a is ok"));
+    print("{} {}\n", a.map(inc).unwrap_or(0), b.map(inc).unwrap_or(0));
+    let mapped: Result<i32, u8> = b.map_err(code);
+    match mapped {
+        .ok(v) => print("ok {}\n", v),
+        .err(c) => print("err {}\n", c),
+    }
+    print("{} {}\n", a.ok().is_some(), b.ok().is_none());
+}

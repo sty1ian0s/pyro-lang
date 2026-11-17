@@ -1,0 +1,12 @@
+//@ expected-fail: T112
+// §14.6: `format` writes into a caller buffer and never allocates; a full buffer
+// gives `.err`.
+
+pub fn main() {
+    let mut buf: [32]u8 = [0; 32];
+    let s = format(mut buf[..], "{}+{}={}", 2, 3, 5).expect("fits");
+    print("{} {}\n", s, s.len());
+    let mut tiny: [4]u8 = [0; 4];
+    let r = format(mut tiny[..], "{}", 123456);
+    print("{}\n", r.is_err());
+}

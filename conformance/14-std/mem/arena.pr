@@ -1,0 +1,13 @@
+//@ expected-fail: T112
+// §14.3: `Arena` (prelude) hands out zeroed memory; `reset` empties it.
+
+pub fn main() {
+    let mut arena = Arena.init();
+    defer arena.deinit();
+    let mut xs = arena.alloc_slice(u32, 4);
+    print("{} {} {}\n", xs.len(), xs[0], xs[3]);
+    xs[0] = 5;
+    print("{} {}\n", xs[0], arena.used() >= 16);
+    arena.reset();
+    print("{}\n", arena.used());
+}
