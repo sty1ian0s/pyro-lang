@@ -48,12 +48,18 @@ const Batch = struct {
 pub fn init(pool: *Pool, gpa: Allocator, io: Io, job_count: ?u32) !void {
     const n: usize = job_count orelse @intCast(std.Thread.getCpuCount() catch 1);
     std.debug.assert(n >= 1);
-    pool.* = .{ .io = io, .threads = try gpa.alloc(std.Thread, n - 1) };
-    errdefer gpa.free(pool.threads);
-    for (pool.threads, 1..) |*t, id| {
+    const threads = try gpa.alloc(std.Thread, n - 1);
+    pool.* = .{ .io = io, .threads = threads };
+    for (threads, 1..) |*t, id| {
         t.* = std.Thread.spawn(.{}, workerMain, .{ pool, @as(u32, @intCast(id)) }) catch |err| {
-            pool.threads = pool.threads[0 .. id - 1];
-            pool.deinit(gpa);
+            // Stop the workers already started, then free the full slice once.
+            pool.mutex.lockUncancelable(io);
+            pool.shutdown = true;
+            pool.mutex.unlock(io);
+            pool.wake.broadcast(io);
+            for (threads[0 .. id - 1]) |started| started.join();
+            gpa.free(threads);
+            pool.* = undefined;
             return err;
         };
     }

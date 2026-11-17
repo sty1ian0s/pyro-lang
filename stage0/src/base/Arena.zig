@@ -79,7 +79,7 @@ fn bump(self: *Arena, len: usize, alignment: Alignment) ?[*]u8 {
     const c = self.cur orelse return null;
     const base = @intFromPtr(c);
     const start = alignment.forward(base + self.end) - base;
-    if (start + len > c.size) return null;
+    if (start > c.size or len > c.size - start) return null;
     self.end = start + len;
     return @ptrFromInt(base + start);
 }
@@ -87,25 +87,21 @@ fn bump(self: *Arena, len: usize, alignment: Alignment) ?[*]u8 {
 fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
     const self: *Arena = @ptrCast(@alignCast(ctx));
     if (self.bump(len, alignment)) |p| return p;
-    // Move on to the next chunk retained by an earlier `reset`.
-    if (self.cur) |c| if (c.next) |n| {
-        self.cur = n;
+    // Walk the chunks retained by an earlier `reset` until one fits; skipped
+    // chunks stay unused until the next `reset`.
+    while (self.cur) |c| {
+        self.cur = c.next orelse break;
         self.end = header;
         if (self.bump(len, alignment)) |p| return p;
-    };
-    // Insert a fresh chunk after `cur`, keeping any retained chunks behind it.
+    }
+    // None fits: append a fresh chunk at the tail (`cur` is now the tail).
     const prev = if (self.cur) |c| c.size else 0;
-    const need = header + len + alignment.toByteUnits();
-    const size = @max(need, min_chunk, @min(prev * 2, max_growth));
+    const need = std.math.add(usize, header + alignment.toByteUnits(), len) catch return null;
+    const size = @max(need, min_chunk, @min(prev, max_growth / 2) * 2);
     const mem = self.child.rawAlloc(size, .of(Chunk), ret_addr) orelse return null;
     const fresh: *Chunk = @ptrCast(@alignCast(mem));
-    if (self.cur) |c| {
-        fresh.* = .{ .next = c.next, .size = size };
-        c.next = fresh;
-    } else {
-        fresh.* = .{ .next = null, .size = size };
-        self.first = fresh;
-    }
+    fresh.* = .{ .next = null, .size = size };
+    if (self.cur) |c| c.next = fresh else self.first = fresh;
     self.cur = fresh;
     self.end = header;
     return self.bump(len, alignment).?;
@@ -123,7 +119,7 @@ fn resize(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, r
     const self: *Arena = @ptrCast(@alignCast(ctx));
     if (!self.isLast(memory)) return new_len <= memory.len;
     const start = self.end - memory.len;
-    if (start + new_len > self.cur.?.size) return false;
+    if (new_len > self.cur.?.size - start) return false;
     self.end = start + new_len;
     return true;
 }
@@ -208,6 +204,33 @@ test "reset is O(1): reuses chunks without calling the child allocator" {
         try testing.expectEqual(allocs, counting.allocations);
         try testing.expectEqual(cap, arena.capacity());
     }
+}
+
+test "reset reuses any retained chunk that fits, not only the next one" {
+    var counting: testing.FailingAllocator = .init(testing.allocator, .{});
+    var arena: Arena = .init(counting.allocator());
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    for (0..3000) |_| _ = try a.alloc(u8, 20);
+    const allocs = counting.allocations;
+    const cap = arena.capacity();
+    for (0..10) |_| {
+        arena.reset();
+        _ = try a.alloc(u8, 10000);
+        try testing.expectEqual(allocs, counting.allocations);
+        try testing.expectEqual(cap, arena.capacity());
+    }
+}
+
+test "oversized requests fail with OutOfMemory instead of overflowing" {
+    var arena: Arena = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    _ = try a.alloc(u8, 1);
+    try testing.expectError(error.OutOfMemory, a.alloc(u8, std.math.maxInt(usize) - 8));
+    const last = try a.alloc(u8, 1);
+    try testing.expect(!a.resize(last, std.math.maxInt(usize) - 8));
 }
 
 test "free and resize act on the last allocation" {
