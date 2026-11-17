@@ -1,0 +1,41 @@
+//@ covers: E1005
+//@ expected-fail: T177
+// §11.1.7: each builtin variable and builtin function used in a stage that lists it.
+
+use std.gpu;
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+pub struct Payload { first: [32]u32 }
+
+@gpu_kernel(workgroup: 64)
+fn ids(mut xs: []u32) {
+    let i = @global_invocation_id.x as usize;
+    let tag = @local_invocation_id.x + @workgroup_id.x * @num_workgroups.x;
+    @workgroup_barrier();
+    if i < xs.len() { xs[i] = tag; }
+}
+
+@gpu_task(workgroup: 32)
+fn ts_ids(mut payload: Payload) -> vec3<u32> {
+    payload.first[@local_invocation_id.x as usize] = @global_invocation_id.x;
+    vec3(@num_workgroups.x, 1, 1)
+}
+
+@gpu_vertex
+fn vs_ids(v: Vertex) -> VsOut {
+    let shift = (@vertex_index + @instance_index) as f32 * 0.01;
+    VsOut { clip: vec4(v.pos.x + shift, v.pos.y, v.pos.z, 1.0), uv: v.uv }
+}
+
+@gpu_fragment
+fn fs_builtins(i: VsOut) -> vec4<f32> {
+    if !@front_facing { @discard(); }
+    let edge = @fwidth(i.uv.x) + @dpdx(i.uv.y) + @dpdy(i.uv.y);
+    vec4(@frag_coord.x * edge, @sample_index as f32, 0.0, 1.0)
+}
+
+@gpu_ray_gen
+fn rg_ids(mut image: []u32) {
+    image[gpu.linear_id(@launch_id, @launch_size) as usize] = @launch_id.x;
+}

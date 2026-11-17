@@ -1,0 +1,32 @@
+//@ expected-fail: T198
+// §11.5.3, §11.5.4: `gpu.trace_ray` outside ray-generation, closest-hit and miss
+// stages, and comptime-known conflicting ray flags.
+
+use std.gpu;
+
+pub struct Shade { color: vec3<f32>, shadowed: bool }
+
+const RAY: gpu.Ray = .{ origin: .{ 0.0, 0.0, 0.0 }, t_min: 0.0, direction: .{ 0.0, 0.0, 1.0 }, t_max: 100.0 };
+
+@gpu_any_hit
+fn any_traces(mut s: Shade, hit: gpu.Hit<gpu.Barycentrics>, scene: gpu.Tlas) -> gpu.AnyHit {
+    gpu.trace_ray(scene, RAY, mut s); //~ E1012
+    .accept
+}
+
+@gpu_kernel(workgroup: 64)
+fn kernel_traces(scene: gpu.Tlas, mut out: []f32) {
+    let mut s = Shade { color: vec3(0.0, 0.0, 0.0), shadowed: false };
+    gpu.trace_ray(scene, RAY, mut s); //~ E1012
+    let i = @global_invocation_id.x as usize;
+    if i < out.len() { out[i] = s.color.x; }
+}
+
+@gpu_ray_gen
+fn rg_conflicting(scene: gpu.Tlas, mut image: []f32) {
+    let mut s = Shade { color: vec3(0.0, 0.0, 0.0), shadowed: false };
+    gpu.trace_ray(scene, RAY, mut s, .{ flags: .{ force_opaque: true, cull_opaque: true, .. }, .. }); //~ E1012
+    gpu.trace_ray(scene, RAY, mut s, .{ flags: .{ cull_back_facing: true, cull_front_facing: true, .. }, .. }); //~ E1012
+    gpu.trace_ray(scene, RAY, mut s, .{ flags: .{ skip_triangles: true, skip_aabbs: true, .. }, .. }); //~ E1012
+    image[gpu.linear_id(@launch_id, @launch_size) as usize] = s.color.x;
+}

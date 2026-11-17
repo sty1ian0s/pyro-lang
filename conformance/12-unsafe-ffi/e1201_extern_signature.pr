@@ -1,0 +1,19 @@
+//@ expected-fail: T097
+// §12.5, §12.6: `extern` parameters and results must be C-compatible. `str`, slices,
+// containers, `Option`, payload enums, non-`@c_layout` structs and bare arrays are not.
+
+use std.c.{c_int};
+
+pub struct Point { x: f32, y: f32 }
+
+pub enum Shape { circle(f32), square(f32) }
+
+extern "C" {
+    pub fn puts_str(s: str) -> c_int; //~ E1201
+    pub fn sum_slice(xs: []i32) -> i64; //~ E1201
+    pub fn take_point(p: Point); //~ E1201
+    pub fn make_shape() -> Shape; //~ E1201
+    pub fn take_list(xs: List<u8>); //~ E1201
+    pub fn take_array(a: [4]i32); //~ E1201
+    pub fn take_option(p: Option<*u8>); //~ E1201
+}

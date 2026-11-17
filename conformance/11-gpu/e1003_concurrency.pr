@@ -1,0 +1,31 @@
+//@ expected-fail: T183
+// §11.1.3: no `nursery`, `spawn`, `parallel_for` or `launch` in stage-reachable code.
+
+@gpu_kernel(workgroup: 64)
+fn scale(mut xs: []f32, k: f32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] *= k; }
+}
+
+@gpu_kernel(workgroup: 64)
+fn nested_launch(mut xs: []f32) {
+    launch gpu scale(mut xs, 2.0); //~ E1003
+}
+
+@gpu_kernel(workgroup: 64)
+fn nested_parallel_for(xs: []f32, mut out: []f32) {
+    let i = @global_invocation_id.x as usize;
+    let total: f32 = 0.0;
+    parallel_for x in xs { //~ E1003
+        let y = x * 2.0;
+    }
+    if i < out.len() { out[i] = total; }
+}
+
+@gpu_kernel(workgroup: 64)
+fn nested_nursery(mut out: []u32) {
+    nursery { //~ E1003
+    }
+    let i = @global_invocation_id.x as usize;
+    if i < out.len() { out[i] = 1; }
+}

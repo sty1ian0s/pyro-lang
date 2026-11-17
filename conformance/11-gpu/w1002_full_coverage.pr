@@ -1,0 +1,24 @@
+//@ covers: W1002
+//@ expected-fail: T197
+// §11.4.3: every slot below the counts is written on every path: slot `i` by local
+// invocation `i`, with `inline for` when there are more slots than invocations.
+
+use std.gpu;
+
+pub struct VsOut { @position clip: vec4<f32> }
+pub struct Grid { nv: u32, np: u32 }
+
+@gpu_mesh(workgroup: 64, max_vertices: 64, max_primitives: 124)
+fn ms_runtime_counts(mut out: gpu.MeshOut<VsOut, void, 64, 124>, g: Grid) {
+    out.set_counts(g.nv, g.np);
+    let t = @local_invocation_id.x;
+    if t < g.nv {
+        out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) });
+    }
+    inline for k in 0..2 {
+        let p = t + 64 * k;
+        if p < g.np {
+            out.triangle(p, vec3(0, 1, 2));
+        }
+    }
+}

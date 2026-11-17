@@ -1,0 +1,42 @@
+//@ covers: E1010
+//@ expected-fail: T197
+// §11.4.3: `MeshOut` arguments equal the attribute values, `@task_payload` appears only
+// with a task stage, and output methods match the pipeline topology.
+
+use std.gpu;
+
+pub struct VsOut { @position clip: vec4<f32> }
+pub struct Prim { material: u32 }
+pub struct Payload { ids: [32]u32 }
+
+@gpu_task(workgroup: 32)
+fn ts_emit(mut payload: Payload, groups: u32) -> vec3<u32> {
+    payload.ids[@local_invocation_id.x as usize] = @global_invocation_id.x;
+    vec3(groups, 1, 1)
+}
+
+@gpu_mesh(workgroup: 32, max_vertices: 3, max_primitives: 1)
+fn ms_from_task(mut out: gpu.MeshOut<VsOut, Prim, 3, 1>, @task_payload payload: Payload) {
+    out.set_counts(3, 1);
+    let t = @local_invocation_id.x;
+    let x = payload.ids[@workgroup_id.x as usize] as f32;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(x, t as f32, 0.0, 1.0) }); }
+    if t < 1 {
+        out.triangle(t, vec3(0, 1, 2));
+        out.primitive(t, Prim { material: 7 });
+    }
+}
+
+@gpu_mesh(workgroup: 32, max_vertices: 2, max_primitives: 1)
+fn ms_line(mut out: gpu.MeshOut<VsOut, void, 2, 1>) {
+    out.set_counts(2, 1);
+    let t = @local_invocation_id.x;
+    if t < 2 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < 1 { out.line(t, vec2(0, 1)); }
+}
+
+@gpu_fragment
+fn fs_white(i: VsOut) -> vec4<f32> { vec4(1.0, 1.0, 1.0, 1.0) }
+
+const Culled = gpu.RenderPipeline(.{ task: ts_emit, mesh: ms_from_task, fragment: fs_white, color: [.{ format: .bgra8_srgb, .. }], .. });
+const Lines = gpu.RenderPipeline(.{ mesh: ms_line, fragment: fs_white, topology: .line_list, color: [.{ format: .bgra8_srgb, .. }], .. });

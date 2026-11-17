@@ -1,0 +1,16 @@
+//@ expected-fail: T096
+// §12.9: the volatile element type must be an integer of storage size 1, 2, 4 or 8.
+
+pub struct Pair { lo: u32, hi: u32 }
+
+const REGS: usize = 0x4000_0000;
+
+pub fn poke_bad() -> f32 {
+    unsafe {
+        @volatile_write(@ptr_from_int(bool, REGS), true); //~ E1205
+        @volatile_write(@ptr_from_int(Pair, REGS + 8), Pair { lo: 1, hi: 2 }); //~ E1205
+        let words = @volatile_read(@ptr_from_int([2]u32, REGS + 16)); //~ E1205
+        let f = @volatile_read(@ptr_from_int(f32, REGS + 24)); //~ E1205
+        f + (words[0] as f32)
+    }
+}

@@ -1,0 +1,32 @@
+//@ covers: E1003
+//@ expected-fail: T183
+// §11.1.3, §11.1.4: ordinary non-recursive helpers, loops, fixed arrays, workgroup
+// variables and barriers are allowed in stage-reachable code.
+
+pub struct Coeffs { c: [4]f32 }
+
+fn smooth(a: f32, b: f32, c: f32) -> f32 { (a + b + c) / 3.0 }
+
+fn horner(cs: [4]f32, x: f32) -> f32 {
+    let mut acc: f32 = 0.0;
+    for k in 0..4 { acc = acc * x + cs[3 - k]; }
+    acc
+}
+
+@gpu_kernel(workgroup: 256)
+fn blur(mut out: []f32, xs: []f32) {
+    @workgroup let mut tile: [256]f32 = [0.0; 256];
+    let i = @global_invocation_id.x as usize;
+    let l = @local_invocation_id.x as usize;
+    tile[l] = if i < xs.len() { xs[i] } else { 0.0 };
+    @workgroup_barrier();
+    let left = tile[(l + 255) % 256];
+    let right = tile[(l + 1) % 256];
+    if i < out.len() { out[i] = smooth(left, tile[l], right); }
+}
+
+@gpu_kernel(workgroup: 64)
+fn poly(mut xs: []f32, cs: Coeffs) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] = horner(cs.c, xs[i]); }
+}

@@ -1,0 +1,33 @@
+//@ expected-fail: T198
+// §11.5.2: ray-pipeline checks, each reported at the pipeline declaration: a stage in
+// the wrong role, miss and hit stages with different payload types, and a triangle hit
+// group whose attribute type is not `gpu.Barycentrics`.
+
+use std.gpu;
+
+pub struct Shade { color: vec3<f32>, shadowed: bool }
+pub struct Other { hit: bool }
+pub struct SphereAttr { normal: vec3<f32> }
+
+@gpu_ray_gen
+fn rg_camera(scene: gpu.Tlas, mut image: []vec4<f32>) {
+    let mut s = Shade { color: vec3(0.0, 0.0, 0.0), shadowed: false };
+    gpu.trace_ray(scene, .{ origin: vec3(0.0, 0.0, 0.0), t_min: 0.0, direction: vec3(0.0, 0.0, 1.0), t_max: 100.0 }, mut s);
+    image[gpu.linear_id(@launch_id, @launch_size) as usize] = vec4(s.color.x, s.color.y, s.color.z, 1.0);
+}
+
+@gpu_miss
+fn miss_sky(mut s: Shade, ray: gpu.RayInfo) { s.color = vec3(0.5, 0.7, 1.0); }
+
+@gpu_miss
+fn miss_other(mut s: Other, ray: gpu.RayInfo) { s.hit = false; }
+
+@gpu_closest_hit
+fn hit_flat(mut s: Shade, hit: gpu.Hit<gpu.Barycentrics>) { s.color = vec3(1.0, 1.0, 1.0); }
+
+@gpu_closest_hit
+fn hit_sphere(mut s: Shade, hit: gpu.Hit<SphereAttr>) { s.color = hit.attributes.normal; }
+
+const RoleSwap = gpu.RayPipeline(.{ ray_gen: rg_camera, miss: [hit_flat], .. }); //~ E1009
+const MixedPayload = gpu.RayPipeline(.{ ray_gen: rg_camera, miss: [miss_sky, miss_other], hit_groups: [.{ closest: hit_flat, .. }], .. }); //~ E1009
+const TriangleNotBarycentric = gpu.RayPipeline(.{ ray_gen: rg_camera, miss: [miss_sky], hit_groups: [.{ closest: hit_sphere, .. }], .. }); //~ E1009

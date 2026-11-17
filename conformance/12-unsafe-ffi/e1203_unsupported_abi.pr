@@ -1,0 +1,14 @@
+//@ expected-fail: T097
+// §12.6: `"C"` is the only ABI string in this edition; the match is exact.
+
+extern "C++" { //~ E1203
+    pub fn first(x: i32) -> i32;
+}
+
+extern "system" { //~ E1203
+    pub fn second(x: i32) -> i32;
+}
+
+extern "c" { //~ E1203
+    pub fn third(x: i32) -> i32;
+}

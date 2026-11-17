@@ -1,0 +1,40 @@
+//@ expected-fail: T177
+// §11.1.7: a builtin variable or builtin function used outside the stages listed for
+// it is an error, including in a function that is not a stage.
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+
+@gpu_kernel(workgroup: 64)
+fn kernel_reads_vertex_index(mut xs: []u32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] = @vertex_index; } //~ E1005
+}
+
+@gpu_kernel(workgroup: 64)
+fn kernel_reads_launch_id(mut xs: []u32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] = @launch_id.x; } //~ E1005
+}
+
+@gpu_vertex
+fn vs_discards(v: Vertex) -> VsOut {
+    if v.pos.x > 1.0 { @discard(); } //~ E1005
+    VsOut { clip: vec4(v.pos.x, v.pos.y, v.pos.z, 1.0), uv: v.uv }
+}
+
+@gpu_vertex
+fn vs_barrier(v: Vertex) -> VsOut {
+    @workgroup_barrier(); //~ E1005
+    VsOut { clip: vec4(v.pos.x, v.pos.y, v.pos.z, 1.0), uv: v.uv }
+}
+
+@gpu_fragment
+fn fs_reads_invocation(i: VsOut) -> vec4<f32> {
+    let g = @global_invocation_id.x as f32; //~ E1005
+    vec4(g, i.uv.x, i.uv.y, 1.0)
+}
+
+fn cpu_side() -> u32 {
+    @frag_coord.x as u32 //~ E1005
+}

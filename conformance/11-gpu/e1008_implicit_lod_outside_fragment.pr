@@ -1,0 +1,20 @@
+//@ expected-fail: T200
+// §11.3.2: `sample` and `sample_bias` use an implicit level of detail and are allowed
+// only in fragment stages.
+
+use std.gpu;
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+
+@gpu_kernel(workgroup: (8, 8, 1))
+fn sample_in_compute(tex: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler, mut out: gpu.StorageTexture2D<vec4<f32>>) {
+    let c = tex.sample(smp, vec2(0.5, 0.5)); //~ E1008
+    out.store(@global_invocation_id.xy, c);
+}
+
+@gpu_vertex
+fn vs_sample_bias(v: Vertex, tex: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler) -> VsOut {
+    let h = tex.sample_bias(smp, v.uv, 0.5).x; //~ E1008
+    VsOut { clip: vec4(v.pos.x, v.pos.y + h, v.pos.z, 1.0), uv: v.uv }
+}

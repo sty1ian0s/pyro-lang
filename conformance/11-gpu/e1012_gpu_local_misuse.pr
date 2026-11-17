@@ -1,0 +1,20 @@
+//@ expected-fail: T183
+// §11.1.3: GPU-local types (`gpu.RayQuery`, `gpu.MeshOut`) cannot be stored in a
+// struct, returned or copied.
+
+use std.gpu;
+
+pub struct Holder { q: gpu.RayQuery } //~ E1012
+
+fn make_query(scene: gpu.Tlas, r: gpu.Ray) -> gpu.RayQuery { //~ E1012
+    .init(scene, r, .{ .. })
+}
+
+@gpu_kernel(workgroup: 64)
+fn copies_query(scene: gpu.Tlas, mut hits: []u32) {
+    let r: gpu.Ray = .{ origin: vec3(0.0, 0.0, 0.0), t_min: 0.0, direction: vec3(0.0, 0.0, 1.0), t_max: 10.0 };
+    let q: gpu.RayQuery = .init(scene, r, .{ .. });
+    let q2 = q; //~ E1012
+    let i = @global_invocation_id.x as usize;
+    if i < hits.len() { hits[i] = if q2.committed().is_some() { 1 } else { 0 }; }
+}

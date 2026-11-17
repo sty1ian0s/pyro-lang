@@ -1,0 +1,38 @@
+//@ covers: E1008
+//@ expected-fail: T179
+// §11.1.2, §11.3, §11.5.3: graphics and ray-tracing stages take their stage-specific
+// parameters plus uniform, storage, texture/sampler and `Tlas` parameters.
+// Implicit-LOD sampling is used in a fragment stage, explicit-LOD sampling elsewhere.
+
+use std.gpu;
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct Instance { offset: vec3<f32>, scale: f32 }
+pub struct Camera { view_proj: [4]vec4<f32> }
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+pub struct Shade { color: vec3<f32>, shadowed: bool }
+
+@gpu_vertex
+fn vs_inst(v: Vertex, @instance inst: Instance, cam: Camera, height: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler) -> VsOut {
+    let h = height.sample_level(smp, v.uv, 0.0).x;
+    let p = v.pos * inst.scale + inst.offset;
+    let m = cam.view_proj;
+    VsOut { clip: m[0] * p.x + m[1] * (p.y + h) + m[2] * p.z + m[3], uv: v.uv }
+}
+
+@gpu_fragment
+fn fs_tex(i: VsOut, albedo: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler, tint: vec4<f32>) -> vec4<f32> {
+    albedo.sample(smp, i.uv) * tint + albedo.sample_bias(smp, i.uv, 0.5)
+}
+
+@gpu_miss
+fn miss_sky(mut s: Shade, ray: gpu.RayInfo, sky: vec3<f32>) {
+    s.color = sky * (ray.direction.y * 0.5 + 0.5);
+}
+
+@gpu_ray_gen
+fn rg_camera(scene: gpu.Tlas, mut image: []vec4<f32>, origin: vec3<f32>) {
+    let mut s = Shade { color: vec3(0.0, 0.0, 0.0), shadowed: false };
+    gpu.trace_ray(scene, .{ origin: origin, t_min: 0.0, direction: vec3(0.0, 0.0, 1.0), t_max: 100.0 }, mut s);
+    image[gpu.linear_id(@launch_id, @launch_size) as usize] = vec4(s.color.x, s.color.y, s.color.z, 1.0);
+}

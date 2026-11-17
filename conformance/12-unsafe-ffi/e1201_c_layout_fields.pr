@@ -1,0 +1,11 @@
+//@ expected-fail: T045
+// §4.11.3, §12.5: a `@c_layout` struct may contain only fields with a defined C
+// representation.
+
+@c_layout
+pub struct Header {
+    tag: u32,
+    name: str, //~ E1201
+    items: []u8, //~ E1201
+    counts: [4]u16,
+}

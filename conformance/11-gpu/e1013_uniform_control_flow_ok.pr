@@ -1,0 +1,38 @@
+//@ covers: E1013
+//@ expected-fail: T180
+// §11.1.5: barriers and `set_counts` as top-level statements, including inside plain
+// blocks, `inline for` and `comptime if`; loops wholly between barriers; `return` only
+// after the last barrier.
+
+use std.gpu;
+
+pub struct VsOut { @position clip: vec4<f32> }
+
+@gpu_kernel(workgroup: 64)
+fn phases(mut xs: []f32) {
+    @workgroup let mut tile: [64]f32 = [0.0; 64];
+    let i = @global_invocation_id.x as usize;
+    let l = @local_invocation_id.x as usize;
+    tile[l] = if i < xs.len() { xs[i] } else { 0.0 };
+    {
+        @workgroup_barrier();
+    }
+    let mut acc: f32 = 0.0;
+    for k in 0..64 { acc += tile[k]; }
+    inline for _ in 0..2 {
+        @workgroup_barrier();
+    }
+    comptime if true {
+        @workgroup_barrier();
+    }
+    if i >= xs.len() { return; }
+    xs[i] = acc;
+}
+
+@gpu_mesh(workgroup: 64, max_vertices: 3, max_primitives: 1)
+fn ms_triangle(mut out: gpu.MeshOut<VsOut, void, 3, 1>) {
+    out.set_counts(3, 1);
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < 1 { out.triangle(t, vec3(0, 1, 2)); }
+}

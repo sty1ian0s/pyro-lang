@@ -1,0 +1,19 @@
+//@ covers: E1204
+//@ expected-fail: T099
+// §12.6: an `@export` function converts to a function-pointer parameter type declared
+// in an `extern` block.
+
+use std.c.{c_int};
+
+extern "C" {
+    pub fn qsort(base: *u8, n: usize, size: usize, cmp: fn(*const u8, *const u8) -> c_int);
+}
+
+@export("pyro_cmp_bytes")
+fn by_byte(a: *const u8, b: *const u8) -> c_int {
+    unsafe { ((*a) as c_int) - ((*b) as c_int) }
+}
+
+pub fn sort_bytes(mut xs: []u8) {
+    unsafe { qsort(xs.ptr(), xs.len(), 1, by_byte); }
+}

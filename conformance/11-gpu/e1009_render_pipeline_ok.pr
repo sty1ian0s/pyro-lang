@@ -1,0 +1,49 @@
+//@ covers: E1009
+//@ expected-fail: T190
+// §11.1.2, §11.3, §11.6.1: matching stage roles, a fragment input equal to the
+// varyings type, one color target for a `vec4<f32>` result, a depth format for depth
+// testing, and same-name parameters of equal type unified across stages.
+
+use std.gpu;
+use std.math;
+use std.simd;
+
+@soa
+pub struct MeshVertex { pos: vec3<f32>, normal: vec3<f32>, uv: vec2<f32> }
+pub struct Camera { view_proj: [4]vec4<f32>, eye: vec3<f32> }
+pub struct Material { light_dir: vec3<f32>, ambient: f32 }
+
+pub struct VsOut {
+    @position clip: vec4<f32>,
+    normal: vec3<f32>,
+    uv: vec2<f32>,
+}
+
+fn mat4_mul_vec(m: [4]vec4<f32>, v: vec4<f32>) -> vec4<f32> {
+    m[0] * v.x + m[1] * v.y + m[2] * v.z + m[3] * v.w
+}
+
+@gpu_vertex
+fn vs_mesh(v: MeshVertex, cam: Camera) -> VsOut {
+    VsOut { clip: mat4_mul_vec(cam.view_proj, vec4(v.pos.x, v.pos.y, v.pos.z, 1.0)), normal: v.normal, uv: v.uv }
+}
+
+@gpu_fragment
+fn fs_lit(i: VsOut, cam: Camera, mat: Material, albedo: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler) -> vec4<f32> {
+    let base = albedo.sample(smp, i.uv);
+    let n_dot_l = math.max(simd.dot(simd.normalize(i.normal), mat.light_dir), 0.0);
+    let fog = simd.dot(cam.eye, cam.eye) * 0.0001;
+    base * (mat.ambient + n_dot_l) - vec4(fog, fog, fog, 0.0)
+}
+
+const LitPipeline = gpu.RenderPipeline(.{
+    vertex: vs_mesh,
+    fragment: fs_lit,
+    topology: .triangle_list,
+    cull: .back,
+    depth: .{ format: .depth32f, compare: .less, write: true },
+    color: [.{ format: .bgra8_srgb, blend: .alpha, .. }],
+    ..
+});
+
+const DepthOnly = gpu.RenderPipeline(.{ vertex: vs_mesh, depth: .{ format: .depth32f, compare: .less, write: true }, .. });

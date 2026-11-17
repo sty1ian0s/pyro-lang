@@ -1,0 +1,37 @@
+//@ expected-fail: T197
+// §11.4.3: with a task stage, the mesh stage needs exactly one `@task_payload`
+// parameter of the task stage's payload type. Reported at the pipeline declaration.
+
+use std.gpu;
+
+pub struct VsOut { @position clip: vec4<f32> }
+pub struct Payload { ids: [32]u32 }
+pub struct OtherPayload { count: u32 }
+
+@gpu_task(workgroup: 32)
+fn ts_emit(mut payload: Payload, groups: u32) -> vec3<u32> {
+    payload.ids[@local_invocation_id.x as usize] = @global_invocation_id.x;
+    vec3(groups, 1, 1)
+}
+
+@gpu_mesh(workgroup: 32, max_vertices: 3, max_primitives: 1)
+fn ms_other_payload(mut out: gpu.MeshOut<VsOut, void, 3, 1>, @task_payload payload: OtherPayload) {
+    out.set_counts(3, 1);
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(payload.count as f32, t as f32, 0.0, 1.0) }); }
+    if t < 1 { out.triangle(t, vec3(0, 1, 2)); }
+}
+
+@gpu_mesh(workgroup: 32, max_vertices: 3, max_primitives: 1)
+fn ms_no_payload(mut out: gpu.MeshOut<VsOut, void, 3, 1>) {
+    out.set_counts(3, 1);
+    let t = @local_invocation_id.x;
+    if t < 3 { out.vertex(t, VsOut { clip: vec4(t as f32, 0.0, 0.0, 1.0) }); }
+    if t < 1 { out.triangle(t, vec3(0, 1, 2)); }
+}
+
+@gpu_fragment
+fn fs_white(i: VsOut) -> vec4<f32> { vec4(1.0, 1.0, 1.0, 1.0) }
+
+const WrongPayload = gpu.RenderPipeline(.{ task: ts_emit, mesh: ms_other_payload, fragment: fs_white, color: [.{ format: .bgra8_srgb, .. }], .. }); //~ E1009
+const MissingPayload = gpu.RenderPipeline(.{ task: ts_emit, mesh: ms_no_payload, fragment: fs_white, color: [.{ format: .bgra8_srgb, .. }], .. }); //~ E1009

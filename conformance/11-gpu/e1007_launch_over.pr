@@ -1,0 +1,25 @@
+//@ covers: E1007
+//@ expected-fail: T202
+// §11.2.3: `launch` takes its size from `over`, or from the first slice argument when
+// `over` is omitted.
+
+@gpu_kernel(workgroup: 64)
+fn fill(mut xs: []f32, v: f32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] = v; }
+}
+
+@gpu_kernel(workgroup: 64)
+fn idle(k: f32) {}
+
+@gpu_kernel(workgroup: (8, 8, 1))
+fn idle_2d(k: f32) {}
+
+pub fn main() {
+    let mut xs: [256]f32 = [0.0; 256];
+    launch gpu fill(mut xs[..], 1.0);
+    launch cpu fill(mut xs[..], 2.0);
+    launch gpu fill(mut xs[..], 3.0) over 16;
+    launch gpu idle(1.0) over 256;
+    launch cpu idle_2d(1.0) over (64, 64, 1);
+}

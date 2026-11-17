@@ -1,0 +1,48 @@
+//@ expected-fail: T180
+// §11.1.5: a barrier inside `if` or a loop body or in a helper function, a `return`
+// before the last barrier, and any `return` in a task stage.
+
+pub struct Payload { n: u32 }
+
+@gpu_kernel(workgroup: 64)
+fn barrier_in_if(mut xs: []f32) {
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() {
+        @workgroup_barrier(); //~ E1013
+        xs[i] = 0.0;
+    }
+}
+
+@gpu_kernel(workgroup: 64)
+fn barrier_in_loop(mut xs: []f32) {
+    for _ in 0..4 {
+        @workgroup_barrier(); //~ E1013
+    }
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] = 1.0; }
+}
+
+@gpu_kernel(workgroup: 64)
+fn return_before_barrier(mut xs: []f32) {
+    let i = @global_invocation_id.x as usize;
+    if i >= xs.len() { return; } //~ E1013
+    @workgroup_barrier();
+    xs[i] = 1.0;
+}
+
+fn sync_all() {
+    @workgroup_barrier(); //~ E1013
+}
+
+@gpu_kernel(workgroup: 64)
+fn barrier_in_helper(mut xs: []f32) {
+    sync_all();
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() { xs[i] = 2.0; }
+}
+
+@gpu_task(workgroup: 32)
+fn ts_returns(mut payload: Payload, n: u32) -> vec3<u32> {
+    if n == 0 { return vec3(0, 0, 0); } //~ E1013
+    vec3(n, 1, 1)
+}

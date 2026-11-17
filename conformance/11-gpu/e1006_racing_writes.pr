@@ -1,0 +1,63 @@
+//@ expected-fail: T181
+// §11.1.6: non-atomic storage writes at an index not tied to the invocation id, any
+// vertex-stage write, non-atomic fragment writes, workgroup accesses at a foreign index
+// before a barrier, and other operations on a `fetch_add` slot counter.
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+
+@gpu_kernel(workgroup: 64)
+fn constant_index(mut xs: []u32) {
+    xs[0] = @global_invocation_id.x; //~ E1006
+}
+
+@gpu_kernel(workgroup: 64)
+fn data_dependent_index(mut xs: []u32, idx: []u32) {
+    let i = @global_invocation_id.x as usize;
+    if i < idx.len() { xs[idx[i] as usize] = 1; } //~ E1006
+}
+
+@gpu_kernel(workgroup: 64)
+fn workgroup_constant_index(mut out: []f32) {
+    @workgroup let mut tile: [64]f32 = [0.0; 64];
+    tile[0] = 1.0; //~ E1006
+    @workgroup_barrier();
+    let i = @global_invocation_id.x as usize;
+    if i < out.len() { out[i] = tile[@local_invocation_id.x as usize]; }
+}
+
+@gpu_kernel(workgroup: 64)
+fn read_neighbour_without_barrier(mut out: []f32) {
+    @workgroup let mut tile: [64]f32 = [0.0; 64];
+    let l = @local_invocation_id.x as usize;
+    tile[l] = 1.0;
+    let right = tile[(l + 1) % 64]; //~ E1006
+    let i = @global_invocation_id.x as usize;
+    if i < out.len() { out[i] = right; }
+}
+
+@gpu_kernel(workgroup: 64)
+fn mixed_counter_ops(xs: []u32, mut out: []u32) {
+    @workgroup let mut kept: [64]u32 = [0; 64];
+    @workgroup let mut n: Atomic<u32> = .init(0);
+    let i = @global_invocation_id.x as usize;
+    if i < xs.len() && xs[i] != 0 {
+        let slot = n.fetch_add(1);
+        kept[slot as usize] = xs[i];
+    }
+    n.store(0); //~ E1006
+    @workgroup_barrier();
+    if i < out.len() { out[i] = kept[@local_invocation_id.x as usize]; }
+}
+
+@gpu_vertex
+fn vs_writes(v: Vertex, mut seen: []u32) -> VsOut {
+    seen[@vertex_index as usize] = 1; //~ E1006
+    VsOut { clip: vec4(v.pos.x, v.pos.y, v.pos.z, 1.0), uv: v.uv }
+}
+
+@gpu_fragment
+fn fs_writes(i: VsOut, mut hits: []u32) -> vec4<f32> {
+    hits[0] = 1; //~ E1006
+    vec4(i.uv.x, i.uv.y, 0.0, 1.0)
+}

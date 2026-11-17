@@ -1,0 +1,23 @@
+//@ expected-fail: T203
+// §11.1.2, §11.6.3: `uniforms:` lists the uniform-class parameters in order of first
+// appearance (`a`, then `n`). Swapping them does not match the pipeline.
+
+use std.gpu;
+
+@gpu_kernel(workgroup: 64)
+fn axpy(mut ys: []f32, xs: []f32, a: f32, n: u32) {
+    let i = @global_invocation_id.x as usize;
+    if i < ys.len() && i < (n as usize) { ys[i] += a * xs[i]; }
+}
+
+const Axpy = gpu.ComputePipeline(axpy);
+
+fn run(mut dev: gpu.Device, ys: gpu.Buffer<f32>, xs: gpu.Buffer<f32>) -> Result<void, gpu.GpuError> {
+    let pipe: Axpy = .init(mut dev)?;
+    let a: f32 = 2.0;
+    let n: u32 = 64;
+    let mut enc = dev.encoder();
+    enc.dispatch(pipe, uniforms: .{ n, a }, bindings: .{ ys, xs }, groups: vec3(1, 1, 1)); //~ E1009
+    enc.submit();
+    .ok()
+}

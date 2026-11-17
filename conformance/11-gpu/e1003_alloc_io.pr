@@ -1,0 +1,29 @@
+//@ expected-fail: T183
+// §11.1.3: stage-reachable code may not allocate, use containers or do I/O. A container
+// is reported once, where it is created; a violation in a helper is reported in the
+// helper.
+
+@gpu_kernel(workgroup: 64)
+fn logs(xs: []f32) {
+    print("{}\n", xs[0]); //~ E1003
+}
+
+@gpu_kernel(workgroup: 64)
+fn builds_list(mut out: []u32) {
+    let mut tmp: List<u32> = .init(); //~ E1003
+    defer tmp.deinit();
+    let i = @global_invocation_id.x as usize;
+    if i < out.len() { out[i] = 0; }
+}
+
+fn scratch(n: u32) -> u32 {
+    let mut arena: Arena = .init(); //~ E1003
+    defer arena.deinit();
+    n + 1
+}
+
+@gpu_kernel(workgroup: 64)
+fn calls_allocating_helper(mut out: []u32) {
+    let i = @global_invocation_id.x as usize;
+    if i < out.len() { out[i] = scratch(out[i]); }
+}

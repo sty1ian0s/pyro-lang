@@ -1,0 +1,7 @@
+[package]
+name = "e1004_vulkan_and_webgpu"
+version = "0.1.0"
+edition = "2026"
+
+[gpu]
+backends = ["vulkan", "webgpu"]
