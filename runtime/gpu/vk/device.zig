@@ -30,6 +30,8 @@ pub var trap_sites: []const TrapSite = &.{};
 /// winner stores `kind` (a `TrapKind` discriminant) and `site`.
 pub const TrapRecord = extern struct { state: u32, kind: u32, site: u32 };
 
+/// One Vulkan device with a single compute queue whose submissions are ordered
+/// by one timeline semaphore. Must not move while `Buffer`s reference it.
 pub const Device = struct {
     gpa: std.mem.Allocator,
     lib: std.DynLib,
@@ -70,8 +72,10 @@ pub const Device = struct {
         const app: vk.ApplicationInfo = .{ .p_engine_name = "pyro", .api_version = vk.api_version_1_2 };
         var instance: vk.Instance = undefined;
         try initResult(global.vkCreateInstance(&.{ .p_application_info = &app }, null, &instance));
+        // Fetched alone first so the instance is destroyed even if loading `InstanceFns` fails.
+        const destroy_instance: @FieldType(vk.InstanceFns, "vkDestroyInstance") = @ptrCast(gipa(instance, "vkDestroyInstance") orelse return error.NoDevice);
+        errdefer destroy_instance(instance, null);
         const ifns = vk.load(vk.InstanceFns, instance, gipa) orelse return error.NoDevice;
-        errdefer ifns.vkDestroyInstance(instance, null);
 
         const physical, const family = try pickPhysical(ifns, instance);
 
@@ -84,11 +88,9 @@ pub const Device = struct {
             .queue_create_info_count = 1,
             .p_queue_create_infos = (&queue_info)[0..1],
         }, null, &handle));
-        const fns = vk.load(vk.DeviceFns, handle, ifns.vkGetDeviceProcAddr) orelse {
-            // Cannot use `fns` to destroy the device it failed to load for.
-            return error.Unsupported;
-        };
-        errdefer fns.vkDestroyDevice(handle, null);
+        // Through `ifns`: the device must be destroyed even if loading `DeviceFns` fails.
+        errdefer ifns.vkDestroyDevice(handle, null);
+        const fns = vk.load(vk.DeviceFns, handle, ifns.vkGetDeviceProcAddr) orelse return error.Unsupported;
 
         var queue: vk.Queue = undefined;
         fns.vkGetDeviceQueue(handle, family, 0, &queue);
@@ -305,6 +307,8 @@ pub const Buffer = struct {
     /// Timeline value of the latest submission that references this buffer.
     last_use: u64 = 0,
 
+    /// Creates a buffer of `size` bytes (0 is allowed) in device-local memory,
+    /// falling back to any memory type when no device-local type fits.
     pub fn init(dev: *Device, size: u64) Error!Buffer {
         const usage = vk.buffer_usage_storage_buffer_bit | vk.buffer_usage_transfer_src_bit | vk.buffer_usage_transfer_dst_bit;
         const mem = dev.allocate(size, usage, vk.memory_property_device_local_bit) catch |e| switch (e) {
@@ -357,7 +361,8 @@ pub const Buffer = struct {
     }
 };
 
-/// A buffer and the memory bound to it.
+/// A buffer and the memory bound to it; `Device.allocate` creates it and
+/// `Device.free` destroys both. Each allocation owns its `VkDeviceMemory`.
 pub const Allocation = struct { buffer: vk.Buffer, memory: vk.DeviceMemory };
 
 /// Picks the first Vulkan 1.2+ physical device with a compute queue family.
@@ -413,9 +418,10 @@ fn raiseGpuTrap(kind: u32, site: u32) noreturn {
 const testing = std.testing;
 
 /// The test device, or a skip when this host has no Vulkan loader or ICD.
+/// With `PYRO_REQUIRE_GPU` set (CI with lavapipe), a missing device fails instead.
 fn testDevice() !Device {
     return Device.init(testing.allocator) catch |e| switch (e) {
-        error.NoDevice => error.SkipZigTest,
+        error.NoDevice => if (testing.environ.containsUnempty(testing.allocator, "PYRO_REQUIRE_GPU") catch false) e else error.SkipZigTest,
         else => e,
     };
 }

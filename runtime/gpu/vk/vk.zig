@@ -57,6 +57,7 @@ pub const StructureType = enum(i32) {
     semaphore_wait_info = 1000207004,
 };
 
+/// Packs a Vulkan API version (`VK_MAKE_API_VERSION` with variant 0).
 pub fn makeApiVersion(major: u32, minor: u32, patch: u32) u32 {
     return major << 22 | minor << 12 | patch;
 }
@@ -282,6 +283,9 @@ pub const InstanceFns = struct {
     vkGetPhysicalDeviceMemoryProperties: *const fn (PhysicalDevice, *PhysicalDeviceMemoryProperties) callconv(.c) void,
     vkCreateDevice: *const fn (PhysicalDevice, *const DeviceCreateInfo, Alloc, *Device) callconv(.c) Result,
     vkGetDeviceProcAddr: *const fn (Device, [*:0]const u8) callconv(.c) ?VoidFn,
+    /// Device-level, but loaded here so a device can be destroyed even when
+    /// loading its `DeviceFns` fails.
+    vkDestroyDevice: *const fn (Device, Alloc) callconv(.c) void,
 };
 
 pub const DeviceFns = struct {
