@@ -59,6 +59,7 @@ pub const CpuFeature = enum {
     bmi,
     bmi2,
     avx512f,
+    avx512bw,
     // aarch64
     neon,
     fullfp16,
@@ -79,7 +80,7 @@ pub const CpuFeature = enum {
     /// The arch this feature belongs to.
     pub fn arch(feature: CpuFeature) Arch {
         return switch (feature) {
-            .sse2, .sse3, .ssse3, .sse4_1, .sse4_2, .popcnt, .avx, .avx2, .fma, .bmi, .bmi2, .avx512f => .x86_64,
+            .sse2, .sse3, .ssse3, .sse4_1, .sse4_2, .popcnt, .avx, .avx2, .fma, .bmi, .bmi2, .avx512f, .avx512bw => .x86_64,
             .neon, .fullfp16, .dotprod, .sve, .sve2 => .aarch64,
             .m, .a, .f, .d, .c, .v => .riscv64,
             .simd128, .bulk_memory => .wasm32,
@@ -162,7 +163,8 @@ pub const Target = struct {
     /// `elem_bits` bits (pass 8 for `bool`). 1 when the target has no SIMD unit.
     pub fn vectorWidth(t: Target, elem_bits: u16, is_float: bool) usize {
         const reg_bits: u16 = switch (t.arch) {
-            .x86_64 => if (t.hasFeature(.avx512f))
+            // AVX-512F has no 8/16-bit integer ops; those need AVX512BW.
+            .x86_64 => if (t.hasFeature(.avx512f) and (is_float or elem_bits >= 32 or t.hasFeature(.avx512bw)))
                 512
             else if (t.hasFeature(.avx2) or (t.hasFeature(.avx) and is_float))
                 256 // AVX1 has 256-bit float ops only
@@ -254,10 +256,14 @@ pub fn host() ?Target {
         .freestanding => .freestanding,
         else => return null,
     };
-    const abi: Abi = if (os != .linux) .none else switch (builtin.abi) {
-        .gnu => .gnu,
-        .musl => .musl,
-        else => return null,
+    const abi: Abi = switch (os) {
+        .linux => switch (builtin.abi) {
+            .gnu => .gnu,
+            .musl => .musl,
+            else => return null,
+        },
+        .windows => if (builtin.abi == .msvc) .msvc else return null,
+        else => .none,
     };
     for (supported) |s| {
         if (s.arch == arch and s.os == os and s.abi == abi)
@@ -340,6 +346,9 @@ test "vector width table" {
     try std.testing.expectEqual(4, t.vectorWidth(32, false));
     t.features.insert(.avx512f);
     try std.testing.expectEqual(16, t.vectorWidth(32, true)); // §10.6.5 example
+    try std.testing.expectEqual(8, t.vectorWidth(64, false));
+    try std.testing.expectEqual(16, t.vectorWidth(8, false)); // no AVX512BW, no AVX2: SSE width
+    t.features.insert(.avx512bw);
     try std.testing.expectEqual(64, t.vectorWidth(8, false));
     try std.testing.expectEqual(4, (try parse("aarch64-macos")).vectorWidth(32, true));
     try std.testing.expectEqual(1, (try parse("wasm32-wasi")).vectorWidth(32, true));
@@ -354,4 +363,10 @@ test "host detection on linux x86_64" {
     try std.testing.expect(t.abi == .gnu or t.abi == .musl);
     try std.testing.expect(t.hasFeature(.sse2)); // x86-64 baseline
     try std.testing.expectEqual(64, t.pointerBits());
+}
+
+test "host maps to a support table row" {
+    // Guards the per-OS abi mapping (e.g. windows-msvc) on every host the table covers.
+    const t = host() orelse return error.SkipZigTest;
+    _ = try parse(t.triple());
 }
