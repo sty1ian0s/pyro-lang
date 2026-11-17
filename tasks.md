@@ -218,14 +218,14 @@ graph TD
 
 ## M1. Front end: source, lexer, parser, diagnostics, CLI shell
 
-- [ ] **T011** Source loading and SourceMap **[CRITICAL]**
+- [x] **T011** Source loading and SourceMap **[CRITICAL]**
   - Spec: §2.1, §2.1.1, §2.9, A.1, B.2
   - Deliverable: `stage0/src/source/`: load/mmap `.pr` into FileId table; strip BOM; E0103 (>2^32-1 bytes), E0101 (UTF-8), E0102 (lone CR); vectorized LF-offset array; offset -> (line, column in scalar values).
   - Acceptance: BOM ignored with correct offsets; E0101/E0102/E0103 at right offset; columns count scalars; CRLF = LF line numbers.
   - Size: M · Parallel: W02
   - Blocked by: T003
   - Blocks: T017, T018
-- [ ] **T012** Lexer core: identifiers, builtins, punctuators, comments **[CRITICAL]**
+- [x] **T012** Lexer core: identifiers, builtins, punctuators, comments **[CRITICAL]**
   - Spec: §2.1-§2.5, §2.7, §2.8
   - Deliverable: `stage0/src/lex/lexer.zig`: maximal munch; ASCII idents, E0105, E0106, `r#name` (reject `r#_`), `_`; `@ident`, lone `@` E0110; `//`, `///`, `//!`, `////+`; E0104 outside comments and `#` `$` backtick.
   - Acceptance: `<<=` `..=` `.{` munching; `////x` not doc; `@ size_of` E0110; NUL ok in comment, E0104 in code; `r#type` is IDENT.
@@ -233,14 +233,14 @@ graph TD
   - Blocked by: T003, T005
   - Blocks: T018
   - Conflicts: Separate file from literal lexer; integrate via `tok` scanner contract.
-- [ ] **T013** Lexer literals: numbers, chars, strings, multi-line strings **[CRITICAL]**
+- [x] **T013** Lexer literals: numbers, chars, strings, multi-line strings **[CRITICAL]**
   - Spec: §2.6.1-§2.6.6
   - Deliverable: `stage0/src/lex/literals.zig`: int bases/suffixes, `_` rules E0107; trailing ident char / u64 magnitude E0108; tuple-field digits; floats; chars; strings, raw strings, escapes E0109; `\\` ML_STRING_LINE; pure decode helpers for the parser.
   - Acceptance: `t.0.1` -> t . 0 . 1; `1__000`, `1_` E0107; `1.`/`.5` not floats; `\u{D800}` E0109; ML line verbatim.
   - Size: M · Parallel: W02
   - Blocked by: T003, T005
   - Blocks: T018
-- [ ] **T014** AST SoA data structure and dumper **[GATE]**
+- [x] **T014** AST SoA data structure and dumper **[GATE]**
   - Spec: B.3, §3.2-§3.8
   - Deliverable: `stage0/src/ast/`: `Node{kind:u16, main_token, a, b}` + `extra` lists; NodeKind for every chapter-3 production; typed accessors; S-expression dumper (`--dump-ast`).
   - Acceptance: Construct/dump each node kind; node <= 16 bytes asserted; stable dump.
@@ -248,14 +248,14 @@ graph TD
   - Blocked by: T005
   - Blocks: T019, T032, T035
   - Conflicts: NodeKind frozen before parser sub-tasks start; additions via one owner.
-- [ ] **T015** Conformance cases: 02-lexical
+- [x] **T015** Conformance cases: 02-lexical
   - Spec: §2, A.3 Lexical
   - Deliverable: `conformance/02-lexical/`: pass+fail per E0101-E0110, W0101; positives for BOM, CRLF, raw idents, contextual keywords, tuple fields, range vs float, ML/raw strings, doc comments, munching (binary-safe files).
   - Acceptance: Coverage shows each E01xx and W0101 with >=1 pass and >=1 fail; all pass against the lexer and item parser.
   - Size: S · Parallel: W02
   - Blocked by: T004
   - Blocks: T223
-- [ ] **T016** Conformance cases: 03-syntax
+- [x] **T016** Conformance cases: 03-syntax
   - Spec: §3, A.3 Syntax, W0201, E0501
   - Deliverable: `conformance/03-syntax/`: pass+fail for E0201-E0215, W0201, E0501; positives per production, precedence rows, struct-literal restriction, `>>` split, `as` target, block-expr termination; sema-dependent cases (E0207 resolved, E0211 types, E0212) tagged stop-after=check.
   - Acceptance: Coverage shows every E02xx, W0201, E0501 with pass and fail.
@@ -351,7 +351,7 @@ graph TD
 
 ## M2. Package config, module graph, name resolution, type foundations
 
-- [ ] **T029** pyro.toml manifest schema and validation **[GATE]**
+- [x] **T029** pyro.toml manifest schema and validation **[GATE]**
   - Spec: §13.1, §13.2, §13.2.1, §13.3, A.2
   - Deliverable: `stage0/src/pkg/manifest.zig`: [package] (name regex, version, edition, no_std...), [dependencies]/[dev-dependencies] (registry/git/path forms), [build], [gpu], [link], [env.*], [metadata], [workspace]; unknown keys E0909 (except env/metadata).
   - Acceptance: §13.2 sample loads; each bad key/missing field/bad name/bad semver -> E0909 or specific diagnostic at TOML span.
@@ -755,21 +755,21 @@ graph TD
 
 ## M6. P-IR, lowering, LLVM backend, unsafe/FFI, first light
 
-- [ ] **T084** P-IR verifier
+- [x] **T084** P-IR verifier
   - Spec: B.5.1, B.5.3
   - Deliverable: `stage0/src/pir/verify.zig`: SSA, dominance, block-param arity/types, operand types, terminators, reducibility.
   - Acceptance: Negative test per invariant; runs after every pass in debug compiler builds.
   - Size: S · Parallel: W02
   - Blocked by: T006
   - Blocks: T146, T184, T185, T186
-- [ ] **T085** LLVM backend: bindings, scalar ops, control flow
+- [x] **T085** LLVM backend: bindings, scalar ops, control flow
   - Spec: B.6.1, B.6.2
   - Deliverable: `stage0/src/backend/llvm/{c,emit}.zig`: block params -> phi, scalar ops, terminators, param attrs, no fast-math unless `fast`.
   - Acceptance: Hand-written P-IR passes LLVM verifier; FileCheck-style tests (phis, noalias, no fast flags).
   - Size: L · Parallel: W02
   - Blocked by: T006
   - Blocks: T087
-- [ ] **T086** General-purpose allocator runtime (Zig)
+- [x] **T086** General-purpose allocator runtime (Zig)
   - Spec: §14.3, §10.7
   - Deliverable: `runtime/alloc/`: per-thread size classes, cross-thread free via lock-free queue, heap_stats, out_of_memory trap, AllocError path for try_ variants.
   - Acceptance: N-thread cross-free stress clean under TSan; heap_stats balances; failure injection hits both paths.
@@ -900,7 +900,7 @@ graph TD
 
 ## M7. Core standard library
 
-- [ ] **T104** Conformance cases: 14-std (core)
+- [x] **T104** Conformance cases: 14-std (core)
   - Spec: §14.1-§14.9
   - Deliverable: `conformance/14-std/`: run-pass and fail cases for core std modules and E0912/E1401.
   - Acceptance: Coverage shows E0912, E1401 pass+fail.
@@ -1010,14 +1010,14 @@ graph TD
 
 ## M8. Concurrency and SIMD
 
-- [ ] **T119** Runtime: worker pool, task arenas, nursery join
+- [x] **T119** Runtime: worker pool, task arenas, nursery join
   - Spec: §10.1, §10.2, §14.5, B.5.2
   - Deliverable: `runtime/sched/{pool,nursery,task_arena}.zig`: C-ABI nursery_begin/spawn/end, per-worker task arenas, helping join, trap in task kills process.
   - Acceptance: 10k nested spawns join; zero heap allocs per spawn; set_threads after first nursery traps; TSan clean.
   - Size: M · Parallel: W02
   - Blocked by: T010
   - Blocks: T121, T122
-- [ ] **T120** Conformance cases: 10-concurrency-simd
+- [x] **T120** Conformance cases: 10-concurrency-simd
   - Spec: §10, A.3 E05xx, W0401, W0501
   - Deliverable: `conformance/10-concurrency-simd/`.
   - Acceptance: Coverage: every E05xx, W0401, W0501 pass+fail.
@@ -1119,7 +1119,7 @@ graph TD
 
 ## M9. Errors, contracts, tests, laws
 
-- [ ] **T134** Conformance cases: 09-errors-contracts-laws
+- [x] **T134** Conformance cases: 09-errors-contracts-laws
   - Spec: §9, A.3 E06xx E07xx
   - Deliverable: `conformance/09-errors-contracts-laws/`.
   - Acceptance: Coverage: every E06xx, E07xx, W0601 pass+fail.
@@ -1286,7 +1286,7 @@ graph TD
 
 ## M11. Packages, build scripts, incremental builds
 
-- [ ] **T157** Conformance cases: 07-items and 13-packages
+- [x] **T157** Conformance cases: 07-items and 13-packages
   - Spec: §7, §13, A.3 E09xx
   - Deliverable: `conformance/07-items/`, `conformance/13-packages/` (fixture packages).
   - Acceptance: Coverage: every E09xx pass+fail.
@@ -1412,14 +1412,14 @@ graph TD
 
 ## M13. GPU
 
-- [ ] **T174** GPU runtime core: Vulkan device, buffers, trap readback (Zig)
+- [x] **T174** GPU runtime core: Vulkan device, buffers, trap readback (Zig)
   - Spec: §14.11, §11.6.4, §11.7, §11.2.3
   - Deliverable: `runtime/gpu/vk/`.
   - Acceptance: lavapipe CI: upload/download round trip; deinit in-flight safe; is_lost false; trap record -> process trap with ` (on GPU)`.
   - Size: L · Parallel: W02
   - Blocked by: T010
   - Blocks: T188, T189, T194, T201
-- [ ] **T175** Conformance cases: 11-gpu and 12-unsafe-ffi
+- [x] **T175** Conformance cases: 11-gpu and 12-unsafe-ffi
   - Spec: §11, §12, A.3 E10xx, E12xx, W1001, W1002
   - Deliverable: `conformance/11-gpu/`, `conformance/12-unsafe-ffi/`.
   - Acceptance: Coverage: every E10xx, E12xx, W1001, W1002 pass+fail.
@@ -1715,7 +1715,7 @@ graph TD
 
 ## M15. End-to-end examples and conformance completion
 
-- [ ] **T216** Conformance cases: 04-types, 05-memory, 06-expr, 08-comptime
+- [x] **T216** Conformance cases: 04-types, 05-memory, 06-expr, 08-comptime
   - Spec: §4, §5, §6, §8, A.3 E03xx, E08xx
   - Deliverable: `conformance/{04-types,05-memory,06-expr,08-comptime}/` (written test-first; sema tasks add their own cases too).
   - Acceptance: Coverage: every E03xx, E08xx, W03xx, W08xx pass+fail.
