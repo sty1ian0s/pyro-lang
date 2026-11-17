@@ -147,14 +147,14 @@ graph TD
   - Size: S · Parallel: W00
   - Blocked by: none
   - Blocks: T002, T003, T004, T005, T006, T007, T008, T009, T010
-- [ ] **T002** Shared infra: arenas, u32 index types, job pool, string interner
+- [x] **T002** Shared infra: arenas, u32 index types, job pool, string interner
   - Spec: B.1, B.4
   - Deliverable: `stage0/src/base/`: per-stage/per-thread arenas, typed u32 index wrappers, fixed-size thread pool honouring `--jobs`, thread-safe interner (bytes -> u32).
   - Acceptance: Interner returns equal ids for equal bytes under 8 threads; pool runs and joins N jobs; arena reset O(1).
   - Size: S · Parallel: W01
   - Blocked by: T001
   - Blocks: T018, T022, T032
-- [ ] **T003** Diagnostics core: data model, code registry generated from A.3, sink **[CRITICAL]** **[GATE]**
+- [x] **T003** Diagnostics core: data model, code registry generated from A.3, sink **[CRITICAL]** **[GATE]**
   - Spec: A.1, A.2, A.3, §1.2
   - Deliverable: `stage0/src/diag/`: `Diagnostic{code,severity,message,spans,help,fixes,trace}`; `DiagCode` enum generated at build time from `spec/A-diagnostics.md` tables (incl. W9xxx impl range); thread-safe sink with deterministic order (file, offset); cascade suppression via poisoned node/span ids. API frozen on day 1.
   - Acceptance: Build fails if source uses a code absent from A.3; 4-thread emission prints in stable order; diagnostic caused by poisoned node dropped.
@@ -162,7 +162,7 @@ graph TD
   - Blocked by: T001
   - Blocks: T011, T012, T013, T017, T019, T027, T029
   - Conflicts: Owns the core files in `stage0/src/diag/` and the generated code enum; T017 (renderers) and T027 (levels) add their own files there and never edit core files. `build.zig`: edits only `addCommonImports` (one `diag_codes` import line).
-- [ ] **T004** Conformance harness (B.9) and e2e example runner **[GATE]**
+- [x] **T004** Conformance harness (B.9) and e2e example runner **[GATE]**
   - Spec: B.9, A.2, §1.2, §13.3, Appendix D
   - Deliverable: `tools/conformance/` (Zig, `zig build conformance`): walks `conformance/<NN-chapter>/*.pr`; parses line-anchored `//~ E0332`/`//~ W0201`; runs `pyro check --message-format json` and matches code+line sets exactly; `<case>.out` run-pass cases run in dev/test/prod (identical output unless marked `debug_assertions`); per-directory `stop-after` (lex/parse/check/run); expected-fail tag; path filter; A.3 coverage report (codes lacking a pass and a fail case); also drives `examples/<name>/` packages via `pyro run`/`pyro test` against `expected.out`.
   - Acceptance: Self-tests with a fake compiler cover match, missing, extra, wrong line, env mismatch; coverage report initially lists every A.3 code.
@@ -170,7 +170,7 @@ graph TD
   - Blocked by: T001
   - Blocks: T015, T016, T095, T104, T120, T134, T157, T175, T209, T216
   - Conflicts: `build.zig`: edits only the `zig build conformance` block (harness arguments).
-- [ ] **T005** Token kinds and keyword perfect hash
+- [x] **T005** Token kinds and keyword perfect hash
   - Spec: §2.2, §2.4.1-§2.4.3, §2.7, B.2
   - Deliverable: `stage0/src/lex/token.zig`: `TokenKind` u8 enum (all keywords, literal classes, BUILTIN, punctuators incl. `.{`, DOC_COMMENT, EOF, Invalid); SoA `TokenBuffer{kind,start,len}`; build-time perfect hash; future-reserved set; literal sub-scanner signatures (contract for literal lexer).
   - Acceptance: Every §2.4.1 keyword maps to its kind; `gpu`/`cpu`/`over`/`result` stay IDENT; §2.4.2 words flagged future-reserved; hash collision-free (checked at build).
@@ -178,7 +178,7 @@ graph TD
   - Blocked by: T001
   - Blocks: T012, T013, T014
   - Conflicts: TokenKind frozen after merge; later additions go through this file's owner only.
-- [ ] **T006** P-IR data structures, types, text format, builder
+- [x] **T006** P-IR data structures, types, text format, builder
   - Spec: B.5, B.5.1, B.5.2
   - Deliverable: `stage0/src/pir/{ir,builder,text}.zig`: module/globals (align, readonly), functions with param attrs (noalias, readonly, align, dereferenceable), blocks with block params, every B.5.2 opcode incl. flags; text printer + parser; types i1..i64, f32, f64, ptr, vec<N x T>, void.
   - Acceptance: Parse-print round-trip of hand-written modules covering every opcode group.
@@ -186,28 +186,28 @@ graph TD
   - Blocked by: T001
   - Blocks: T084, T085, T089, T182
   - Conflicts: Owns the P-IR opcode enum; later tasks add opcodes only via this owner.
-- [ ] **T007** TOML v1.0 parser and format-preserving serializer
+- [x] **T007** TOML v1.0 parser and format-preserving serializer
   - Spec: §13.2, §13.4
   - Deliverable: `stage0/src/toml/`: typed tree with byte spans; serializer that round-trips unedited documents byte-identically.
   - Acceptance: Vendored toml-test v1.0 valid/invalid corpus passes; spans map to 1-based line/col; unedited round-trip byte-identical.
   - Size: M · Parallel: W01
   - Blocked by: T001
   - Blocks: T029, T159
-- [ ] **T008** SemVer 2.0 and version-requirement library
+- [x] **T008** SemVer 2.0 and version-requirement library
   - Spec: §13.2, §13.4
   - Deliverable: `stage0/src/pkg/semver.zig`: versions with prerelease/build; requirements `1.2`, `^`, `~`, `=`, ranges (Cargo semantics); compatibility-line key (major, or minor for 0.x).
   - Acceptance: `1.2` == `^1.2` == >=1.2.0 <2.0.0; `~1.2.3`; `>=1.2, <1.5`; 0.x keys on minor; prerelease ordering per SemVer 2.0.
   - Size: S · Parallel: W01
   - Blocked by: T001
   - Blocks: T029, T158
-- [ ] **T009** Target triple model and support table
+- [x] **T009** Target triple model and support table
   - Spec: §13.2.1, §14.8, B.6.1
   - Deliverable: `stage0/src/target.zig`: parse `arch-os[-abi]`; §13.2.1 support table; LLVM triple mapping; values for `std.meta.Target` (arch, os, abi, pointer_bits, endian, CPU features, `@vector_width` table).
   - Acceptance: Every §13.2.1 triple parses and maps; unknown triple -> plain diagnostic; host detection on linux x86_64.
   - Size: S · Parallel: W01
   - Blocked by: T001
   - Blocks: T073, T088, T129, T167
-- [ ] **T010** Runtime core: trap entry, TrapKind, hosted abort path (Zig)
+- [x] **T010** Runtime core: trap entry, TrapKind, hosted abort path (Zig)
   - Spec: §9.4, §9.3
   - Deliverable: `runtime/trap.zig`: C-ABI `pyro_rt_trap(kind,msg,file,line)` writing kind/message/location to stderr, exit status 134, no defer execution; `std/core/trap.pr` TrapKind enum declaration (all kinds incl. deadlock, capacity, contract, todo_err, gpu_limit, ray_recursion).
   - Acceptance: Zig test: calling the entry from a C harness prints the §9.4 format and exits 134.
