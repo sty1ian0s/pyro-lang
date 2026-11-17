@@ -8,7 +8,8 @@ const std = @import("std");
 /// Kind of a token (§2.2). One byte, so `TokenBuffer.kind` is a dense `[]u8`.
 ///
 /// Reserved keywords are named `kw_<word>`; the keyword table is derived from
-/// those names, so adding a `kw_` field is all it takes to add a keyword.
+/// those names, so adding a `kw_` field between `kw_as` and `kw_while` is all
+/// it takes to add a keyword. A comptime check rejects any other placement.
 pub const TokenKind = enum(u8) {
     ident,
     /// `@` immediately followed by an identifier (§2.5).
@@ -185,6 +186,11 @@ pub const TokenKind = enum(u8) {
 
 comptime {
     std.debug.assert(@sizeOf(TokenKind) == 1);
+    // isKeyword() is a range check, so every kw_ tag must sit inside kw_as..kw_while.
+    for (std.meta.tags(TokenKind)) |k| {
+        if (std.mem.startsWith(u8, @tagName(k), "kw_") != k.isKeyword())
+            @compileError("TokenKind." ++ @tagName(k) ++ " must lie between kw_as and kw_while iff it is a kw_ tag");
+    }
 }
 
 /// One token (B.2): kind plus byte range within its file. Line and column are
