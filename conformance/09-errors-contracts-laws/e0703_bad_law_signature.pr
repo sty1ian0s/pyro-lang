@@ -1,0 +1,18 @@
+//@ expected-fail: T144
+// §9.6.1: a law returns `bool`, and its parameters have no mode and types that
+// implement `std.testing.Arbitrary` (a resource type does not).
+
+@resource
+pub struct Token {
+    id: u32,
+
+    pub fn release(move self) -> bool { true }
+}
+
+@law fn mut_param(mut x: u8) -> bool { x += 1; x > 0 } //~ E0703
+
+@law fn comptime_param(comptime n: usize) -> bool { n >= 0 } //~ E0703
+
+@law fn returns_int(x: u8) -> u8 { x } //~ E0703
+
+@law fn resource_param(t: Token) -> bool { t.id == t.id } //~ E0703

@@ -1,0 +1,16 @@
+//@ expected-fail: T140
+//@ covers: E0604
+// §9.2, §13.3: `allow_todo_err` defaults to true in `dev` (the environment
+// `pyro check` uses by default), so `@todo_err` gets W0601 but not E0604.
+
+pub enum ParseError { bad_digit }
+
+fn parse_digit(c: u8) -> Result<u8, ParseError> {
+    if c < 48 || c > 57 { return .err(.bad_digit); }
+    return .ok(c - 48);
+}
+
+pub fn main() {
+    let d = @todo_err(parse_digit(55)); //~ W0601
+    print("{}\n", d);
+}

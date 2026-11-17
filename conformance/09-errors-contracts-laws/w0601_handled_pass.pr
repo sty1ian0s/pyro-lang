@@ -1,0 +1,16 @@
+//@ expected-fail: T140
+//@ covers: W0601
+// §9.2: code that handles its errors uses no `@todo_err` and gets no W0601.
+
+pub enum ParseError { bad_digit }
+
+fn parse_digit(c: u8) -> Result<u8, ParseError> {
+    if c < 48 || c > 57 { return .err(.bad_digit); }
+    return .ok(c - 48);
+}
+
+fn sum_digits(a: u8, b: u8) -> Result<u8, ParseError> {
+    let x = parse_digit(a)?;
+    let y = parse_digit(b)?;
+    return .ok(x + y);
+}

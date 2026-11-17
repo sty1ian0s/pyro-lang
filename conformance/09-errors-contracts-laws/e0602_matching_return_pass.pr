@@ -1,0 +1,26 @@
+//@ expected-fail: T077
+//@ covers: E0602
+// §6.12.1: `?` on an `Option` inside a function returning `Option` returns
+// `.none` early; `?` on a `Result` inside a `Result` function returns `.err`.
+
+pub enum ParseError { bad_digit }
+
+fn first_byte(xs: []u8) -> Option<u8> {
+    if xs.len() == 0 { return .none; }
+    return .some(xs[0]);
+}
+
+fn first_doubled(xs: []u8) -> Option<u32> {
+    let b = first_byte(xs)?;
+    return .some(b as u32 * 2);
+}
+
+fn parse_digit(c: u8) -> Result<u8, ParseError> {
+    if c < 48 || c > 57 { return .err(.bad_digit); }
+    return .ok(c - 48);
+}
+
+fn parse_doubled(c: u8) -> Result<u32, ParseError> {
+    let d = parse_digit(c)?;
+    return .ok(d as u32 * 2);
+}

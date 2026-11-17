@@ -1,0 +1,28 @@
+//@ expected-fail: T135
+//@ covers: E0702
+// §9.5, §9.5.1: contracts read parameters, `self`, constants, `@pure` functions,
+// and in `@ensures` also `result` and `@old(e)` of a plain value.
+
+const LIMIT: i32 = 1000;
+
+@pure
+fn in_range(x: i32, lo: i32, hi: i32) -> bool { x >= lo && x <= hi }
+
+@requires(lo <= hi, "range is inverted")
+@requires(hi <= LIMIT)
+@ensures(in_range(result, lo, hi))
+pub fn clamp(x: i32, lo: i32, hi: i32) -> i32 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    x
+}
+
+@invariant(self.len <= CAP)
+pub struct Stack<T, CAP: usize> {
+    items: [CAP]T,
+    len: usize = 0,
+
+    @requires(self.len < CAP, "stack is full")
+    @ensures(self.len == @old(self.len) + 1)
+    pub fn push(mut self, item: T) { self.items[self.len] = item; self.len += 1; }
+}

@@ -1,0 +1,7 @@
+//@ expected-fail: T141
+// §9.4: a package provides at most one `@trap_handler`; the second one is the
+// duplicate.
+
+@trap_handler pub fn on_trap(kind: TrapKind, msg: str, file: str, line: u32) -> noreturn { loop {} }
+
+@trap_handler pub fn on_trap_again(kind: TrapKind, msg: str, file: str, line: u32) -> noreturn { loop {} } //~ E0605

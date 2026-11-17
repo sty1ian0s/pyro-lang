@@ -1,0 +1,15 @@
+//@ expected-fail: T144
+// §9.6.1: laws must not be called by non-test code.
+
+@law
+fn add_commutes(a: u8, b: u8) -> bool {
+    a as u16 + b as u16 == b as u16 + a as u16
+}
+
+fn self_check() -> bool {
+    add_commutes(1, 2) //~ E0704
+}
+
+pub fn main() {
+    if add_commutes(3, 4) { print("ok\n"); } //~ E0704
+}

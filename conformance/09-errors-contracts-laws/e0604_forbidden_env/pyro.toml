@@ -1,0 +1,12 @@
+# §9.2, §13.3: `allow_todo_err = false` is the `prod` default; it is set for
+# `dev` and `test` too, so `pyro check` reports E0604 whichever environment it uses.
+[package]
+name = "todo_err_forbidden"
+version = "0.1.0"
+edition = "2026"
+
+[env.dev]
+allow_todo_err = false
+
+[env.test]
+allow_todo_err = false

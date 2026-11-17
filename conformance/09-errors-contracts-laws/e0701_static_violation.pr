@@ -1,0 +1,19 @@
+//@ expected-fail: T137
+// §9.5.3: when every input of a contract condition is comptime-known at a call
+// site and the condition is false, the call is an error. Inputs the condition
+// does not read (`x` below) may be runtime values.
+
+const LO: i32 = 3;
+
+@requires(lo <= hi, "range is inverted")
+pub fn clamp(x: i32, lo: i32, hi: i32) -> i32 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    x
+}
+
+fn use_clamp(x: i32) -> i32 {
+    let a = clamp(5, 10, 0); //~ E0701
+    let b = clamp(x, LO, LO - 1); //~ E0701
+    a + b
+}

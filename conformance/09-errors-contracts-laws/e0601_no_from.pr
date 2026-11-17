@@ -1,0 +1,16 @@
+//@ expected-fail: T077
+// §6.12.1: `?` converts the operand's error `E` with `F.from`, so the function's
+// error type `F` must implement `From<E>` when `E` differs from `F`.
+
+pub enum ParseError { empty, bad_digit }
+pub enum ConfigError { missing, invalid }
+
+fn parse_digit(c: u8) -> Result<u8, ParseError> {
+    if c < 48 || c > 57 { return .err(.bad_digit); }
+    return .ok(c - 48);
+}
+
+fn read_digit(c: u8) -> Result<u8, ConfigError> {
+    let d = parse_digit(c)?; //~ E0601
+    return .ok(d);
+}
