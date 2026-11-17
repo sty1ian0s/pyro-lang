@@ -35,7 +35,8 @@ pub const Lexer = struct {
     file: diag.FileId,
     sink: *diag.Sink,
     opts: Options = .{},
-    /// Kind of the last token produced, for the tuple-field rule (§2.6.1).
+    /// Kind of the last token on the current line, for the tuple-field rule
+    /// (§2.6.1). Cleared at each LF: lines lex independently (§2.1.1).
     prev: ?TokenKind = null,
 
     /// A lexer over the whole of `src`.
@@ -57,7 +58,11 @@ pub const Lexer = struct {
             const start = l.pos;
             const c = s[start];
             switch (c) {
-                ' ', '\t', '\n', '\r' => l.pos += 1,
+                ' ', '\t', '\r' => l.pos += 1,
+                '\n' => {
+                    l.pos += 1;
+                    l.prev = null;
+                },
                 '/' => if (at(s, start + 1) == '/') {
                     if (l.comment()) |t| return t;
                 } else return l.punct(),
@@ -405,6 +410,8 @@ test "literals dispatch to the scanner with the tuple-field context" {
     }, "");
     try expectLex("x = \\\\ verbatim \" ' //\n  \\\\ next\r\n;", &.{ .ident, .eq, .ml_string_line, .ml_string_line, .semicolon }, "");
     try expectLex("\"open\nx", &.{ .string_lit, .ident }, "E0109@0");
+    // The context does not cross an LF (§2.1.1).
+    try expectLex("t.\n0.1", &.{ .ident, .dot, .float_lit }, "");
 }
 
 test "literal scanner errors map to E0107-E0109" {
@@ -439,4 +446,12 @@ test "token offsets and eof; a line-aligned range lexes on its own" {
     var l: Lexer = .init(src, @fromBackingInt(@intCast(0)), &sink, .{});
     l.pos = 11;
     try testing.expectEqual(Token{ .kind = .ident, .start = 11, .len = 3 }, try l.next());
+
+    // Lexing from the start of line 2 gives the same tokens as the tail of a full lex.
+    const src2 = "t.\n0.1 t.0.1\n";
+    var full = try lex(src2);
+    defer full.deinit();
+    var l2: Lexer = .init(src2, @fromBackingInt(@intCast(0)), &sink, .{});
+    l2.pos = 3;
+    for (2..full.tokens.len) |i| try testing.expectEqual(full.tokens.get(i), try l2.next());
 }
