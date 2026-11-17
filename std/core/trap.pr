@@ -1,0 +1,22 @@
+//! Trap kinds (§9.4). `TrapKind` is a prelude enum.
+
+/// Why a trap ended the program. Passed to the trap handler (§9.4).
+/// The discriminants are the `kind` argument of the runtime trap entry
+/// `pyro_rt_trap` (`runtime/trap.zig`); keep both in the same order.
+pub enum TrapKind: u8 {
+    bounds = 0,
+    overflow = 1,
+    div_zero = 2,
+    shift = 3,
+    assert = 4,
+    todo_err = 5,
+    contract = 6,
+    unreachable = 7,
+    explicit = 8,
+    stack_overflow = 9,
+    capacity = 10,
+    deadlock = 11,
+    out_of_memory = 12,
+    ray_recursion = 13,
+    gpu_limit = 14,
+}
