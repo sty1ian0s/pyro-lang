@@ -1,5 +1,7 @@
 //@ expected-fail: T132
 // §10.4: channel messages must be plain: no views, no resources.
+// E0505 replaces the generic E0329 (§7.6.1) for Channel's `T: plain` bound (§14);
+// report only E0505, never both.
 
 struct Line { text: str }
 
