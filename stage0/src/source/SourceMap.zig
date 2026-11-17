@@ -76,22 +76,28 @@ pub fn load(sm: *SourceMap, dir: std.Io.Dir, sub_path: []const u8, sink: *Sink) 
         return id;
     }
     if (size == 0) return sm.addBytes(sub_path, "", sink); // mmap rejects length 0
-    var map = try file.createMemoryMap(sm.io, .{
-        .len = @intCast(size),
-        .protection = .{ .read = true },
-        .populate = false,
-    });
-    errdefer map.destroy(sm.io);
-    return sm.check(try sm.register(sub_path, map.memory, map), sink);
+    const id = id: {
+        var map = try file.createMemoryMap(sm.io, .{
+            .len = @intCast(size),
+            .protection = .{ .read = true },
+            .populate = false,
+        });
+        errdefer map.destroy(sm.io);
+        break :id try sm.register(sub_path, map.memory, map);
+    };
+    return sm.check(id, sink); // `sm` owns the map now; a failing `check` must not unmap it
 }
 
 /// Registers in-memory contents (a copy of `bytes`) under `path`. Reports
 /// E0101/E0102 like `load`. `bytes.len` must not exceed `max_size`.
 pub fn addBytes(sm: *SourceMap, path: []const u8, bytes: []const u8, sink: *Sink) !FileId {
     std.debug.assert(bytes.len <= max_size);
-    const raw = try sm.gpa.dupe(u8, bytes);
-    errdefer sm.gpa.free(raw);
-    return sm.check(try sm.register(path, raw, null), sink);
+    const id = id: {
+        const raw = try sm.gpa.dupe(u8, bytes);
+        errdefer sm.gpa.free(raw);
+        break :id try sm.register(path, raw, null);
+    };
+    return sm.check(id, sink); // `sm` owns `raw` now; a failing `check` must not free it
 }
 
 /// The file `id` names.
@@ -125,15 +131,16 @@ fn register(sm: *SourceMap, path: []const u8, raw: []const u8, map: ?std.Io.File
     return id;
 }
 
-/// Reports the first invalid UTF-8 sequence (E0101) and the first CR not
-/// followed by LF (E0102). One of each: later ones would only repeat it.
+/// Reports one E0101 per maximal run of invalid UTF-8 bytes and one E0102
+/// per CR not followed by LF: each is an independent error (A.1).
 fn check(sm: *SourceMap, id: FileId, sink: *Sink) !FileId {
     const text = sm.get(id).text;
-    if (firstInvalidUtf8(text)) |at| try sink.emit(.{
+    var pos: usize = 0;
+    while (nextInvalidUtf8(text, pos)) |bad| : (pos = bad.end) try sink.emit(.{
         .code = .E0101,
         .severity = .of(.E0101),
         .message = "this file is not valid UTF-8 text",
-        .spans = &.{.{ .span = .{ .file = id, .start = at, .end = at + 1 }, .primary = true, .label = "invalid byte" }},
+        .spans = &.{.{ .span = .{ .file = id, .start = bad.start, .end = bad.end }, .primary = true, .label = "invalid bytes" }},
         .help = &.{"save the file with UTF-8 encoding"},
     });
     var i: usize = 0;
@@ -147,22 +154,29 @@ fn check(sm: *SourceMap, id: FileId, sink: *Sink) !FileId {
             .spans = &.{.{ .span = .{ .file = id, .start = at, .end = at + 1 }, .primary = true }},
             .help = &.{"use LF or CRLF line endings"},
         });
-        break;
     }
     return id;
 }
 
-/// Offset of the first byte of the first invalid UTF-8 sequence, if any.
-fn firstInvalidUtf8(s: []const u8) ?u32 {
-    if (std.unicode.utf8ValidateSlice(s)) return null;
-    var i: usize = 0;
-    while (i < s.len) {
-        const n = std.unicode.utf8ByteSequenceLength(s[i]) catch break;
-        if (n > s.len - i) break;
-        _ = std.unicode.utf8Decode(s[i..][0..n]) catch break;
-        i += n;
-    }
-    return @intCast(i);
+/// The first maximal run of bytes at or after `from` that do not start a
+/// valid UTF-8 sequence, if any. `from` must be on a sequence boundary.
+fn nextInvalidUtf8(s: []const u8, from: usize) ?struct { start: u32, end: u32 } {
+    if (std.unicode.utf8ValidateSlice(s[from..])) return null;
+    var i = from;
+    while (validSeqLen(s[i..])) |n| i += n;
+    var end = i + 1;
+    while (end < s.len and validSeqLen(s[end..]) == null) end += 1;
+    return .{ .start = @intCast(i), .end = @intCast(end) };
+}
+
+/// Length of the valid UTF-8 sequence `s` starts with; null if it starts with
+/// none (or is empty).
+fn validSeqLen(s: []const u8) ?usize {
+    if (s.len == 0) return null;
+    const n = std.unicode.utf8ByteSequenceLength(s[0]) catch return null;
+    if (n > s.len) return null;
+    _ = std.unicode.utf8Decode(s[0..n]) catch return null;
+    return n;
 }
 
 /// Byte offsets of every LF in `text`, scanning 32 bytes per step (B.2).
@@ -211,7 +225,7 @@ test "BOM ignored with correct offsets" {
     try testing.expectEqual(0, sink.finish().len);
 }
 
-test "E0101 at the first invalid byte" {
+test "E0101 at the start of each invalid run" {
     const cases = [_]struct { []const u8, u32 }{
         .{ "ok \xFF", 3 }, // never a lead byte
         .{ "é\xC3(", 2 }, // missing continuation
@@ -227,6 +241,18 @@ test "E0101 at the first invalid byte" {
         _ = try sm.addBytes("a.pr", c[0], &sink);
         try expectOnly(&sink, .E0101, c[1]);
     }
+    var sink: Sink = .init(testing.allocator, testing.io);
+    defer sink.deinit();
+    var sm: SourceMap = .init(testing.allocator, testing.io);
+    defer sm.deinit();
+    _ = try sm.addBytes("a.pr", "\xFF\xFEa\nb\xC0", &sink);
+    const ds = sink.finish();
+    try testing.expectEqual(2, ds.len);
+    for (ds, [_][2]u32{ .{ 0, 2 }, .{ 5, 6 } }) |d, span| {
+        try testing.expectEqual(.E0101, d.code.?);
+        try testing.expectEqual(span[0], d.primarySpan().?.start);
+        try testing.expectEqual(span[1], d.primarySpan().?.end);
+    }
 }
 
 test "E0102 at a lone CR; CRLF accepted" {
@@ -236,11 +262,11 @@ test "E0102 at a lone CR; CRLF accepted" {
     defer sm.deinit();
     _ = try sm.addBytes("ok.pr", "a\r\nb\r\n", &sink);
     try testing.expectEqual(0, sink.finish().len);
-    _ = try sm.addBytes("mid.pr", "a\r\nb\rc", &sink);
+    _ = try sm.addBytes("mid.pr", "a\r\nb\rc\rd", &sink);
     _ = try sm.addBytes("end.pr", "a\r", &sink);
     const ds = sink.finish();
-    try testing.expectEqual(2, ds.len);
-    for (ds, [_]u32{ 4, 1 }) |d, at| {
+    try testing.expectEqual(3, ds.len);
+    for (ds, [_]u32{ 4, 6, 1 }) |d, at| {
         try testing.expectEqual(.E0102, d.code.?);
         try testing.expectEqual(at, d.primarySpan().?.start);
     }
@@ -318,4 +344,17 @@ test "E0103 for a file over 2^32-1 bytes" {
     const id = try sm.load(tmp.dir, "big.pr", &sink);
     try testing.expectEqual(0, sm.get(id).text.len);
     try expectOnly(&sink, .E0103, 0);
+}
+
+test "a failing sink leaves file ownership with the map" {
+    var failing: std.testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
+    var sink: Sink = .init(failing.allocator(), testing.io);
+    defer sink.deinit();
+    var sm: SourceMap = .init(testing.allocator, testing.io);
+    defer sm.deinit();
+    try testing.expectError(error.OutOfMemory, sm.addBytes("a.pr", "\xFF", &sink));
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "cr.pr", .data = "a\rb" });
+    try testing.expectError(error.OutOfMemory, sm.load(tmp.dir, "cr.pr", &sink));
 }
