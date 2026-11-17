@@ -138,6 +138,8 @@ pub fn alloc(size: usize, alignment: usize) ?[*]u8 {
     }
     const p = if (classOf(size, alignment)) |class|
         (heap() orelse return null).allocSmall(class)
+    else if (size > std.math.maxInt(usize) - alignment - std.heap.pageSize())
+        null // PageAllocator.map would overflow computing the over-aligned length
     else
         PageAllocator.map(@max(size, 1), .fromByteUnits(alignment)); // mmap rejects 0
     if (p != null) {
@@ -341,6 +343,8 @@ test "failure injection: try path returns null, stats untouched" {
     try testing.expectEqual(2, statsDelta(before).allocations);
     // A request the OS cannot back takes the same path without injection.
     try testing.expectEqual(null, pyro_rt_try_alloc(1 << 62, 1));
+    // Huge size with above-page alignment must not overflow inside the mapper.
+    try testing.expectEqual(null, pyro_rt_try_alloc(std.math.maxInt(usize) - 3 * 4096, 1 << 20));
 }
 
 extern "c" fn fork() c_int;
