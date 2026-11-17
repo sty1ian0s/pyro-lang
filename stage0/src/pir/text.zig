@@ -22,6 +22,8 @@
 //! Calls are `call @f(args)`; branch targets are `^b(args)`; `switch` is
 //! `switch %v, default ^d, [k: ^b, ...]`. Each instruction is one line;
 //! a block label starts a line. `;` starts a comment.
+//! The parser also accepts the B.5.2 spellings `load T, ptr` (T must equal
+//! the result type and is dropped), `atomic.rmw op, ptr, ...` and `^b()`.
 //! The printer's output is the canonical form: parse(print(m)) prints the same.
 
 const std = @import("std");
@@ -439,7 +441,7 @@ const Parser = struct {
     }
 
     fn global(p: *Parser) ParseError!void {
-        const n = try p.expect(.global, "expected '@name'");
+        const n = try p.symbol();
         _ = try p.expect(.colon, "expected ':'");
         const ty = try p.parseType();
         _ = try p.expect(.equal, "expected '='");
@@ -462,6 +464,14 @@ const Parser = struct {
         try p.m.addGlobal(g);
     }
 
+    /// A new module-level `@name`; it must not name an existing global or function.
+    fn symbol(p: *Parser) ParseError!Token {
+        const n = try p.expect(.global, "expected '@name'");
+        if (p.m.findGlobal(p.name(n)) != null or p.m.findFunction(p.name(n)) != null)
+            return p.fail(n, "duplicate symbol");
+        return n;
+    }
+
     fn decodeString(p: *Parser, t: Token) ParseError![]const u8 {
         const s = p.src[t.start + 1 .. t.end - 1];
         var out: std.ArrayList(u8) = .empty;
@@ -480,7 +490,7 @@ const Parser = struct {
     }
 
     fn function(p: *Parser) ParseError!void {
-        const n = try p.expect(.global, "expected '@name'");
+        const n = try p.symbol();
         p.f = try p.m.addFunction(p.name(n), .void);
         p.locals.clearRetainingCapacity();
         p.labels.clearRetainingCapacity();
@@ -576,7 +586,7 @@ const Parser = struct {
         const lt = try p.expect(.label, "expected a block label");
         if (p.toks[p.i - 2].line == lt.line) return p.fail(lt, "a block label must start a line");
         const id = p.labels.get(p.name(lt)).?;
-        if (p.eat(.lparen)) {
+        if (p.eat(.lparen) and !p.eat(.rparen)) {
             while (true) {
                 const pt = try p.expect(.local, "expected '%name'");
                 _ = try p.expect(.colon, "expected ':'");
@@ -627,6 +637,7 @@ const Parser = struct {
                 if (std.meta.stringToEnum(ir.RmwOp, w)) |r| if (r != .none) {
                     inst.rmw = r;
                     _ = p.next();
+                    _ = p.eat(.comma); // B.5.2 spells `atomic.rmw op, ptr, ...`
                     continue;
                 };
             }
@@ -692,6 +703,12 @@ const Parser = struct {
         }
         const end = p.peek();
         if (end.tag != .eof and end.line == first.line) return p.fail(end, "unexpected token after instruction");
+        // B.5.2 spells `load T, ptr`; T must be the result type and is dropped.
+        if (op == .load and ops.items.len > 0 and ops.items[0] == .type) {
+            if (results.items.len != 1 or !ops.items[0].type.eql(p.f.values.items[results.items[0].index()].ty))
+                return p.fail(ot, "load type must match the result type");
+            _ = ops.orderedRemove(0);
+        }
         inst.operands = ops.items;
         inst.targets = targets.items;
         return inst;
@@ -725,7 +742,7 @@ const Parser = struct {
         const t = p.peek();
         switch (t.tag) {
             .local => return .{ .value = try p.use(p.next()) },
-            .global => return .{ .symbol = p.name(p.next()) },
+            .global => return .{ .symbol = try p.arena().dupe(u8, p.name(p.next())) },
             .int => return .{ .int = try p.int(i64, p.next()) },
             .float => return .{ .float = try p.float(p.next()) },
             .ident => {
@@ -1028,6 +1045,10 @@ test "parse errors report location" {
         .{ .src = "fn @f(%a: i32) -> i1 {\n^a:\n  %c: i1 = icmp olt %a, %a\n  ret %c\n}", .line = 3, .col = 17, .msg = "expected a comparison predicate" },
         .{ .src = "global @g: vec<0 x i8> = 0", .line = 1, .col = 12, .msg = "vector must have at least one lane" },
         .{ .src = "fn @f() -> void {\n^a:\n  ret ret\n}", .line = 3, .col = 7, .msg = "expected an operand" },
+        .{ .src = "fn @f() -> void\nfn @f() -> i32", .line = 2, .col = 4, .msg = "duplicate symbol" },
+        .{ .src = "fn @f() -> void\nglobal @f: i32 = 0", .line = 2, .col = 8, .msg = "duplicate symbol" },
+        .{ .src = "global @g: i32 = 0\nfn @g() -> void", .line = 2, .col = 4, .msg = "duplicate symbol" },
+        .{ .src = "fn @f(%p: ptr) -> i32 {\n^a:\n  %x: i32 = load i64, %p\n  ret %x\n}", .line = 3, .col = 13, .msg = "load type must match the result type" },
     };
     for (cases) |c| {
         var diag: Diag = .{};
@@ -1036,4 +1057,58 @@ test "parse errors report location" {
         try testing.expectEqual(c.line, diag.line);
         try testing.expectEqual(c.col, diag.col);
     }
+}
+
+test "parsed module does not reference the source buffer" {
+    const src = try testing.allocator.dupe(u8,
+        \\fn @g() -> void
+        \\
+        \\fn @f() -> void {
+        \\^entry:
+        \\  call @g()
+        \\  ret
+        \\}
+        \\
+    );
+    var diag: Diag = .{};
+    var m = parse(testing.allocator, src, &diag) catch |e| {
+        testing.allocator.free(src);
+        return e;
+    };
+    defer m.deinit();
+    const expected = try testing.allocator.dupe(u8, src);
+    defer testing.allocator.free(expected);
+    @memset(src, 'X');
+    testing.allocator.free(src);
+    const printed = try printToString(&m);
+    defer testing.allocator.free(printed);
+    try testing.expectEqualStrings(expected, printed);
+}
+
+test "parser accepts B.5.2 spellings and empty block parameter lists" {
+    var diag: Diag = .{};
+    var m = try parse(testing.allocator,
+        \\fn @f(%p: ptr, %a: i32) -> i32 {
+        \\^entry:
+        \\  %x: i32 = load i32, %p, align 4
+        \\  %old: i32 = atomic.rmw add, %p, %a, seq_cst
+        \\  br ^next()
+        \\^next():
+        \\  ret %x
+        \\}
+    , &diag);
+    defer m.deinit();
+    const printed = try printToString(&m);
+    defer testing.allocator.free(printed);
+    try testing.expectEqualStrings(
+        \\fn @f(%p: ptr, %a: i32) -> i32 {
+        \\^entry:
+        \\  %x: i32 = load %p, align 4
+        \\  %old: i32 = atomic.rmw add %p, %a, seq_cst
+        \\  br ^next
+        \\^next:
+        \\  ret %x
+        \\}
+        \\
+    , printed);
 }
