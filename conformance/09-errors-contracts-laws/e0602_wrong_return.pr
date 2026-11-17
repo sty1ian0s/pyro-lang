@@ -1,0 +1,29 @@
+//@ expected-fail: T077
+// §6.12.1: `?` on a `Result` needs a function returning `Result`, and `?` on an
+// `Option` needs a function returning `Option`.
+
+pub enum ParseError { bad_digit }
+
+fn parse_digit(c: u8) -> Result<u8, ParseError> {
+    if c < 48 || c > 57 { return .err(.bad_digit); }
+    return .ok(c - 48);
+}
+
+fn first_byte(xs: []u8) -> Option<u8> {
+    if xs.len() == 0 { return .none; }
+    return .some(xs[0]);
+}
+
+fn print_digit(c: u8) {
+    let d = parse_digit(c)?; //~ E0602
+    print("{}\n", d);
+}
+
+fn digit_or_zero(c: u8) -> u8 {
+    parse_digit(c)? //~ E0602
+}
+
+fn first_doubled(xs: []u8) -> u32 {
+    let b = first_byte(xs)?; //~ E0602
+    b as u32 * 2
+}

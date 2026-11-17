@@ -1,0 +1,31 @@
+//@ expected-fail: T049
+//@ covers: E0603
+// §9.1.1: a `Result` is handled with `?`, `match` or `if let`, or discarded with
+// `_ = expr;`. Discarding an `Option` or any other value is allowed.
+
+pub enum IoError { closed }
+
+fn send(byte: u8) -> Result<u8, IoError> {
+    if byte == 0 { return .err(.closed); }
+    return .ok(byte);
+}
+
+fn find(xs: []u8, x: u8) -> Option<usize> {
+    for y, i in xs { if y == x { return .some(i); } }
+    return .none;
+}
+
+fn add(a: u32, b: u32) -> u32 { a + b }
+
+fn run(xs: []u8) -> Result<u8, IoError> {
+    send(1)?;
+    match send(2) {
+        .ok(_) => {},
+        .err(e) => return .err(e),
+    }
+    if let .err(e) = send(3) { return .err(e); }
+    _ = send(4);
+    find(xs, 5);
+    add(1, 2);
+    return .ok(0);
+}

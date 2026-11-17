@@ -1,0 +1,6 @@
+# §9.4: a `no_std` package must provide exactly one `@trap_handler`.
+[package]
+name = "no_std_with_handler"
+version = "0.1.0"
+edition = "2026"
+no_std = true

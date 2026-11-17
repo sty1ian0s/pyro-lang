@@ -1,0 +1,19 @@
+//@ expected-fail: T144
+//@ covers: E0704
+// §9.6.1, §13.6: tests and other laws are test code and may call a law.
+
+@law
+fn add_commutes(a: u8, b: u8) -> bool {
+    a as u16 + b as u16 == b as u16 + a as u16
+}
+
+@law
+fn add_commutes_shifted(a: u8, b: u8) -> bool {
+    add_commutes(a / 2, b / 2)
+}
+
+@test
+fn add_commutes_examples() {
+    assert(add_commutes(1, 2), "1 + 2");
+    assert(add_commutes(255, 255), "255 + 255");
+}

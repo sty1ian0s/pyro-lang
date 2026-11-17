@@ -1,0 +1,22 @@
+//@ expected-fail: T144
+//@ covers: E0703
+// §9.6.1: `Arbitrary` is implemented for primitives, `Bounded<T, N>`, `[N]T`,
+// and by derivation for plain structs, tuples and enums of `Arbitrary` parts.
+
+pub struct Point { x: i32, y: i32 }
+pub enum Dir { north, east, south, west }
+
+@law
+fn add_commutes(a: u8, b: u8) -> bool {
+    a as u16 + b as u16 == b as u16 + a as u16
+}
+
+@law(cases: 500)
+fn derived_params(p: Point, d: Dir, pair: (bool, u8)) -> bool {
+    p.x == p.x && p.y == p.y
+}
+
+@law
+fn collections(xs: [4]u16, ys: Bounded<i32, 8>) -> bool {
+    xs.len() == 4 && ys.len() <= 8
+}

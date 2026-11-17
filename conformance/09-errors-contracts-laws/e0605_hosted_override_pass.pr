@@ -1,0 +1,10 @@
+//@ expected-fail: T141
+//@ covers: E0605
+// §9.4: a hosted package may provide one `@trap_handler` to override the
+// default trap output. It must not return.
+
+@trap_handler
+pub fn on_trap(kind: TrapKind, msg: str, file: str, line: u32) -> noreturn {
+    eprint("trap: {} at {}:{}\n", msg, file, line);
+    loop {}
+}

@@ -1,0 +1,21 @@
+//@ expected-fail: T137
+//@ covers: E0701
+// §9.5.3: a comptime-known condition that holds is fine, and a condition with a
+// runtime input is left to the runtime check (or none in `prod`).
+
+const LO: i32 = 3;
+
+@requires(lo <= hi, "range is inverted")
+pub fn clamp(x: i32, lo: i32, hi: i32) -> i32 {
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    x
+}
+
+fn use_clamp(x: i32, lo: i32, hi: i32) -> i32 {
+    let a = clamp(5, 0, 10);
+    let b = clamp(x, LO, LO + 1);
+    let c = clamp(x, lo, hi);
+    let d = clamp(x, 10, hi);
+    a + b + c + d
+}

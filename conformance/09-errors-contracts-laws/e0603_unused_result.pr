@@ -1,0 +1,25 @@
+//@ expected-fail: T049
+// §9.1.1: an expression statement whose type is `Result<T, E>` is an error,
+// whether the `Result` comes from a function or a method call.
+
+pub enum IoError { closed }
+
+fn send(byte: u8) -> Result<u8, IoError> {
+    if byte == 0 { return .err(.closed); }
+    return .ok(byte);
+}
+
+struct Port {
+    open: bool,
+
+    fn write(self, byte: u8) -> Result<usize, IoError> {
+        if !self.open { return .err(.closed); }
+        return .ok(1);
+    }
+}
+
+fn run(p: Port) {
+    send(1); //~ E0603
+    p.write(2); //~ E0603
+    if p.open { send(3); } //~ E0603
+}
