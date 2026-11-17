@@ -8,7 +8,9 @@ repo=$(git rev-parse --show-toplevel)
 docker run --rm -v "$repo:/src:ro" -v "$zig_dir:/zig:ro" ubuntu:24.04 bash -euo pipefail -c '
   export PATH=/zig:$PATH
   apt-get update -qq >/dev/null && apt-get install -y -qq git >/dev/null
-  git clone -q /src /w && cd /w
+  git config --global --add safe.directory "*"
+  git clone -q /src /w
+  cd /w
   zig build
   set +e; out=$(./zig-out/bin/pyro 2>&1); rc=$?; set -e
   test $rc -eq 2 && grep -q "^usage: pyro" <<<"$out"
