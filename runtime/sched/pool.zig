@@ -7,6 +7,11 @@
 //! sees every hand-off.
 // shortcut: one global FIFO under one lock; switch to per-worker work-stealing
 // deques if profiling shows queue contention.
+// shortcut: a helping joiner runs the oldest queued task of any nursery, so
+// nesting depth on one thread is bounded by queued sibling tasks, not by
+// nursery depth (a wide enough tree can overflow the native stack), and a
+// joiner whose group drained waits for unrelated nested tasks; restrict helping
+// to the joining group's descendants with the work-stealing upgrade.
 
 const std = @import("std");
 const trap = @import("../trap.zig");

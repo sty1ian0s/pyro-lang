@@ -8,6 +8,8 @@ const trap = @import("../trap.zig");
 
 /// Virtual address space reserved per thread. Pages are committed by the OS on
 /// first touch, so a thread that only spawns a few tasks uses a few pages.
+// shortcut: fixed 64 MiB per-thread reservation instead of sizing at nursery
+// entry (§10.2); size from nursery.begin when the lowering passes a frame budget.
 pub const reserve_bytes = 64 * 1024 * 1024;
 
 /// A bump allocator over one reservation that is never freed or grown.
@@ -27,11 +29,15 @@ pub const Arena = struct {
     }
 
     fn reserve(a: *Arena) void {
-        a.buf = std.heap.page_allocator.alloc(u8, reserve_bytes) catch
+        // rawAlloc, not alloc: alloc's safety @memset would commit every page.
+        const p = std.heap.page_allocator.rawAlloc(reserve_bytes, page_align, @returnAddress()) orelse
             trap.trap(.out_of_memory, "cannot reserve task arena", @src().file, @src().line);
+        a.buf = p[0..reserve_bytes];
         _ = reservations.fetchAdd(1, .monotonic);
     }
 };
+
+const page_align: std.mem.Alignment = .fromByteUnits(std.heap.page_size_min);
 
 /// The calling thread's arena.
 pub threadlocal var current: Arena = .{};
@@ -50,5 +56,13 @@ test "alloc aligns, bumps and resets to a mark" {
     _ = a.alloc(100, 16);
     a.top = mark;
     try std.testing.expectEqual(q + 8, a.alloc(1, 1));
-    std.heap.page_allocator.free(a.buf);
+    std.heap.page_allocator.rawFree(a.buf, page_align, @returnAddress());
+}
+
+test "reserving does not write (and so commit) the reservation" {
+    var a: Arena = .{};
+    _ = a.alloc(1, 1);
+    defer std.heap.page_allocator.rawFree(a.buf, page_align, @returnAddress());
+    // Fresh pages read as zero; a safety memset would have left 0xAA here.
+    try std.testing.expectEqual(0, a.buf[reserve_bytes - 1]);
 }

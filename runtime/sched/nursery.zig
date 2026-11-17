@@ -93,6 +93,8 @@ test "10k nested spawns join" {
 
 fn noop(_: ?*anyopaque) callconv(.c) void {}
 
+// Covers arena growth only: spawn has no allocator parameter, and a stray
+// malloc/page_allocator call inside it would not be caught here.
 test "spawn makes zero heap allocations; nursery_end reclaims frames" {
     spawnTree(1); // reserve this thread's arena
     const before = task_arena.reservations.load(.monotonic);
