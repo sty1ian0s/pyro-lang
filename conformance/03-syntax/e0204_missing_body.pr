@@ -1,0 +1,21 @@
+//@ expected-fail: T020
+// §3.4: a `fn` ending in `;` outside a protocol.
+fn missing_body(x: i32) -> i32; //~ E0204
+
+struct S {
+    x: i32,
+
+    fn no_body(self); //~ E0204
+}
+
+enum E {
+    a,
+
+    fn no_body(self) -> u32; //~ E0204
+}
+
+protocol P { fn required(self); }
+
+impl P for S {
+    fn required(self); //~ E0204
+}

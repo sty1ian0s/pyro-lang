@@ -1,0 +1,91 @@
+//@ expected-fail: T020
+// §3.2, §3.4: one of every item form, with doc comments, generics and parameter modes.
+//! Module documentation for the item positives.
+//! It may span several lines.
+
+use std.math;
+use std.mem as memory;
+use std.fmt.{Writer, Display as Show,};
+pub use std.meta;
+
+const ANSWER = 42;
+const LIMIT: u32 = 1_000;
+
+type Bytes = []u8;
+pub type Meters = distinct f64;
+type Pair<T> = (T, T);
+
+/// Adds two values.
+fn add(a: i32, b: i32) -> i32 { a + b }
+
+fn nothing() {}
+
+fn generic<T: Show + Eq, U,>(x: T, y: U) -> T { x }
+
+fn modes(comptime n: usize, mut buf: []u8, move h: Handle, label: str = "x",) {}
+
+fn documented(
+    /// The left operand.
+    a: i32,
+    b: i32,
+) -> i32 { a - b }
+
+/// A point mass.
+pub struct Particle {
+    /// Horizontal position.
+    pub mut x: f32,
+    pub y: f32,
+    mass: f32 = 1.0,
+
+    /// Makes a particle at rest.
+    pub fn new(x: f32) -> Particle { Particle { x, y: 0.0, .. } }
+    pub const ZERO: f32 = 0.0;
+    fn heavy(self) -> bool { self.mass > 10.0 }
+}
+
+struct Empty {}
+
+struct Wrapper<T> { inner: T }
+
+struct OnlyMembers {
+    fn make() -> OnlyMembers { OnlyMembers {} }
+}
+
+enum Color: u8 { red = 1, green = 2, blue = 4, }
+
+/// A drawable shape.
+pub enum Shape {
+    /// A circle with a radius.
+    circle(f32),
+    rect(f32, f32,),
+    point,
+
+    pub fn is_point(self) -> bool { match self { .point => true, _ => false } }
+}
+
+enum Maybe<T> { some(T), none }
+
+pub protocol Area {
+    fn area(self) -> f64;
+    fn describe(self) -> str { "shape" }
+}
+
+protocol From<E> { fn from(e: E) -> Self; }
+
+impl Area for Shape {
+    fn area(self) -> f64 { 0.0 }
+}
+
+impl<T> Area for Wrapper<T> {
+    fn area(self) -> f64 { 1.0 }
+}
+
+extern "C" {
+    /// C absolute value.
+    pub fn abs(x: c_int) -> c_int;
+    fn puts(s: *const u8) -> c_int;
+}
+
+comptime {
+    if @size_of(Particle) > 64 { @compile_error("Particle is too big"); }
+}

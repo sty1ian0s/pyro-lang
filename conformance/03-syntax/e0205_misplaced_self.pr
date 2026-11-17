@@ -1,0 +1,14 @@
+//@ expected-fail: T020
+// §3.4: `self` only as the first parameter of a member function; never `comptime self`.
+fn free(self) {} //~ E0205
+
+struct S {
+    x: i32,
+
+    fn second(x: i32, self) {} //~ E0205
+    fn ct(comptime self) {} //~ E0205
+}
+
+protocol P {
+    fn late(n: u32, self); //~ E0205
+}

@@ -1,0 +1,8 @@
+//@ expected-fail: T025
+// §3.5: the identifier after `launch` must be `gpu` or `cpu`.
+fn kernel(mut xs: []f32) {}
+
+fn run(mut xs: []f32) {
+    launch tpu kernel(mut xs); //~ E0209
+    launch GPU kernel(mut xs); //~ E0209
+}

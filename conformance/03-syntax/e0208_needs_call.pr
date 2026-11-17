@@ -1,0 +1,19 @@
+//@ expected-fail: T025
+// §3.5: `spawn`, `launch` and `return tail` take a call expression.
+fn work(n: u32) {}
+
+fn kernel(mut xs: []f32) {}
+
+fn count(n: u32) -> u32 {
+    if n == 0 { return 0; }
+    return tail count(n - 1) + 1; //~ E0208
+}
+
+fn run(mut xs: []f32, n: u32) {
+    nursery {
+        spawn 1 + 2; //~ E0208
+        spawn work; //~ E0208
+    }
+    launch gpu kernel; //~ E0208
+    launch cpu xs over 0..n; //~ E0208
+}

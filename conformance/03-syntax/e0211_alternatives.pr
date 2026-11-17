@@ -1,0 +1,23 @@
+//@ covers: E0211
+//@ expected-fail: T026
+// §3.7: alternatives binding the same names, or none.
+enum Shape { circle(f32), square(f32), point, origin }
+
+fn f(s: Shape) -> f32 {
+    match s {
+        .circle(r) | .square(r) => r,
+        .point | .origin => 0.0,
+    }
+}
+
+fn g(t: (u32, u32), c: u8) -> u32 {
+    let k = match c {
+        'a'..='z' | 'A'..='Z' => 1,
+        '0' | '1' | '2' => 2,
+        _ => 3,
+    };
+    match t {
+        (x, 0) | (0, x) => x + k,
+        _ => k,
+    }
+}

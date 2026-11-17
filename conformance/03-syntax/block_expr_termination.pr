@@ -1,0 +1,16 @@
+//@ expected-fail: T025
+// §3.5: at statement position a block expression ends the statement;
+// elsewhere it is an operand like any other expression.
+fn termination(c: bool, x: i32) -> i32 {
+    if c {} -1;
+    match x { _ => {} } (x, x);
+    { } [1, 2];
+    loop { break; } !c;
+    unsafe { } -x;
+    comptime { } (x);
+    if c { } else { } -2;
+    let v = if c { 1 } else { 2 } - 1;
+    let w = match x { _ => 3 } * 2;
+    let u = { 4 } + v;
+    if c { x } else { w + u }
+}

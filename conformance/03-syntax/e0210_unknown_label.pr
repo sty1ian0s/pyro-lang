@@ -1,0 +1,11 @@
+//@ expected-fail: T026
+// §3.5: `break :l` / `continue :l` only inside the loop labelled `l`.
+fn f(n: u32) {
+    for i in 0..n {
+        if i == 3 { break :outer; } //~ E0210
+    }
+    first: while true { break; }
+    while true {
+        continue :first; //~ E0210
+    }
+}

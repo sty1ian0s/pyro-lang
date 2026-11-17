@@ -1,0 +1,23 @@
+//@ covers: E0207
+//@ expected-fail: T026
+// §3.5, §1.6: locals, parameters, fields, indexes and dereferences are places.
+fn f(mut s: State, mut a: [4]i32, i: usize, p: *i32) {
+    let mut x = 0;
+    x = 1;
+    s.count = 2;
+    s.inner.values[0] = 3;
+    a[i] = 4;
+    s.pair.0 = 5;
+    unsafe { *p = 6; }
+    x += 1;
+    x -= 1;
+    x *= 2;
+    x /= 2;
+    x %= 3;
+    x &= 1;
+    x |= 1;
+    x ^= 1;
+    x <<= 1;
+    x >>= 1;
+    _ = x;
+}

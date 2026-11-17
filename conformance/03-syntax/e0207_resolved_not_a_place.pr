@@ -1,0 +1,18 @@
+//@ stop-after: check
+//@ expected-fail: T043
+// §3.5, §1.6: names that resolve to a constant or a function are not places.
+const LIMIT: i32 = 10;
+
+fn helper() {}
+
+fn other() {}
+
+fn assign_const() {
+    LIMIT = 11; //~ E0207
+}
+
+fn assign_fn() {
+    helper = other; //~ E0207
+}
+
+pub fn main() {}

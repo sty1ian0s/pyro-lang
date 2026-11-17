@@ -1,0 +1,20 @@
+//@ expected-fail: T026
+// §3.3: a known attribute in a position §8.8 does not list for it.
+@soa //~ E0203
+fn f() {}
+
+@inline //~ E0203
+struct S { x: i32 }
+
+struct T {
+    @soa //~ E0203
+    x: i32,
+}
+
+@cold //~ E0203
+struct U { y: i32 }
+
+fn g() {
+    @simd //~ E0203
+    while true {}
+}

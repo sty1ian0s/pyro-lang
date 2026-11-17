@@ -1,0 +1,17 @@
+//@ covers: E0501
+//@ expected-fail: T026
+// §3.5: `spawn` directly in a `nursery` and in blocks nested inside it.
+fn work() {}
+
+fn job(i: u32) {}
+
+fn run(c: bool) {
+    nursery {
+        spawn work();
+        if c { spawn work(); }
+        for i in 0..4 { spawn job(i); }
+        nursery {
+            spawn work();
+        }
+    }
+}

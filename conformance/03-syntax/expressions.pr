@@ -1,0 +1,71 @@
+//@ expected-fail: T023
+// §3.8: every primary form and every postfix form.
+struct Point {
+    x: i32,
+    y: i32,
+
+    fn twice(self) -> Self { Self { x: self.x * 2, y: self.y * 2 } }
+}
+
+fn primaries(xs: []f32, t: ((i32, i32), i32), p: Point, n: usize, ok: bool) -> i32 {
+    let a = 42;
+    let b = 3.5e2;
+    let c = 'x';
+    let d = "text\n";
+    let e = r"raw \n";
+    let f = true;
+    let g = false;
+    let usage =
+        \\usage: pyro build [options]
+        \\  --env <name>   select environment
+    ;
+    let h = a;
+    let i = @size_of(Point);
+    let j = @global_invocation_id;
+    let k = (a);
+    let l = (a, b);
+    let m = (a,);
+    let o = [];
+    let q = [1, 2, 3,];
+    let r = [0; 16];
+    let s = [x * 2.0 for x in xs];
+    let u = [x for x, idx in xs where idx > 2];
+    let v = Point { x: 1, y: 2 };
+    let w = Point { x: 1, .. };
+    let y = Point { .. };
+    let z = Point { x, y: 2, };
+    let anon = .{ x: 1, y: 2 };
+    let member = .red;
+    let inc = |x| x + 1;
+    let mul = |x: i32, y: i32,| x * y;
+    let zero = || 0;
+    let block = { 1 };
+    let cond = if ok { 1 } else if f { 2 } else { 3 };
+    let iflet = if let .some(val) = parse(a) { val } else { 0 };
+    let arms = match a { 0 => 1, _ => { 2 } };
+    let looped = loop { break 5; };
+    let raw = unsafe { *ptr };
+    let folded = comptime { 1 + 2 };
+    let prefix_ct = comptime 3 * 4;
+    let picked = comptime if ok { 1 } else { 2 };
+    let st = struct { x: i32 };
+    let field = t.0.1;
+    let member_field = p.x;
+    let method = p.twice();
+    let index = xs[0];
+    let slice = xs[1..n];
+    let tried = parse(a)?;
+    let applied = Pool(Particle).init();
+    let sized = @size_of(Pool(T));
+    let alloc = arena.alloc_slice(vec(4, f32), n);
+    let named = draw(mesh, color: .red, scale: 2.0,);
+    let fn_size = @size_of(fn(i32) -> i32);
+    let soa_size = @size_of(soa[4]Particle);
+    let anon_align = @align_of(struct { a: u8 });
+    let not = !f;
+    let inv = ~a;
+    let neg = -a;
+    let addr = unsafe { &a };
+    let chain = p.twice().twice().x;
+    a
+}

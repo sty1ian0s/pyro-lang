@@ -1,0 +1,8 @@
+//@ expected-fail: T026
+// §3.5, §1.6: literals and operator results are never places.
+fn f(x: i32) {
+    1 = x; //~ E0207
+    x + 1 = 2; //~ E0207
+    -x = 3; //~ E0207
+    x as i64 = 4; //~ E0207
+}

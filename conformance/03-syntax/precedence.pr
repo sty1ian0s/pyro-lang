@@ -1,0 +1,27 @@
+//@ expected-fail: T023
+// §3.9: operators from different levels mix freely (no E0214, no W0201).
+fn precedence(a: u32, b: u32, c: u32, p: bool, q: bool, f: f32, xs: []u32) {
+    let r1 = a..b + 1;
+    let r2 = ..=c;
+    let l2 = p || q && p;
+    let l3 = !p && q || a < b;
+    let l4 = a | b == c;
+    let l5 = a ^ b != 0;
+    let l6 = a & 0xff == 0;
+    let l7 = a << 2 | b >> 1;
+    let l8 = a + b * c - a / b % c;
+    let l9 = a * 2 << 1;
+    let l10 = a as u64 + b as u64;
+    let l11 = -f as f64;
+    let l12 = !xs.is_empty();
+    let l13 = -xs[0] as i64;
+    let l14 = a < b && b <= c && c >= a && a > 0;
+    let l15 = (a < b) == (b < c);
+    let l16 = comptime a + b;
+    let l17 = a ^ b & c | a;
+    let l18 = a - b - c;
+    let l19 = a >> 1 >> 2;
+    let l20 = a % b * c / a;
+    let l21 = 0..xs.len() as u32;
+    let l22 = parse(a)? + 1;
+}

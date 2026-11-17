@@ -1,0 +1,23 @@
+//@ expected-fail: T021
+// §3.1: `>>` closes two generic argument lists in a type context;
+// §3.6: after `as`, a path takes no `<…>`, so `<`, `>` and `>>` stay operators.
+struct Pool<T> { items: []T }
+
+struct Map<K, V> { key: K, value: V }
+
+type Nested = Pool<Pool<u8>>;
+type Deep = Map<u32, Pool<Pool<u8>>>;
+
+fn nested(p: Pool<Pool<i32>>) -> Map<u8, Pool<Pool<u8>>> { convert(p) }
+
+fn operators(a: u32, b: u32, h: Handle<u8>) -> bool {
+    let local: Pool<Pool<u8>> = .{ items: [] };
+    let s = a >> b;
+    let mut m = a;
+    m >>= 1;
+    let lt = a as u64 < b as u64;
+    let gt = a as u32 > b;
+    let sh = a as u32 >> 2;
+    let g = h as (Handle<u8>);
+    lt
+}

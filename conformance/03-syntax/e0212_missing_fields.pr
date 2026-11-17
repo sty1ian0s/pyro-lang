@@ -1,0 +1,23 @@
+//@ stop-after: check
+//@ expected-fail: T052
+// §3.7: a struct pattern without `..` names every field.
+struct Point { x: i32, y: i32 }
+
+fn first(p: Point) -> i32 {
+    let Point { x } = p; //~ E0212
+    x
+}
+
+fn second(p: Point) -> i32 {
+    let .{ y } = p; //~ E0212
+    y
+}
+
+fn third(p: Point) -> i32 {
+    match p {
+        Point { x: 0 } => 0, //~ E0212
+        _ => 1,
+    }
+}
+
+pub fn main() {}

@@ -1,0 +1,14 @@
+//@ expected-fail: T026
+// §3.5: `spawn` lexically inside a `nursery`, without crossing a `fn` or lambda boundary.
+fn work() {}
+
+fn outside() {
+    spawn work(); //~ E0501
+}
+
+fn in_lambda() {
+    nursery {
+        let task = || { spawn work(); }; //~ E0501
+        task();
+    }
+}

@@ -1,0 +1,13 @@
+//@ expected-fail: T020
+// §3.2: `pub` on `impl` and on a top-level `comptime` block is an error.
+struct Meters { v: f64 }
+
+protocol Show { fn show(self); }
+
+pub impl Show for Meters { //~ E0201
+    fn show(self) {}
+}
+
+pub comptime { //~ E0201
+    const K = 1;
+}

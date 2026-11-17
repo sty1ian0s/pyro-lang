@@ -1,0 +1,17 @@
+//@ covers: E0204
+//@ expected-fail: T020
+// §3.4: required protocol methods and extern functions have no body.
+protocol Shape {
+    fn area(self) -> f64;
+    fn scaled(self, k: f64) -> Self;
+    fn name(self) -> str { "shape" }
+}
+
+protocol From<E> { fn from(e: E) -> Self; }
+
+extern "C" {
+    fn abs(x: c_int) -> c_int;
+    pub fn puts(s: *const u8) -> c_int;
+}
+
+fn with_body() {}

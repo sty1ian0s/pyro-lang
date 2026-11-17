@@ -1,0 +1,17 @@
+//@ expected-fail: T026
+// §3.7: every alternative of a `|` pattern binds the same names.
+enum Shape { circle(f32), square(f32), point }
+
+fn f(s: Shape) -> u32 {
+    match s {
+        .circle(r) | .square(side) => 1, //~ E0211
+        .point => 0,
+    }
+}
+
+fn g(t: (u32, u32)) -> u32 {
+    match t {
+        (x, 0) | (0, y) => 1, //~ E0211
+        _ => 2,
+    }
+}

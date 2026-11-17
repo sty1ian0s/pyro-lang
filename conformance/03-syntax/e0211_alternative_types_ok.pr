@@ -1,0 +1,14 @@
+//@ stop-after: check
+//@ covers: E0211
+//@ expected-fail: T052
+// §3.7: alternatives whose bindings agree in name and type.
+enum Value { int(i32), flag(bool), other(i32) }
+
+fn number(v: Value) -> i32 {
+    match v {
+        .int(x) | .other(x) => x,
+        .flag(_) => 0,
+    }
+}
+
+pub fn main() {}

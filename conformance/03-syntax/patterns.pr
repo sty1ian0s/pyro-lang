@@ -1,0 +1,43 @@
+//@ expected-fail: T021
+// §3.7: every pattern form, in `let`, `match`, `for`, `if let`, `while let` and `guard let`.
+enum Shape { circle(f32), rect(f32, f32), point }
+
+struct Point { x: i32, y: i32 }
+
+fn patterns(s: Shape, p: Point, t: (i32, i32), n: i32, c: u32, pairs: [](i32, i32), o: Maybe) -> i32 {
+    let _ = n;
+    let mut m = n;
+    let (a, b) = t;
+    let (only,) = (n,);
+    let ((x1, _), y1) = (t, n);
+    let Point { x, y } = p;
+    let Point { x: px, .. } = p;
+    let Point { mut y, .. } = p;
+    let .{ x: qx, y: qy } = p;
+    let geo.Point { .. } = p;
+    let k = match s {
+        .circle(r) => 1,
+        .rect(w, _) | .rect(_, w) => 2,
+        .point => 3,
+    };
+    let l = match n {
+        0 => 0,
+        1 | 2 | 3 => 1,
+        -5..=-1 => 2,
+        10..20 => 3,
+        v if v > 100 => 4,
+        _ => 5,
+    };
+    let q = match c { 'a'..='z' => 1, _ => 0 };
+    let r = match (true, false) {
+        (true, false) => 1,
+        (_, true) => { 2 },
+        _ => 3
+    };
+    for (i, j) in pairs { }
+    for .{ x, y } in points { }
+    if let .some(v) = o { }
+    while let .some(v) = o { break; }
+    guard let .some(v) = o else { return 0; }
+    k + l
+}

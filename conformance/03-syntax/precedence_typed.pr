@@ -1,0 +1,16 @@
+//@ stop-after: check
+//@ expected-fail: T043
+// §3.9: precedence rows whose other grouping would not type-check.
+fn rows(a: u32, b: u32, p: bool, q: bool) {
+    // `&` (7) and `|` (5) bind tighter than `==`/`!=` (4): `a & (b == 0)` is a type error.
+    let bit_and: bool = a & b == 0;
+    let bit_or: bool = a | b != 0;
+    // `as` (11) binds tighter than `+` (9): `(a as u64 + b) as u64` would add u64 and u32.
+    let widened: u64 = a as u64 + b as u64;
+    // `<` (4) binds tighter than `&&` (3) and `||` (2).
+    let both: bool = a < b && p || q;
+    // `<<` (8) binds tighter than `>` (4).
+    let shifted: bool = a << 1 > b;
+}
+
+pub fn main() {}

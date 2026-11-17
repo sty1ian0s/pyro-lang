@@ -1,0 +1,21 @@
+//@ expected-fail: T023
+// §3.8.1: at the top level of `expr_ns`, `path {` opens the block, not a struct literal.
+struct Point { x: i32, y: i32 }
+
+fn restriction(p: Point, items: []Point, origin: Point) -> i32 {
+    if p == (Point { x: 0, y: 0 }) { return 0; }
+    if p == origin { return 1; }
+    if p == Point {}
+    while p.x < origin.x { break; }
+    match p { _ => {} }
+    match (Point { x: 1, y: 1 }) { _ => {} }
+    for q in items { }
+    for q in items where q.x > origin.x { }
+    parallel_for q in items { }
+    if let .{ x, y } = p { }
+    while let .{ x, .. } = origin { break; }
+    if f(Point { x: 1, y: 2 }) { }
+    if [Point { x: 1, y: 2 }][0] == p { }
+    let lit = Point { x: 1, y: 2 };
+    0
+}
