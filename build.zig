@@ -142,7 +142,7 @@ const Common = struct {
 /// every test tree module. T003 adds its one `m.addImport("diag_codes", ...)`
 /// line here (generator logic lives in a T003-owned file under `stage0/build/`).
 fn addCommonImports(b: *std.Build, m: *std.Build.Module, c: Common) void {
-    _ = b;
+    m.addImport("diag_codes", @import("stage0/build/diag_codes.zig").module(b));
     m.addOptions("build_options", c.build_options);
     if (c.llvm) |l| l.link(m);
 }
