@@ -1,0 +1,7 @@
+//@ expected-fail: T023
+// §3.9: `<<`/`>>` mixed with `+`/`-` without parentheses warns.
+fn f(a: u32, b: u32) {
+    let x = a << 1 + b; //~ W0201
+    let y = a + b >> 2; //~ W0201
+    let z = a - 1 << b; //~ W0201
+}

@@ -1,0 +1,24 @@
+//@ covers: E0205
+//@ expected-fail: T020
+// §3.4: `self` (plain, `mut` or `move`) first in struct, enum, protocol and impl members.
+struct Counter {
+    n: u32,
+
+    fn get(self) -> u32 { self.n }
+    fn bump(mut self) { self.n += 1; }
+    fn into_n(move self) -> u32 { self.n }
+    fn new() -> Counter { Counter { n: 0 } }
+}
+
+enum Dir {
+    up,
+    down,
+
+    fn flip(self) -> Dir { match self { .up => .down, .down => .up } }
+}
+
+protocol Fetch { fn fetch(self, scale: u32) -> u32; }
+
+impl Fetch for Counter {
+    fn fetch(self, scale: u32) -> u32 { self.n * scale }
+}

@@ -1,0 +1,58 @@
+//@ expected-fail: T025
+// §3.5: every statement form.
+fn work(n: u32) {}
+
+fn kernel(mut xs: []f32) {}
+
+fn statements(mut xs: []f32, opt: Maybe, n: u32, fields: []Field) -> u32 {
+    ;
+    let a = 1;
+    let mut b: u32 = 2;
+    let (c, d) = (3, 4);
+    let _ = a;
+    const K: u32 = 5;
+    guard let .some(v) = opt else { return 0; }
+    defer work(1);
+    defer { work(2); }
+    errdefer work(3);
+    errdefer { work(4); }
+    while b < 10 { b += 1; }
+    while let .some(w) = opt { break; }
+    for i in 0..n { continue; }
+    for x, i in xs where i > 0 { }
+    inline for f in fields { }
+    parallel_for x in xs { x *= 2.0; }
+    outer: for i in 0..n { break :outer; }
+    spin: loop { break :spin; }
+    @simd for x in xs { }
+    counted: @simd for x in xs { continue :counted; }
+    nursery { spawn work(5); }
+    launch gpu kernel(mut xs);
+    launch cpu kernel(mut xs) over 0..n;
+    _ = work(6);
+    if a > 0 { work(7); }
+    match opt { .some(z) => work(z), .none => {} }
+    unsafe { }
+    comptime { }
+    comptime if K > 1 { work(8); } else { work(9); }
+    { let inner = 1; }
+    loop { break; }
+    b = 3;
+    b += 1;
+    work(b);
+    if n == 0 { return 1; }
+    if n == 1 { return tail statements(mut xs, opt, n - 1, fields); }
+    return b;
+}
+
+fn returns_nothing() {
+    return;
+}
+
+const Tile = [64]f32;
+
+@gpu_kernel(workgroup: 64)
+fn tiled(mut out: []f32) {
+    @workgroup
+    let tile: Tile = @zero(Tile);
+}

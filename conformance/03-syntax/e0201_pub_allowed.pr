@@ -1,0 +1,31 @@
+//@ covers: E0201
+//@ expected-fail: T020
+// §3.2: `pub` is accepted on every other item kind, and on members and fields.
+pub use std.math;
+pub const LIMIT: u32 = 10;
+pub type Meters = distinct f64;
+pub fn area(w: f64, h: f64) -> f64 { w * h }
+
+pub struct Point {
+    pub x: i32,
+    pub mut y: i32,
+
+    pub fn origin() -> Point { Point { x: 0, y: 0 } }
+    pub const ZERO: i32 = 0;
+}
+
+pub enum Dir { up, down }
+
+pub protocol Show { fn show(self); }
+
+pub extern "C" {
+    pub fn abs(x: c_int) -> c_int;
+}
+
+impl Show for Point {
+    fn show(self) {}
+}
+
+comptime {
+    const K = 1;
+}

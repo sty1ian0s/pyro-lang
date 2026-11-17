@@ -1,0 +1,12 @@
+//@ covers: W0201
+//@ expected-fail: T023
+// §3.9: parenthesized mixes, and shifts mixed with other operators, do not warn.
+fn f(a: u32, b: u32) {
+    let x = (a << 1) + b;
+    let y = a << (1 + b);
+    let z = (a + b) >> 2;
+    let m = a * 2 << b;
+    let n = a & b << 1;
+    let o = a >> 1 >> 2;
+    let p = a + b * 2;
+}

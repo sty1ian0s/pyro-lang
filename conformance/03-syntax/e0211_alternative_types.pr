@@ -1,0 +1,13 @@
+//@ stop-after: check
+//@ expected-fail: T052
+// §3.7: alternatives bind the same names with the same types.
+enum Value { int(i32), flag(bool), other(i32) }
+
+fn size(v: Value) -> u32 {
+    match v {
+        .int(x) | .flag(x) => 0, //~ E0211
+        .other(_) => 1,
+    }
+}
+
+pub fn main() {}

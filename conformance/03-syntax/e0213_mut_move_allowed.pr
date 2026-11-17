@@ -1,0 +1,31 @@
+//@ covers: E0213
+//@ expected-fail: T026
+// §3.8.2: `mut` as a call-argument mode, `move` in each allowed position, and
+// `mut` as a binding form and parameter mode (not E0213).
+struct Holder { r: Res }
+
+fn consume(move r: Res) {}
+
+fn bump(mut x: u32) {}
+
+fn run(mut n: u32, move a: Res, move b: Res, move c: Res, move d: Res, move e: Res, move f: Res) -> Res {
+    bump(mut n);
+    bump(x: mut n);
+    consume(move a);
+    let mut m = n;
+    let kept = move b;
+    let h = Holder { r: move kept };
+    match move h {
+        Holder { r } => consume(move r),
+    }
+    let h2 = Holder { r: move c };
+    if let .{ r } = move h2 {
+        consume(move r);
+    }
+    let mut slot = move d;
+    slot = move e;
+    nursery {
+        spawn consume(move f);
+    }
+    return move slot;
+}

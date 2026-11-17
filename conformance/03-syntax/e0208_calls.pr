@@ -1,0 +1,20 @@
+//@ covers: E0208
+//@ expected-fail: T025
+// §3.5: function and method calls after `spawn`, `launch` and `return tail`.
+fn work(n: u32) {}
+
+fn kernel(mut xs: []f32) {}
+
+fn count(n: u32, acc: u32) -> u32 {
+    if n == 0 { return acc; }
+    return tail count(n - 1, acc + 1);
+}
+
+fn run(mut xs: []f32, w: Worker) {
+    nursery {
+        spawn work(1);
+        spawn w.process(2);
+    }
+    launch gpu kernel(mut xs);
+    launch cpu kernel(mut xs) over 0..xs.len();
+}

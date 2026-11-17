@@ -1,0 +1,11 @@
+//@ expected-fail: T026
+// §3.8.2: `mut` only directly in a call argument; `move` only in the listed positions.
+fn take(x: u32) {}
+
+fn f(mut a: u32, move r: Res, move s: Res, move t: Res) {
+    let b = mut a; //~ E0213
+    take(1 + mut a); //~ E0213
+    let c = 1 + move r; //~ E0213
+    if move s {} //~ E0213
+    let d = [move t]; //~ E0213
+}

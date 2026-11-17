@@ -1,0 +1,73 @@
+//@ covers: E0202 E0203
+//@ expected-fail: T026
+// §3.3, §8.8: listed attributes in positions they support.
+/// A particle stored column-wise.
+@soa
+@align(16)
+pub struct Particle {
+    @align(8)
+    pub mut x: f32,
+    @cold
+    pub mut debug_name: u64,
+}
+
+@packed
+struct Flags { a: u1, b: u7 }
+
+@c_layout
+enum Code: u8 { ok = 0, bad = 1 }
+
+@resource
+struct Handle {
+    fd: i32,
+
+    pub fn close(move self) {}
+}
+
+@invariant(self.lo <= self.hi, "lo must not exceed hi")
+struct Span { lo: u32, hi: u32 }
+
+@test
+fn adds() { assert(1 + 1 == 2, "math works"); }
+
+@bench
+fn bench_add() {}
+
+@inline
+@pure
+@requires(x > 0, "x must be positive")
+@ensures(result > x)
+fn next(x: u32) -> u32 { x + 1 }
+
+@no_inline @fast_math fn scale(v: f32) -> f32 { v * 2.0 }
+
+@deprecated("use next")
+@doc_hidden
+@allow(W0201)
+@deny(W0802)
+fn old(x: u32) -> u32 { x }
+
+@law(cases: 100)
+fn eq_reflexive(a: u8) -> bool { a == a }
+
+@no_alloc
+@gpu_kernel(workgroup: 64)
+fn kernel(mut out: []f32) {}
+
+@unsafe
+fn raw_thing() {}
+
+@export("pyro_add")
+pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+@link("m")
+extern "C" {
+    pub fn cos(x: f64) -> f64;
+}
+
+fn sum(xs: []f32) -> f32 {
+    let mut s: f32 = 0.0;
+    @simd
+    for x in xs { s += x; }
+    s
+}

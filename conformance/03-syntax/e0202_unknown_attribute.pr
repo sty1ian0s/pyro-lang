@@ -1,0 +1,16 @@
+//@ expected-fail: T026
+// §3.3: an attribute not listed in §8.8 is an error, in every attribute position.
+@frobnicate //~ E0202
+fn f() {}
+
+struct S {
+    @shiny //~ E0202
+    x: i32,
+}
+
+fn g(xs: []f32) {
+    @nonsense //~ E0202
+    let x = 1;
+    @Simd //~ E0202
+    for v in xs {}
+}

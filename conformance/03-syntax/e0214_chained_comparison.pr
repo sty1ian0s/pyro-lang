@@ -1,0 +1,9 @@
+//@ expected-fail: T023
+// §3.9, §3.9.1: comparisons and ranges are non-associative.
+fn f(a: i32, b: i32, c: i32, p: bool) {
+    let x = a < b < c; //~ E0214
+    let y = a == b == p; //~ E0214
+    let z = a < b == p; //~ E0214
+    let w = a >= b != p; //~ E0214
+    let r = 0..a..b; //~ E0214
+}

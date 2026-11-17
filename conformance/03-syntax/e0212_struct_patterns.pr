@@ -1,0 +1,30 @@
+//@ stop-after: check
+//@ covers: E0212
+//@ expected-fail: T052
+// §3.7: struct patterns naming every field, or ending in `..`.
+struct Point { x: i32, y: i32 }
+
+fn first(p: Point) -> i32 {
+    let Point { x, .. } = p;
+    x
+}
+
+fn both(p: Point) -> i32 {
+    let Point { x: a, y: b } = p;
+    a + b
+}
+
+fn inferred(p: Point) -> i32 {
+    let .{ mut y, .. } = p;
+    y += 1;
+    y
+}
+
+fn classify(p: Point) -> i32 {
+    match p {
+        Point { x: 0, .. } => 0,
+        Point { x, y } => x + y,
+    }
+}
+
+pub fn main() {}

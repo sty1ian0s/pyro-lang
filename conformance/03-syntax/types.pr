@@ -1,0 +1,35 @@
+//@ expected-fail: T021
+// §3.6: every type form and every generic-argument form.
+struct Pool<T> { items: []T }
+
+struct Map<K, V> { key: K, value: V }
+
+type Fixed = [4]f32;
+type Computed = [N * 2]u8;
+type Slice = []u8;
+type SoaFixed = soa[16]Particle;
+type SoaSlice = soa[]Particle;
+type Raw = *u8;
+type RawConst = *const u8;
+type View = mut Particle;
+type Callback = fn(i32, mut []u8, move Handle,) -> bool;
+type Thunk = fn();
+type TypeOfTypes = type;
+type FieldType = @field_type(Particle, "x");
+type Tuple = (i32, f32);
+type Single = (i32,);
+type Paren = (i32);
+type Anon = struct { x: i32, y: i32 };
+type Applied = Pool<Particle>;
+type Called = Pool(Particle);
+type Qualified = std.mem.Arena;
+type Lit = Fixed<-3, 'a', true, false, 64,>;
+type Braced = Channel<Msg, {CAP * 2}>;
+type BareConst = Channel<Msg, CAP>;
+type Nested = [4][]*const Pool<u8>;
+
+struct Node {
+    next: *Node,
+
+    fn clone(self) -> Self { self }
+}
