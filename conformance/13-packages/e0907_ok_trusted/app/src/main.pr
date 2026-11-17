@@ -1,0 +1,8 @@
+//@ covers: E0907
+//@ expected-fail: T167
+// `gen` is listed in [build] trusted_build_scripts, so its build.pr runs (§13.5).
+use gen;
+
+pub fn main() {
+    _ = gen.answer();
+}

@@ -1,0 +1,4 @@
+[package]
+name = "bad_segment"
+version = "0.1.0"
+edition = "2026"

@@ -1,0 +1,14 @@
+//@ covers: E0905
+//@ expected-fail: T038
+
+pub struct Square {
+    pub mut side: f32,
+}
+
+pub fn area(s: Square) -> f32 {
+    s.side * s.side
+}
+
+pub fn perimeter(s: Square) -> f32 {
+    4.0 * s.side
+}

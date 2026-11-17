@@ -1,0 +1,8 @@
+//@ expected-fail: T167
+// Build script of the dependency `gen` (§13.5).
+use std.build.{Builder};
+
+pub fn build(mut b: Builder) -> Result<void, std.build.Error> {
+    b.generate_module("version", "pub const VERSION: str = \"1.0.0\";")?;
+    return .ok();
+}

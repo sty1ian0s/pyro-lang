@@ -1,0 +1,4 @@
+//~ E0901 the file name `bad-name` is not an identifier
+//@ expected-fail: T036
+
+pub fn helper() {}

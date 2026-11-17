@@ -1,0 +1,40 @@
+[package]
+name = "full_manifest"
+version = "0.4.2-beta.1+build.7"
+edition = "2026"
+description = "every table of §13.2 without fetching anything"
+license = "MIT OR Apache-2.0"
+no_std = false
+
+[dependencies]
+
+[dev-dependencies]
+
+[build]
+targets = ["x86_64-linux-gnu", "aarch64-macos"]
+backend = "llvm"
+trusted_build_scripts = []
+
+[gpu]
+backends = ["vulkan", "metal", "webgpu"]
+fallback = true
+
+[link]
+mode = "static"
+
+[env.dev]
+db_url = "sqlite://dev.db"
+log_level = "trace"
+any_user_key = 3
+
+[env.prod]
+opt_level = "O3"
+debug_info = "lines"
+
+[env.staging]
+opt_level = "O2"
+log_level = "warn"
+ratio = 0.5
+
+[metadata]
+anything = { goes = ["here", 1, true] }

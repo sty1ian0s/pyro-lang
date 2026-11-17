@@ -1,0 +1,5 @@
+//@ covers: E0909
+//@ expected-fail: T029
+// Every §13.2 table, with user keys in [env.*] and free-form [metadata] (§13.2).
+
+pub fn main() {}

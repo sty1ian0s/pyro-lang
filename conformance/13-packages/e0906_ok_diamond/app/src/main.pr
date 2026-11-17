@@ -1,0 +1,10 @@
+//@ covers: E0906
+//@ expected-fail: T158
+// A diamond is not a cycle: `base` is shared by `left` and `right` and is
+// compiled once (§13.4).
+use left;
+use right;
+
+pub fn main() {
+    _ = left.answer() + right.answer();
+}

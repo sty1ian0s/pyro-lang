@@ -1,0 +1,4 @@
+//@ covers: E0901
+//@ expected-fail: T036
+
+pub fn step() {}

@@ -1,0 +1,9 @@
+//@ covers: E0904
+//@ expected-fail: T038
+// `util` names the dependency and `helpers` the local module (§7.8.2).
+use util;
+use helpers;
+
+pub fn main() {
+    _ = util.answer() + helpers.offset();
+}

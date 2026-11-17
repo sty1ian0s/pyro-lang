@@ -1,0 +1,5 @@
+//@ covers: E0911
+//@ expected-fail: T159
+// Every hash in pyro.lock matches (there are none) (§13.4).
+
+pub fn main() {}

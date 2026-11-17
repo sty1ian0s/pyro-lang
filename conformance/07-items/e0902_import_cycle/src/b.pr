@@ -1,0 +1,7 @@
+//@ expected-fail: T036
+// Part of the import cycle a → b → c → a (§7.8.3).
+use c; //~ E0902
+
+pub fn g() {
+    c.h();
+}

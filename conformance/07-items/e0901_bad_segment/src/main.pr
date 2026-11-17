@@ -1,0 +1,6 @@
+//~ E0901 is reported on line 1 of src/bad-name.pr (matching ignores the file)
+//@ expected-fail: T036
+// Module path segments must be identifiers (§7.8.1): `src/bad-name.pr` would be
+// module `bad-name`.
+
+pub fn main() {}

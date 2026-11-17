@@ -1,0 +1,7 @@
+# Conformance fixture: the util hash below is deliberately wrong (E0911).
+
+[[package]]
+name = "util"
+version = "1.0.0"
+source = "path+../util"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"

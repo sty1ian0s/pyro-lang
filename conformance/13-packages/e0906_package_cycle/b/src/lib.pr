@@ -1,0 +1,7 @@
+//@ expected-fail: T158
+// Packages a and b depend on each other (§13.4). The dependency entries are on
+// line 7 of both manifests.
+pub fn answer() -> u32 {
+    42
+}
+// pyro.toml line 7: a = { path = "../a" } //~ E0906

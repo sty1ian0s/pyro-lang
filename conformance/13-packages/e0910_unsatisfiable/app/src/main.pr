@@ -1,0 +1,7 @@
+//@ expected-fail: T158
+// No version of `util` satisfies ^2.0: the path package is version 1.4.0
+// (§13.4).
+use util;
+
+pub fn main() {}
+// pyro.toml line 7: util = { path = "../util", version = "^2.0" } //~ E0910

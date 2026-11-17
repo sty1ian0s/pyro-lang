@@ -1,0 +1,6 @@
+//@ covers: E0908
+//@ expected-fail: T031
+
+pub fn answer() -> u32 {
+    42
+}

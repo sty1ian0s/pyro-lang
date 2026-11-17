@@ -1,0 +1,7 @@
+//@ covers: E0906
+//@ expected-fail: T158
+use base;
+
+pub fn answer() -> u32 {
+    base.answer()
+}
