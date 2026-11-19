@@ -52,7 +52,9 @@ pub fn block(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
         defer c.b.node = saved;
         if (try stmt(c, s)) diverges = true;
     }
-    const v: Typed = if (d.tail) |t| try check_expr.check(c, t, expected) else .void_value;
+    // A `mut T` tail is a view of a place, as for `return` (§5.5.4).
+    const view = expected != .none and expected != .err and c.types.get(expected) == .mut_view;
+    const v: Typed = if (d.tail) |t| (if (view) try check_expr.checkAs(c, t, expected) else try check_expr.check(c, t, expected)) else .void_value;
     return if (diverges and v.ty != .err) .never else v;
 }
 

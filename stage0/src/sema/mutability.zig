@@ -252,6 +252,8 @@ pub fn viewMut(c: *Checker, n: Node.Index, to: TypeId) Error!Typed {
         .self_value => true,
         .ident => check_call.localOf(c, root) != null,
         .prefix => c.ast.tokens.items(.kind)[c.ast.mainToken(root)] == .star,
+        // A part of a call result: a place if the call gives a `mut T` view.
+        .call => root != unparen(c.ast, n),
         else => false,
     };
     if (!is_place) return c.coerce(try check_expr.check(c, n, to), to, n);
@@ -460,7 +462,12 @@ test "`-> mut Self` chaining and `let p: mut T = place` write through (§5.5.3, 
         \\    pub mut x: f32,
         \\    pub fn push(mut self, dx: f32) -> mut Self { self.x += dx; return self; }
         \\    pub fn get(self) -> f32 { self.x }
+        \\    pub fn pull(mut self) -> mut Self { self.x -= 1.0; self }
+        \\    pub fn xm(mut self) -> mut f32 { self.x }
         \\}
+        \\fn tails(mut p: Particle) -> f32 { p.pull().pull().get() }
+        \\fn bump(mut n: f32) { n += 1.0; }
+        \\fn field(mut p: Particle) { let r: mut f32 = p.push(1.0).x; r = 2.0; bump(mut p.pull().x); }
         \\fn chain(mut p: Particle) -> f32 { p.push(1.0).push(2.0).get() }
         \\fn step(mut particles: []Particle, i: usize) {
         \\    let p: mut Particle = particles[i];
@@ -472,6 +479,8 @@ test "`-> mut Self` chaining and `let p: mut T = place` write through (§5.5.3, 
     try f.expectDiags(&.{});
     _ = try f.func("chain");
     _ = try f.func("copy");
+    _ = try f.func("tails");
+    _ = try f.func("field");
     try f.expectDump("step",
         \\fn step(l0 mut particles: []Particle, l1 i: usize) -> void {
         \\  l2 p: mut Particle
@@ -517,8 +526,60 @@ test "`mut` bindings of a `match` on a mutable place are views" {
         \\struct P { x: u32, on: bool }
         \\fn get(mut o: Option<u32>) { match o { .some(mut v) => { v += 1; }, .none => {} } }
         \\fn bits(mut p: P) { match p { P { x: mut x, on: mut on } => { x += 1; } } }
+        \\struct S { pub mut o: Option<u32>, pub mut p: P }
+        \\fn field(mut s: S) { match s.o { .some(mut v) => { v += 1; }, .none => {} } }
+        \\fn view(mut q: P) { let v: mut P = q; match v { P { x: mut x, on: _ } => { x += 1; } } }
+        \\fn whole(mut s: S) { if let P { x: _, on: mut on } = s.p { on = true; } }
     );
     defer f.deinit();
-    try f.expectDiags(&.{.{ .E0308, "on" }});
+    try f.expectDiags(&.{ .{ .E0308, "on" }, .{ .E0308, "on" } });
     _ = try f.func("get");
+    _ = try f.func("view");
+    // `v` views the payload inside `s.o`: the write reaches `s`.
+    try f.expectDump("field",
+        \\fn field(l0 mut s: S) -> void {
+        \\  l1 v: mut u32
+        \\b0:
+        \\  %0: S = local l0
+        \\  %1: Option<u32> = field %0, 0
+        \\  %2: u8 = enum_tag %1
+        \\  %3: u8 = int 0
+        \\  %4: bool = eq %2, %3
+        \\  cond_br %4, b2, b1
+        \\b1:
+        \\  %17: u8 = enum_tag %1
+        \\  %18: u8 = int 1
+        \\  %19: bool = eq %17, %18
+        \\  cond_br %19, b4, b3
+        \\b2:
+        \\  %6: u32 = variant_field %1, 0, 0
+        \\  %7: mut u32 = view_mut %6
+        \\  %8: mut u32 = local l1
+        \\  store %8, %7
+        \\  %10: mut u32 = local l1
+        \\  %11: mut u32 = load %10
+        \\  %12: u32 = deref %11
+        \\  %13: u32 = load %12
+        \\  %14: u32 = int 1
+        \\  %15: u32 = add %13, %14
+        \\  store %12, %15
+        \\  br b5, []
+        \\b3:
+        \\  unreachable
+        \\b4:
+        \\  br b5, []
+        \\b5:
+        \\  ret _
+        \\}
+        \\
+    );
+}
+
+test "`mut` bindings of a guarded `match` on a mutable place are unsupported until T082" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn guarded(mut o: Option<u32>, k: bool) { match o { .some(mut v) if k => { v += 1; }, _ => {} } }
+    );
+    defer f.deinit();
+    try testing.expectEqualStrings("`mut` views bound by a guarded `match` (T082)", f.bodies.unsupported.?.what);
 }
