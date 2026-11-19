@@ -10,6 +10,7 @@ const diag = @import("diag.zig");
 const Diagnostic = diag.Diagnostic;
 const DiagCode = diag.DiagCode;
 const NodeRef = diag.NodeRef;
+const Severity = diag.Severity;
 const Span = diag.Span;
 
 const Sink = @This();
@@ -75,13 +76,13 @@ pub fn isPoisoned(s: *Sink, node: NodeRef) bool {
     return s.poisoned.contains(node);
 }
 
-/// True if an error not dropped as a cascade has been emitted so far.
-/// Warnings promoted by `@deny` count only after `finish`.
+/// True if an error not dropped as a cascade has been emitted so far,
+/// counting warnings that `warning_policy` promotes (`@deny`).
 pub fn hasErrors(s: *Sink) bool {
     s.mutex.lockUncancelable(s.io);
     defer s.mutex.unlock(s.io);
     for (s.diags.items) |d| {
-        if (d.severity == .@"error" and !s.isCascade(d)) return true;
+        if (s.severityOf(d) == .@"error") return true;
     }
     return false;
 }
@@ -95,22 +96,29 @@ pub fn finish(s: *Sink) []const Diagnostic {
     defer s.mutex.unlock(s.io);
     var kept: usize = 0;
     for (s.diags.items) |d| {
-        if (s.isCascade(d)) continue;
         var out = d;
-        if (s.warning_policy) |p| if (d.code) |c| if (c.isWarning()) {
-            const level: WarningLevel = if (d.primarySpan()) |sp| p.levelAt(p.ctx, c, sp) else .warn;
-            switch (level) {
-                .allow => continue,
-                .warn => {},
-                .deny => out.severity = .@"error",
-            }
-        };
+        out.severity = s.severityOf(d) orelse continue;
         s.diags.items[kept] = out;
         kept += 1;
     }
     s.diags.shrinkRetainingCapacity(kept);
     std.mem.sort(Diagnostic, s.diags.items, {}, lessThan);
     return s.diags.items;
+}
+
+/// The severity `d` is reported with, or null if it is dropped (a cascade
+/// or an `@allow`ed warning). Caller holds the mutex.
+fn severityOf(s: *const Sink, d: Diagnostic) ?Severity {
+    if (s.isCascade(d)) return null;
+    const p = s.warning_policy orelse return d.severity;
+    const c = d.code orelse return d.severity;
+    if (!c.isWarning()) return d.severity;
+    const level: WarningLevel = if (d.primarySpan()) |sp| p.levelAt(p.ctx, c, sp) else .warn;
+    return switch (level) {
+        .allow => null,
+        .warn => d.severity,
+        .deny => .@"error",
+    };
 }
 
 fn isCascade(s: *const Sink, d: Diagnostic) bool {
@@ -361,10 +369,11 @@ test "warning policy: allow drops, deny promotes, errors untouched" {
     defer s.deinit();
     s.warning_policy = .{ .ctx = undefined, .levelAt = Policy.levelAt };
     try s.emitAt(.W0201, at(0, 0), "allowed");
+    try testing.expect(!s.hasErrors());
     try s.emitAt(.W0201, at(0, 1), "denied");
     try s.emitAt(.W0201, at(0, 2), "warned");
+    try testing.expect(s.hasErrors()); // the denied warning counts before `finish`
     try s.emitAt(.E0214, at(0, 3), "error");
-    try testing.expect(s.hasErrors());
     const ds = s.finish();
     try testing.expectEqual(3, ds.len);
     try testing.expectEqualStrings("denied", ds[0].message);
