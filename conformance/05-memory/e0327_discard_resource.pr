@@ -1,4 +1,3 @@
-//@ expected-fail: T050
 // §5.3.3, §6.11.1: `_ = e;` is an error when `e` has resource type.
 
 @resource

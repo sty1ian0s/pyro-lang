@@ -17,8 +17,12 @@
 //! - `checkSignature` checks parameter declarations: E0339 for a `mut T`
 //!   parameter type (§4.5.3), E0326 for `move` on a concrete plain type.
 //!
-//! Method calls are T050's, generic calls T068's and calls of functions
-//! with `comptime` parameters (instantiation) T063's.
+//! - `callFn` calls a declared function, optionally with an already passed
+//!   receiver for its first parameter; method calls (`check_member.zig`)
+//!   bind through it.
+//!
+//! Generic calls are T068's and calls of functions with `comptime`
+//! parameters (instantiation) T063's.
 
 const std = @import("std");
 const Ast = @import("../ast/Ast.zig");
@@ -29,6 +33,8 @@ const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_literals = @import("check_literals.zig");
 const builtins = @import("builtins.zig");
+const check_member = @import("check_member.zig");
+const check_stmt = @import("check_stmt.zig");
 const tir = @import("../tir/tir.zig");
 const module_graph = @import("../resolve/module_graph.zig");
 const Ref = @import("../resolve/imports.zig").Ref;
@@ -54,9 +60,10 @@ pub fn call(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const d = c.ast.data(n).call;
     switch (c.ast.kind(d.callee)) {
         .inferred_member => return check_literals.inferredCall(c, n, expected),
-        .field_access => return c.unsupported(n, "method and associated-function calls (T050)"),
-        .ident => {
-            const e = c.items.names.get(c.m, d.callee) orelse return failedCall(c, d);
+        .ident, .field_access => {
+            // A `field_access` is a module member (`geo.area`) or a method.
+            const e = c.items.names.get(c.m, d.callee) orelse
+                return if (c.ast.kind(d.callee) == .field_access) check_member.call(c, n, expected) else failedCall(c, d);
             switch (e.res) {
                 .global => |t| switch (t) {
                     .item => |ref| return direct(c, n, d, ref),
@@ -75,22 +82,34 @@ pub fn call(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
 
 /// A call of item `ref` by name.
 fn direct(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), ref: Ref) Error!Typed {
-    const item = c.items.im.graph.modules[ref.module].items[ref.item];
     const sig = switch ((try c.items.info(ref)).*) {
         .@"fn" => |f| f,
         else => return c.unsupported(n, "calls of this form (T046, T065)"),
     };
+    return callFn(c, n, ref.module, sig, null, d.args);
+}
+
+/// Call `n` of function `sig` declared in module `m` with `args`. A
+/// `recv`, already passed by the caller, is the first argument (§6.3.3)
+/// and `args` bind to the other parameters.
+pub fn callFn(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod.Fn, recv: ?Typed, args: []const Node.Index) Error!Typed {
     if (sig.generics.len > 0) return c.unsupported(n, "generic calls (T068)");
     if (sig.ret == .err) c.failed = true;
-    const params = try c.arena.alloc(Param, sig.params.len);
+    const skip = @intFromBool(recv != null);
+    const params = try c.arena.alloc(Param, sig.params.len - skip);
     var has_comptime = false;
-    for (sig.params, params) |p, *o| {
+    for (sig.params[skip..], params) |p, *o| {
         o.* = .{ .name = p.name, .mode = p.mode, .type = p.type, .default = p.default };
         has_comptime = has_comptime or p.mode == .@"comptime";
     }
-    const b = try bind(c, n, d, params, true);
+    var b = try bind(c, n, c.ast.data(n).call.callee, args, params, true);
+    if (recv) |r| {
+        b.args = try std.mem.concat(c.arena, tir.Ref, &.{ &.{r.ref}, b.args });
+        b.ok = b.ok and r.ty != .err;
+        b.diverges = b.diverges or r.ty == .noreturn;
+    }
     if (has_comptime and b.ok) return c.unsupported(n, "calls of functions with `comptime` parameters (T063)");
-    const id = try c.bodies.fnId(ref.module, item.node, item.name);
+    const id = try c.bodies.fnId(m, sig.node, sig.name);
     return finish(c, sig.ret, b, .{ .call = .{ .callee = id, .args = b.args } });
 }
 
@@ -116,25 +135,25 @@ fn indirect(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call")) Error!T
         .move => .move,
     } };
     if (fp.ret == .err) c.failed = true;
-    const b = try bind(c, n, d, params, false);
+    const b = try bind(c, n, d.callee, d.args, params, false);
     return finish(c, fp.ret, b, .{ .call_indirect = .{ .callee = f.ref, .args = b.args } });
 }
 
 /// Bound arguments in parameter order.
 const Bound = struct { args: []tir.Ref, ok: bool, diverges: bool };
 
-/// Binds and checks `d.args` against `params` (§6.9, §7.2.4): explicit
+/// Binds and checks `args` of the call of `callee` against `params` (§6.9, §7.2.4): explicit
 /// arguments left to right in source order, then the missing parameters'
 /// defaults in parameter order (§6.12.7). `named_ok` is false through a
 /// function pointer.
-fn bind(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), params: []const Param, named_ok: bool) Error!Bound {
+fn bind(c: *Checker, n: Node.Index, callee: Node.Index, args: []const Node.Index, params: []const Param, named_ok: bool) Error!Bound {
     const ast = c.ast;
     var b: Bound = .{ .args = try c.arena.alloc(tir.Ref, params.len), .ok = true, .diverges = false };
     const given = try c.arena.alloc(bool, params.len);
     @memset(given, false);
     var next: usize = 0;
     var named = false;
-    for (d.args) |a| {
+    for (args) |a| {
         const value = unwrapArg(ast, a);
         const i: ?usize = if (ast.kind(a) == .named_arg) blk: {
             named = true;
@@ -146,7 +165,7 @@ fn bind(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), params: []c
             const i = for (params, 0..) |p, i| {
                 if (std.mem.eql(u8, p.name.?, name)) break i;
             } else {
-                try c.reportAt(ast.mainToken(a), null, &.{}, "`{s}` has no parameter named `{s}`", .{ ast.tokenSlice(ast.mainToken(d.callee)), name });
+                try c.reportAt(ast.mainToken(a), null, &.{}, "`{s}` has no parameter named `{s}`", .{ ast.tokenSlice(ast.mainToken(callee)), name });
                 break :blk null;
             };
             if (given[i]) {
@@ -179,8 +198,8 @@ fn bind(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), params: []c
         const def = p.default orelse {
             // After a binding error, a missing parameter is usually its consequence.
             if (!b.ok) {} else if (p.name) |name| {
-                try c.report(d.callee, null, "missing argument for parameter `{s}`", .{name});
-            } else try c.report(d.callee, null, "missing arguments: the function pointer takes {d}", .{params.len});
+                try c.report(callee, null, "missing argument for parameter `{s}`", .{name});
+            } else try c.report(callee, null, "missing arguments: the function pointer takes {d}", .{params.len});
             b.ok = false;
             continue;
         };
@@ -192,7 +211,7 @@ fn bind(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), params: []c
 }
 
 /// The value of a `named_arg` or `mut_arg` argument, or the argument itself.
-fn unwrapArg(ast: *const Ast, a: Node.Index) Node.Index {
+pub fn unwrapArg(ast: *const Ast, a: Node.Index) Node.Index {
     var x = a;
     if (ast.kind(x) == .named_arg) x = ast.data(x).named_arg.value;
     if (ast.kind(x) == .mut_arg) x = ast.data(x).mut_arg.value;
@@ -210,15 +229,14 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
             _ = try check_expr.check(c, value, .none);
             return .err;
         }
-        const l = try mutPlace(c, a, value) orelse return .err;
-        const ty = c.b.locals.items(.ty)[l.int()];
-        if (ty != p.type and ty != .err and p.type != .err) {
-            try c.mismatch(value, p.type, ty);
+        const place = try mutPlace(c, a, value) orelse return .err;
+        if (place.ty == .err or p.type == .err) return .err;
+        if (place.ty != p.type) {
+            try c.mismatch(value, p.type, place.ty);
             return .err;
         }
-        const place = try c.emit(ty, .{ .local = .{ .local = l } });
-        const view = try c.types.intern(.{ .mut_view = .{ .elem = ty } });
-        return .{ .ty = view, .ref = try c.emit(view, .{ .view_mut = .{ .place = place } }) };
+        const view = try c.types.intern(.{ .mut_view = .{ .elem = place.ty } });
+        return .{ .ty = view, .ref = try c.emit(view, .{ .view_mut = .{ .place = place.ref } }) };
     }
     if (marked) try c.reportAt(ast.mainToken(a), .E0335, &.{"remove `mut`: the parameter is read-only"}, "`mut` given for read-only parameter{s}", .{try paramName(c, p)});
     if (p.mode == .@"comptime") if (c.items.runtimeRef(c.m, value)) |r| {
@@ -258,7 +276,7 @@ fn paramName(c: *Checker, p: Param) Error![]const u8 {
 
 /// The local that place expression `n` names (a binding, a parameter or
 /// `self`, possibly parenthesized), or null.
-fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
+pub fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
     switch (c.ast.kind(n)) {
         .paren => return localOf(c, c.ast.data(n).paren.inner),
         .self_value => return c.self_local.unwrap(),
@@ -277,14 +295,22 @@ fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
 }
 
 /// The mutable place `value` of `mut` argument `a` names (§5.5.2): a
-/// `let mut` binding, a `mut` parameter or `mut self`; E0336 otherwise.
-fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?tir.Local {
+/// `let mut` binding, a `mut` parameter or `mut self`, or a field of one;
+/// E0336 otherwise.
+fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?check_stmt.Place {
     const ast = c.ast;
     var v = value;
-    while (ast.kind(v) == .paren) v = ast.data(v).paren.inner;
+    // The root of a field chain decides mutability (§5.5.2).
+    while (true) switch (ast.kind(v)) {
+        .paren => v = ast.data(v).paren.inner,
+        .field_access => if (c.items.names.get(c.m, v) == null) {
+            v = ast.data(v).field_access.lhs;
+        } else break,
+        else => break,
+    };
     switch (ast.kind(v)) {
-        .field_access, .index => {
-            _ = c.unsupported(v, "`mut` arguments of fields and elements (T050, T051)");
+        .index => {
+            _ = c.unsupported(v, "`mut` arguments of elements (T051)");
             return null;
         },
         // `*p` names a place through a raw pointer; other prefix forms are values.
@@ -305,7 +331,10 @@ fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?tir.Local {
     };
     const info = c.b.locals.get(l.int());
     switch (info.kind) {
-        .let_mut, .param_mut, .temp => return l,
+        .let_mut, .param_mut, .temp => return try check_member.place(c, value, .write) orelse {
+            try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
+            return null;
+        },
         .let, .param, .param_move => {
             try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place: `{s}` is not mutable", .{c.types.strings.get(info.name)});
             return null;
@@ -345,7 +374,8 @@ fn failedCall(c: *Checker, d: @FieldType(Ast.Data, "call")) Error!Typed {
     return failedArgs(c, d.args);
 }
 
-fn failedArgs(c: *Checker, args: []const Node.Index) Error!Typed {
+/// Checks the arguments of a call that failed, for their own errors.
+pub fn failedArgs(c: *Checker, args: []const Node.Index) Error!Typed {
     for (args) |a| _ = try check_expr.check(c, unwrapArg(c.ast, a), .none);
     return .err;
 }
@@ -375,11 +405,17 @@ pub fn fnValue(c: *Checker, n: Node.Index, ref: Ref) Error!Typed {
             return .err;
         },
     };
-    if (sig.generics.len > 0) return c.unsupported(n, "instantiating generic functions (T068)");
     if (item.kind == .extern_fn) {
         try c.reportAt(c.ast.mainToken(n), null, &.{"`fn` pointers use the Pyro calling convention; wrap the call in a Pyro function"}, "`extern` function `{s}` cannot be used as a value", .{item.name});
         return .err;
     }
+    return fnOf(c, n, ref.module, sig);
+}
+
+/// Function `sig` of module `m` (an item or a member function) named at
+/// `n` without a call: an `fn(...) -> R` value (§7.2.5).
+pub fn fnOf(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod.Fn) Error!Typed {
+    if (sig.generics.len > 0) return c.unsupported(n, "instantiating generic functions (T068)");
     const params = try c.arena.alloc(Types.FnParam, sig.params.len);
     var bad = sig.ret == .err;
     for (sig.params, params) |p, *o| {
@@ -396,7 +432,7 @@ pub fn fnValue(c: *Checker, n: Node.Index, ref: Ref) Error!Typed {
         return .err;
     }
     const ty = try c.types.intern(.{ .fn_ptr = .{ .params = params, .ret = sig.ret } });
-    const id = try c.bodies.fnId(ref.module, item.node, item.name);
+    const id = try c.bodies.fnId(m, sig.node, sig.name);
     return .{ .ty = ty, .ref = try c.emit(ty, .{ .fn_ref = .{ .func = id } }) };
 }
 
@@ -660,16 +696,17 @@ test "`move` arguments are unsupported until T080" {
     }
 }
 
-test "`mut` arguments: parenthesized fields are unsupported, values are E0336" {
+test "`mut` arguments: parenthesized places, fields of mutable places; values are E0336" {
     for ([_]struct { []const u8, ?diag.DiagCode, ?[]const u8 }{
-        .{ "heal(mut (p.health), 1);", null, "`mut` arguments of fields and elements (T050, T051)" },
+        .{ "heal(mut (p.health), 1);", null, null },
+        .{ "heal(mut r.health, 1);", .E0336, null },
         .{ "heal(mut ((q)), 1);", null, null },
         .{ "heal(mut -q, 1);", .E0336, null },
         .{ "heal(mut (1), 1);", .E0336, null },
     }) |case| {
         var f: Fixture = undefined;
         const src = try std.mem.concat(testing.allocator, u8, &.{
-            "struct P { health: u8 }\nfn heal(mut p: u8, amount: u8) { p += amount; }\nfn demo(mut p: P) {\n    let mut q: u8 = 1;\n    ",
+            "struct P { health: u8 }\nfn heal(mut p: u8, amount: u8) { p += amount; }\nfn demo(mut p: P, r: P) {\n    let mut q: u8 = 1;\n    ",
             case[0],
             "\n}\n",
         });

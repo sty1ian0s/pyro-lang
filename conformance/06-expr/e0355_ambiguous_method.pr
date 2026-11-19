@@ -1,4 +1,3 @@
-//@ expected-fail: T050
 // §6.3.3: when two protocol impls provide the method, the call is ambiguous.
 
 pub protocol Walk { fn step(self) -> u32; }

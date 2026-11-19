@@ -1,4 +1,3 @@
-//@ expected-fail: T177
 // §11.1.7: a builtin variable or builtin function used outside the stages listed for
 // it is an error, including in a function that is not a stage.
 

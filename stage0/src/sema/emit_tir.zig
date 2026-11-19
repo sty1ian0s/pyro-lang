@@ -125,6 +125,9 @@ pub const Bodies = struct {
     ids: std.AutoHashMapUnmanaged(struct { ModuleId, Node.Index }, tir.FnId) = .empty,
     /// The first construct that could not be checked, if any.
     unsupported: ?Unsupported = null,
+    /// The package's protocols and impls, for method resolution (§6.3.3);
+    /// null when bodies are checked without them.
+    protos: ?*protocols_mod.Protocols = null,
 
     pub fn deinit(bs: *Bodies) void {
         const gpa = bs.arena.child_allocator;
@@ -457,10 +460,10 @@ fn closingBrace(ast: *const Ast, open: Ast.TokenIndex) Ast.TokenIndex {
 /// reports to `it.sink`. Errors are internal failures only.
 /// `protos`, if given, supplies the `impl` blocks whose methods are checked;
 /// without it they are recorded as unsupported.
-pub fn checkBodies(gpa: Allocator, it: *Items, protos: ?*const protocols_mod.Protocols) Error!Bodies {
+pub fn checkBodies(gpa: Allocator, it: *Items, protos: ?*protocols_mod.Protocols) Error!Bodies {
     const arena = try gpa.create(std.heap.ArenaAllocator);
     arena.* = .init(gpa);
-    var bs: Bodies = .{ .arena = arena };
+    var bs: Bodies = .{ .arena = arena, .protos = protos };
     errdefer bs.deinit();
     for (it.im.graph.modules, 0..) |cm, mi| {
         const m: ModuleId = @intCast(mi);
@@ -526,7 +529,9 @@ fn checkDecl(bs: *Bodies, it: *Items, m: ModuleId, f: items_mod.Fn, self_ty: Typ
         if (bs.unsupported == null) bs.unsupported = .{ .module = m, .node = f.node, .what = "generic function bodies (T070)" };
         return;
     }
-    bs.fns.items[id.int()].func = try checkFn(bs, it, m, f, self_ty);
+    // Checking may add bodies (callees) and move `bs.fns.items`.
+    const func = try checkFn(bs, it, m, f, self_ty);
+    bs.fns.items[id.int()].func = func;
 }
 
 /// Records the bodies of the members of `decl` as unsupported.
@@ -601,6 +606,7 @@ pub const Fixture = struct {
     strings: Interner,
     types: Types,
     items: Items,
+    protos: protocols_mod.Protocols,
     bodies: Bodies,
 
     pub fn init(f: *Fixture, source: []const u8) !void {
@@ -617,11 +623,13 @@ pub const Fixture = struct {
         f.types = try .init(testing.allocator, testing.io, &f.strings);
         const pkg: Types.Package = .{ .name = try f.strings.intern("app"), .line = .{ .major = 1 } };
         f.items = try items_mod.check(testing.allocator, &f.p.sink, &f.types, &f.im, &f.names, .{ .package = pkg });
-        f.bodies = try checkBodies(testing.allocator, &f.items, null);
+        f.protos = try protocols_mod.check(testing.allocator, &f.p.sink, &f.items, .{});
+        f.bodies = try checkBodies(testing.allocator, &f.items, &f.protos);
     }
 
     pub fn deinit(f: *Fixture) void {
         f.bodies.deinit();
+        f.protos.deinit();
         f.items.deinit();
         f.types.deinit();
         f.strings.deinit();

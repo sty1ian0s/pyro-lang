@@ -22,6 +22,7 @@ const emit_tir = @import("emit_tir.zig");
 const check_stmt = @import("check_stmt.zig");
 const check_literals = @import("check_literals.zig");
 const check_call = @import("check_call.zig");
+const check_member = @import("check_member.zig");
 const builtins = @import("builtins.zig");
 const tir = @import("../tir/tir.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
@@ -52,6 +53,7 @@ const handlers = blk: {
         .{ .binary, binary },
         .{ .cast, cast },
         .{ .call, check_call.call },
+        .{ .field_access, check_member.fieldAccess },
         .{ .struct_lit, check_literals.structLit },
         .{ .anon_lit, check_literals.anonLit },
         .{ .inferred_member, check_literals.inferredMember },
@@ -71,7 +73,6 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .field_access => "field access and methods (T050)",
         .index, .range => "indexing and ranges (T051)",
         .match, .let_cond => "`match` (T052)",
         .unsafe_block => "`unsafe` blocks (T054)",
@@ -185,7 +186,7 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
 }
 
 /// The value of const `k` used at `n` (§7.7): untyped constants stay untyped.
-fn constValue(c: *Checker, n: Node.Index, k: items_mod.Const) Error!Typed {
+pub fn constValue(c: *Checker, n: Node.Index, k: items_mod.Const) Error!Typed {
     return switch (k.value) {
         .untyped => |u| .{ .ty = u.typeOf(), .konst = u },
         .scalar => |s| c.constant(s),

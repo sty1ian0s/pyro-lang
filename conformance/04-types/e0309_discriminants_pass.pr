@@ -1,4 +1,3 @@
-//@ expected-fail: T050
 //@ covers: E0309
 // §4.11.4, §7.4: `nop = 0, load, halt = 0xFF` gives 0, 1, 255.
 

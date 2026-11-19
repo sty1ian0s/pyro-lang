@@ -1,4 +1,4 @@
-//@ expected-fail: T050
+//@ expected-fail: T130
 //@ covers: E0328
 // §5.1, §10.5: shared cells are used through their methods and passed to
 // read-only parameters as views.

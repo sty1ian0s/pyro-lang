@@ -1,4 +1,3 @@
-//@ expected-fail: T050
 //@ covers: E0355
 // §6.3.3: `Protocol.m(e)` resolves the ambiguity, and a type member beats a
 // free function of the same name.
