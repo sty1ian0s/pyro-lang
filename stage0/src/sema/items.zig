@@ -21,7 +21,7 @@
 //! positions (const initializers, defaults, discriminants, array lengths,
 //! value generic arguments) are folded here when they are literals, consts
 //! and operators on them; anything else goes to `Options.comptime_hook`,
-//! the seam for the full comptime evaluator (T060), and stays `.unknown`
+//! the seam for the comptime evaluator (`comptime_ctx.zig`), and stays `.unknown`
 //! without it.
 //!
 //! Every item is checked lazily, at most once, so items may refer to each
@@ -76,7 +76,8 @@ pub const Value = union(enum) {
 };
 
 /// Evaluates comptime expressions this file does not fold (calls, literals
-/// of aggregates, strings...). Installed by the comptime driver (T060).
+/// of aggregates, strings...). Installed by the comptime driver
+/// (`comptime_ctx.zig`).
 pub const ComptimeHook = struct {
     ctx: ?*anyopaque = null,
     /// The value of expression `node` of module `m`, where a value of

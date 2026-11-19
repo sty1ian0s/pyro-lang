@@ -120,7 +120,10 @@ pub const Ctx = struct {
 
     fn bodies(cx: *Ctx) Error!*Bodies {
         if (cx.shared) |b| return b;
-        if (cx.own == null) cx.own = try .init(cx.gpa);
+        if (cx.own == null) {
+            cx.own = try .init(cx.gpa);
+            cx.own.?.before_protos = true;
+        }
         return &cx.own.?;
     }
 
@@ -167,8 +170,13 @@ pub const Ctx = struct {
             cx.ev.abort();
             switch (e) {
                 error.OutOfMemory => return error.OutOfMemory,
-                error.Unsupported => if (bs.unsupported == null) {
+                // A callee without TIR failed (reported), is unsupported
+                // (recorded), or is still being checked: then this
+                // evaluation is part of checking it, a cycle.
+                error.Unsupported => if (bs.unsupported != null) {} else if (mach.unsupported.?.ptr != interp_ctrl.unchecked_callee.ptr) {
                     bs.unsupported = .{ .module = m, .node = n, .what = mach.unsupported.? };
+                } else if (!it.sink.hasErrors()) {
+                    try it.report(m, ast.mainToken(n), null, &.{"a function cannot call itself at comptime while its own body is checked"}, "comptime evaluation depends on its own result", .{});
                 },
                 error.Trapped, error.OverBudget => {}, // reported
             }
@@ -252,6 +260,7 @@ fn compile(bs: *Bodies, it: *Items, m: ModuleId, n: Node.Index, expected: TypeId
     const id = try bs.fnId(m, n, "comptime");
     bs.fns.items[id.int()].func = func;
     bs.fns.items[id.int()].checked = true;
+    bs.fns.items[id.int()].thunk = true;
     return id;
 }
 
@@ -325,6 +334,11 @@ pub fn use(c: *Checker, n: Node.Index, cv: Computed) Error!Typed {
 /// `comptime { ... }` or `comptime e` in a function body (§8.1): evaluated
 /// once at compile time and embedded as a constant.
 pub fn expr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
+    // Inside comptime code everything is comptime already (§8.1): check inline.
+    if (c.in_comptime) return switch (c.ast.data(n)) {
+        .comptime_block => |x| check_stmt.block(c, x.body, expected),
+        else => |d| check_expr.check(c, d.prefix.operand, expected),
+    };
     const cx = of(c.items) orelse return c.unsupported(n, "comptime evaluation without an evaluator");
     const v = try cx.eval(c.items, c.m, n, expected) orelse {
         c.failed = true; // reported, or recorded as unsupported
@@ -516,4 +530,38 @@ test "comptime expressions in bodies; runtime locals are E0801; the budget is E0
     defer f.deinit();
     try f.expectDiags(&.{ .{ .E0808, "while" }, .{ .E0801, "n" } });
     try testing.expect(f.bodies.find(0, "a").?.func != null);
+}
+
+test "impl methods reached from a const are checked again with protocols" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\protocol Get { fn get(self) -> u32; }
+        \\struct S { x: u32 }
+        \\impl Get for S { fn get(self) -> u32 { self.x } }
+        \\fn h(s: S) -> u32 { s.get() }
+        \\fn use_h() -> u32 { h(S { x: 1 }) }
+        \\const C: u32 = use_h();
+        \\fn main() { let k = C; }
+    );
+    defer f.deinit();
+    // No false "no method" error: `C` waits, and `h` is checked again with the impl.
+    try f.expectDiags(&.{});
+    try testing.expectEqualStrings("impl methods called from comptime code in item positions", f.bodies.unsupported.?.what);
+    try testing.expect(f.bodies.find(0, "h").?.func != null);
+}
+
+test "typed const lane counts; nested comptime; self-recursion; runtime repeat counts" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\const L: u32 = 4;
+        \\fn s(x: f32) -> vec4<f32> { @splat(L, x) }
+        \\fn n() -> u32 { comptime { let k = 2u32; comptime k + 1 } }
+        \\fn g() -> u32 { comptime g() }
+        \\fn q(m: usize) -> [4]u8 { [0u8; m] }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ null, "comptime" }, .{ .E0801, "m" } });
+    try testing.expect(f.bodies.find(0, "s").?.func != null);
+    try testing.expect(f.bodies.find(0, "n").?.func != null);
+    try testing.expect(f.bodies.unsupported == null);
 }

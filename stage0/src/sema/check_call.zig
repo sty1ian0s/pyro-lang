@@ -315,7 +315,7 @@ fn defaultArg(c: *Checker, n: Node.Index, v: items_mod.Value, ty: TypeId) Error!
         .unknown => if (ty == .err) blk: {
             c.failed = true; // reported with the default
             break :blk .err;
-        } else c.unsupported(n, "defaults computed at comptime (T060)"),
+        } else c.unsupported(n, "values the comptime evaluator could not compute"),
     };
 }
 

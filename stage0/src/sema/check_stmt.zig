@@ -71,7 +71,7 @@ fn stmt(c: *Checker, s: Node.Index) Error!bool {
         .const_decl => {
             const k = try c.items.constValue(c.m, s, c.self_ty);
             if (k.type == .err) c.failed = true;
-            if (k.value == .unknown and k.type != .err) _ = c.unsupported(s, "values computed at comptime (T060)");
+            if (k.value == .unknown and k.type != .err) _ = c.unsupported(s, "values the comptime evaluator could not compute");
             return false;
         },
         .@"defer", .@"errdefer", .return_tail => _ = c.unsupported(s, "`defer`, `errdefer` and `return tail` (T078)"),

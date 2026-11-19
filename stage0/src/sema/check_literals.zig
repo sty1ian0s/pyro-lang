@@ -185,7 +185,11 @@ fn defaultValue(c: *Checker, at: Node.Index, f: items_mod.Field) Error!Typed {
         .untyped => |k| c.constTo(k, f.type, at),
         .scalar => |v| c.coerce(try c.constant(v), f.type, at),
         .computed => |cv| c.coerce(try @import("comptime_ctx.zig").use(c, at, cv), f.type, at),
-        .unknown, .type => c.unsupported(at, "field defaults computed at comptime (T060)"),
+        .type => c.unsupported(at, "types as values (T065)"),
+        .unknown => if (f.type == .err) blk: {
+            c.failed = true; // reported with the default
+            break :blk .err;
+        } else c.unsupported(at, "values the comptime evaluator could not compute"),
     };
 }
 
@@ -313,9 +317,13 @@ pub fn arrayRepeat(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
             return .err;
         }
         if ((try check_expr.check(c, d.count, .usize)).ty == .err) return .err;
-        // shortcut: a runtime count is an error but a comptime call is not;
-        // both stay unsupported until the comptime evaluator (T060) tells them apart.
-        return c.unsupported(d.count, "repeat counts computed at comptime (T060)");
+        // Folding skips what it cannot fold (a runtime local); the evaluator
+        // reports it (E0801), or has recorded the count as unsupported.
+        if (@import("comptime_ctx.zig").of(c.items)) |cx| if (try cx.eval(c.items, c.m, d.count, .usize) == null) {
+            c.failed = true;
+            return .err;
+        };
+        return c.unsupported(d.count, "repeat counts the comptime evaluator could not compute");
     };
     if (v.ty == .err or v.ty == .noreturn) return v;
     if (try check_stmt.isResource(c, v.ty)) {
@@ -389,10 +397,7 @@ fn lookup(c: *Checker, at: Node.Index, name: []const u8, args: ?[]const Node.Ind
     // Members are visible subject to their own `pub` (§7.9, §7.1).
     const outside = ref.module != c.m;
     if (args == null) for (consts) |k| if (k.type == ty and (k.is_pub or !outside) and std.mem.eql(u8, k.name, name)) {
-        return switch (k.value) {
-            .scalar => |s| try c.constant(s),
-            else => c.unsupported(at, "`const` members computed at comptime (T060)"),
-        };
+        return try check_expr.constValue(c, at, k);
     };
     if (args) |a| for (methods) |f| {
         const has_self = f.params.len > 0 and f.params[0].is_self;
@@ -675,5 +680,5 @@ test "array errors: element mismatch, empty without type, length, runtime count"
     );
     defer f.deinit();
     try f.expectDiags(&.{ .{ .E0310, "true" }, .{ null, "[" }, .{ .E0310, "[" }, .{ .E0310, ".{" } });
-    try testing.expectEqualStrings("repeat counts computed at comptime (T060)", f.bodies.unsupported.?.what);
+    try testing.expectEqualStrings("repeat counts the comptime evaluator could not compute", f.bodies.unsupported.?.what);
 }

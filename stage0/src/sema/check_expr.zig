@@ -211,7 +211,7 @@ pub fn constValue(c: *Checker, n: Node.Index, k: items_mod.Const) Error!Typed {
         .unknown => if (k.type == .err) blk: {
             c.failed = true; // reported with the const
             break :blk .err;
-        } else c.unsupported(n, "consts evaluated at comptime (T060)"),
+        } else c.unsupported(n, "values the comptime evaluator could not compute"),
     };
 }
 
