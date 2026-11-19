@@ -87,6 +87,7 @@ pub const entries = [_]Entry{
 /// True for the prelude integer type names `i1`…`i64` and `u1`…`u64`.
 pub fn isIntTypeName(name: []const u8) bool {
     if (name.len < 2 or (name[0] != 'i' and name[0] != 'u') or name[1] == '0') return false;
+    for (name[1..]) |c| if (!std.ascii.isDigit(c)) return false; // `parseInt` accepts `u1_6`
     const bits = std.fmt.parseInt(u8, name[1..], 10) catch return false;
     return bits >= 1 and bits <= 64;
 }
@@ -200,6 +201,7 @@ test "export list matches §14.1" {
     try testing.expectEqual(entries.len, total);
     try testing.expect(isIntTypeName("i1") and isIntTypeName("u64") and isIntTypeName("i17"));
     try testing.expect(!isIntTypeName("i0") and !isIntTypeName("u65") and !isIntTypeName("i08") and !isIntTypeName("int"));
+    try testing.expect(!isIntTypeName("u1_6") and !isIntTypeName("i3_2") and !isIntTypeName("u+8"));
 }
 
 test "hosted-only names match §14.1.1" {
