@@ -1,4 +1,3 @@
-//@ expected-fail: T038
 // Two imports may not bind the same name (§7.8.2).
 use std.math;
 use std.mem as math; //~ E0903
