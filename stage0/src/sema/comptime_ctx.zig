@@ -51,6 +51,7 @@ const Value = @import("../comptime/value.zig").Value;
 const EvalArena = @import("../comptime/arena.zig").EvalArena;
 const embed = @import("../comptime/embed.zig");
 const interp_ctrl = @import("../comptime/interp_ctrl.zig");
+const limits = @import("../comptime/limits.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -60,9 +61,6 @@ const Checker = emit_tir.Checker;
 const Typed = emit_tir.Typed;
 const Machine = interp_ctrl.Machine;
 const Error = Allocator.Error;
-
-/// Steps of one top-level evaluation: backward branches plus calls (§8.6).
-pub const default_budget: u64 = 10_000_000;
 
 /// A computed value as item checking records it.
 pub const Computed = @FieldType(items_mod.Value, "computed");
@@ -154,18 +152,17 @@ pub const Ctx = struct {
             .span = .{ .file = it.im.graph.modules[m].file, .start = start, .end = start + ast.tokens.items(.len)[ast.mainToken(n)] },
             .note = "in this comptime evaluation",
         }};
-        // T059: the budget and `@set_eval_quota` come from limits.zig.
-        var budget = default_budget;
+        var ev: limits.Eval = .{};
         var mach: Machine = .{
             .in = .{ .items = it, .arena = cx.ev.allocator() },
             .gpa = cx.gpa,
             .bodies = bs,
             .sink = it.sink,
             .outer = &outer,
-            .budget = &budget,
             .hooks = .{ .ctx = cx, .resolve = resolve, .stop = stop },
         };
         defer mach.deinit();
+        ev.attach(&mach);
         const r = mach.call(id, &.{}) catch |e| {
             cx.ev.abort();
             switch (e) {
@@ -173,7 +170,7 @@ pub const Ctx = struct {
                 // A callee without TIR failed (reported), is unsupported
                 // (recorded), or is still being checked: then this
                 // evaluation is part of checking it, a cycle.
-                error.Unsupported => if (bs.unsupported != null) {} else if (mach.unsupported.?.ptr != interp_ctrl.unchecked_callee.ptr) {
+                error.Unsupported => if (ev.reported or bs.unsupported != null) {} else if (mach.unsupported.?.ptr != interp_ctrl.unchecked_callee.ptr) {
                     bs.unsupported = .{ .module = m, .node = n, .what = mach.unsupported.? };
                 } else if (!it.sink.hasErrors()) {
                     try it.report(m, ast.mainToken(n), null, &.{"a function cannot call itself at comptime while its own body is checked"}, "comptime evaluation depends on its own result", .{});
@@ -302,23 +299,10 @@ fn resolve(ctx: *anyopaque, m: *Machine, func: *const tir.Func, r: tir.Ref) inte
     };
 }
 
-/// Reports why an evaluation stopped, at the current instruction with the
-/// comptime stack trace. T059: replace with limits.zig's reporting.
+/// Reports why an evaluation stopped (E0805, E0808) with the comptime
+/// stack trace.
 fn stop(_: *anyopaque, m: *Machine, why: interp_ctrl.Stop) Allocator.Error!void {
-    const t = try m.trace();
-    defer t.deinit(m.gpa);
-    const code: diag.DiagCode, const msg: []const u8, const help: []const []const u8 = switch (why) {
-        .forbidden => .{ .E0805, "operation not allowed at comptime", &.{"comptime code may not use `unsafe`, raw pointers, `extern` calls or concurrency (§8.6)"} },
-        .budget => .{ .E0808, std.fmt.comptimePrint("comptime evaluation exceeded its budget of {d} loop iterations and calls", .{default_budget}), &.{"raise the budget with `@set_eval_quota(n)`"} },
-    };
-    try m.sink.emit(.{
-        .code = code,
-        .severity = .@"error",
-        .message = msg,
-        .spans = &.{.{ .span = t.span, .primary = true }},
-        .help = help,
-        .trace = t.frames,
-    });
+    return limits.report(m, why);
 }
 
 /// Computed value `cv` used at `n` in a function body: embedded as a
