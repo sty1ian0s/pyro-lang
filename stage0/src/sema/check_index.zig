@@ -114,10 +114,20 @@ pub fn place(c: *Checker, n: Node.Index) Error!Place {
 }
 
 /// Assignment target `e[i]` (§3.5): its place, or null after E0337, E0338
-/// or E0207 if it may not be written.
+/// or E0207 if it may not be written. A diverging target is returned with
+/// type `.noreturn`. A slice `e[a..b]` is a view value, not a place: E0207.
+// shortcut: a read-only slice bound to `let mut` (or a `mut` param) becomes
+// writable here, since its origin is not tracked; T081 (view origins) fixes it.
 pub fn writable(c: *Checker, n: Node.Index) Error!?Place {
     const p = try place(c, n);
-    if (p.bad()) return null;
+    if (p.ty == .err) return null;
+    if (p.ty == .noreturn) return p;
+    var target = n;
+    while (c.ast.kind(target) == .paren) target = c.ast.data(target).paren.inner;
+    if (isSlice(c.ast, target)) {
+        try c.reportAt(c.ast.mainToken(target), .E0207, &.{"assign to its elements instead, e.g. `s[i] = x`"}, "cannot assign to a slice: it is a view, not a place", .{});
+        return null;
+    }
     if (p.mutable) return p;
     var root = n; // the diagnostic points at the indexed binding
     while (c.ast.kind(root) == .index or c.ast.kind(root) == .paren)
@@ -219,13 +229,13 @@ fn sliceOf(c: *Checker, n: Node.Index) Error!Slice {
         else => return .{ .value = .{ .ty = (try notIndexable(c, n, base.ty, "sliced")).ty }, .base = base },
     };
     const r = c.ast.data(d.index).range;
-    const lo = try bound(c, r.lo);
-    var hi = try bound(c, r.hi);
-    for ([_]?Typed{ lo, hi }) |b| if (b) |v| if (v.ty == .err or v.ty == .noreturn) return .{ .value = .{ .ty = v.ty }, .base = base };
-    if (hi != null and isInclusive(c.ast, d.index)) {
-        const one = try c.constant(.{ .type = .usize, .bits = 1 });
-        hi = .{ .ty = .usize, .ref = try c.emit(.usize, .{ .add = .{ .lhs = hi.?.ref, .rhs = one.ref } }) };
+    if (isInclusive(c.ast, d.index)) { // §6.5.4 defines only `a..b` and its open forms
+        try c.report(d.index, .E0310, "an inclusive range `..=` cannot slice; use `a..b`", .{});
+        return .{ .value = .{ .ty = .err }, .base = base };
     }
+    const lo = try bound(c, r.lo);
+    const hi = try bound(c, r.hi);
+    for ([_]?Typed{ lo, hi }) |b| if (b) |v| if (v.ty == .err or v.ty == .noreturn) return .{ .value = .{ .ty = v.ty }, .base = base };
     const ref = try c.emit(ty, .{ .slice = .{ .base = base.ref, .lo = if (lo) |v| v.ref else null, .hi = if (hi) |v| v.ref else null } });
     return .{ .value = .{ .ty = ty, .ref = ref }, .base = base };
 }
@@ -315,7 +325,7 @@ test "slices: views of arrays, slices, `str` and SoA; open bounds" {
         \\    let x: []u32 = a[1..3];
         \\    let y: []u32 = a[..];
         \\    let t: str = s[i..];
-        \\    let q: soa []P = ps[..=i];
+        \\    let q: soa []P = ps[..i];
         \\    let total = sum(a) + sum(x[..2]);
         \\}
     );
@@ -352,6 +362,20 @@ test "slice of an immutable place is read-only: E0336, E0337, E0338" {
     _ = try f.func("ok");
 }
 
+test "E0207: a slice is not an assignment target; a diverging index diverges" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn die() -> noreturn { loop {} }
+        \\fn f(mut a: [4]u8, b: []u8) {
+        \\    a[0..2] = b;
+        \\    (a[..]) += b;
+        \\}
+        \\fn g(mut a: [2]u8) -> u8 { a[die()] = 0; }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ .E0207, "[" }, .{ .E0207, "[" } });
+}
+
 test "indexing errors: E0310 for non-indexable bases and non-`usize` indices" {
     var f: Fixture = undefined;
     try f.init(
@@ -359,10 +383,11 @@ test "indexing errors: E0310 for non-indexable bases and non-`usize` indices" {
         \\    let p = x[0];
         \\    let q = a[i];
         \\    let r = v[0..2];
+        \\    let s = a[0..=2];
         \\}
     );
     defer f.deinit();
-    try f.expectDiags(&.{ .{ .E0310, "[" }, .{ .E0310, "i" }, .{ .E0310, "[" } });
+    try f.expectDiags(&.{ .{ .E0310, "[" }, .{ .E0310, "i" }, .{ .E0310, "[" }, .{ .E0310, "..=" } });
 }
 
 test "E0303: `vec` element type and length" {

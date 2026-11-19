@@ -202,6 +202,10 @@ fn assign(c: *Checker, s: Node.Index) Error!bool {
         _ = try check_expr.check(c, d.rhs, .none);
         return false;
     };
+    if (p.ty == .noreturn) { // the target diverges, e.g. `a[die()] = x`
+        _ = try check_expr.check(c, d.rhs, .none);
+        return true;
+    }
     var v: Typed = undefined;
     if (op == .eq) {
         v = try check_expr.checkAs(c, d.rhs, p.ty);
