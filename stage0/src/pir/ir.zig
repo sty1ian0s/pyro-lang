@@ -140,7 +140,9 @@ pub const Flags = packed struct(u8) {
     fast: bool = false,
     /// Volatile access (`load`/`store`).
     @"volatile": bool = false,
-    /// Sign-extend the extracted field (`bf.extract`).
+    /// Signed interpretation: sign-extend the extracted field (`bf.extract`),
+    /// trap on signed instead of unsigned overflow (`*.trap`), compare lanes
+    /// as signed integers (`reduce.min`/`reduce.max`).
     signed: bool = false,
     _pad: u3 = 0,
 };
