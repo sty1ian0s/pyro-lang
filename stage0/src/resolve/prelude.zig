@@ -233,33 +233,53 @@ test "std/prelude.pr re-exports exactly the module items, core before hosted" {
     defer ast.deinit(testing.allocator);
     const m = try collect.collect(a, "prelude", @fromBackingInt(@intCast(0)), &ast);
 
-    var exported: usize = 0;
-    var seen_hosted = false;
+    var check: ExportCheck = .{};
     for (m.uses) |u| {
         try testing.expect(u.is_pub);
-        for (ast.data(u.node).use_list.items) |it| {
-            try testing.expect(ast.data(it).use_item.alias == null);
-            const name = ast.tokenSlice(ast.mainToken(it));
-            const e = for (entries) |e| {
-                if (e.origin == .module and std.mem.eql(u8, e.name, name)) break e;
-            } else {
-                std.debug.print("std/prelude.pr re-exports `{s}`, which is not a prelude module item\n", .{name});
-                return error.TestUnexpectedResult;
-            };
-            try testing.expectEqualStrings(e.origin.module, u.path);
-            // The core prelude comes first, so its subset is a prefix of the file.
-            if (seen_hosted and !e.hosted_only) {
-                std.debug.print("core item `{s}` follows a hosted-only item in std/prelude.pr\n", .{name});
-                return error.TestUnexpectedResult;
-            }
-            seen_hosted = seen_hosted or e.hosted_only;
-            exported += 1;
+        switch (ast.data(u.node)) {
+            // `pub use std.x.Y;`: the item is the path tail, the module the rest.
+            .use => |d| {
+                try testing.expect(d.alias == null);
+                const dot = std.mem.lastIndexOfScalar(u8, u.path, '.') orelse {
+                    std.debug.print("std/prelude.pr `use {s};` names a module, not an item\n", .{u.path});
+                    return error.TestUnexpectedResult;
+                };
+                try check.item(u.path[dot + 1 ..], u.path[0..dot]);
+            },
+            .use_list => |d| for (d.items) |it| {
+                try testing.expect(ast.data(it).use_item.alias == null);
+                try check.item(ast.tokenSlice(ast.mainToken(it)), u.path);
+            },
+            else => unreachable, // collect only records `use` and `use_list` nodes
         }
     }
     var expected: usize = 0;
     for (entries) |e| expected += @intFromBool(e.origin == .module);
-    try testing.expectEqual(expected, exported);
+    try testing.expectEqual(expected, check.exported);
 }
+
+/// Per-item checks for the `std/prelude.pr` re-export test.
+const ExportCheck = struct {
+    exported: usize = 0,
+    seen_hosted: bool = false,
+
+    fn item(self: *ExportCheck, name: []const u8, module: []const u8) !void {
+        const e = for (entries) |e| {
+            if (e.origin == .module and std.mem.eql(u8, e.name, name)) break e;
+        } else {
+            std.debug.print("std/prelude.pr re-exports `{s}`, which is not a prelude module item\n", .{name});
+            return error.TestUnexpectedResult;
+        };
+        try testing.expectEqualStrings(e.origin.module, module);
+        // The core prelude comes first, so its subset is a prefix of the file.
+        if (self.seen_hosted and !e.hosted_only) {
+            std.debug.print("core item `{s}` follows a hosted-only item in std/prelude.pr\n", .{name});
+            return error.TestUnexpectedResult;
+        }
+        self.seen_hosted = self.seen_hosted or e.hosted_only;
+        self.exported += 1;
+    }
+};
 
 test "existing std modules declare their prelude items" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
