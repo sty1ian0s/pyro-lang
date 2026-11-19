@@ -19,6 +19,7 @@
 //! diagnostics.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Writer = Io.Writer;
@@ -94,13 +95,36 @@ pub const Streams = struct {
     stderr_file: ?Io.File = null,
 };
 
-/// State a command runs with.
-const Ctx = struct {
+/// State a command runs with: the frozen command interface. A command lives in
+/// its own `stage0/src/cli/cmd_<name>.zig` as
+///
+///     pub fn run(ctx: *cli.Ctx) !cli.Exit
+///
+/// (`const cli = @import("main.zig");`) and is added to `commands` with one line.
+pub const Ctx = struct {
+    /// General-purpose allocator; the command frees what it allocates.
     gpa: Allocator,
+    /// The process I/O implementation.
     io: Io,
+    /// The parsed command line; slices live until the command returns.
     opts: Options,
+    /// Where the command writes; `main` flushes both streams afterwards.
     out: Streams,
 };
+
+/// One semantic pass (B.1 stage 3 or 4) that `registerStages` adds to a
+/// compilation.
+const Stage = struct { stage: Compilation.HookStage, hook: Compilation.Hook };
+
+/// The semantic passes run by `pyro check` and every command that compiles. A
+/// semantic task appends its pass here with one line, e.g.
+/// `.{ .stage = .resolve, .hook = .{ .run = resolve.run } },`.
+const semantic_stages = [_]Stage{};
+
+/// Registers `semantic_stages` on `comp`, in order.
+pub fn registerStages(comp: *Compilation) !void {
+    for (semantic_stages) |s| try comp.addHook(s.stage, s.hook);
+}
 
 /// The process entry point; `stage0/src/main.zig` delegates here.
 pub fn main(init: std.process.Init) u8 {
@@ -189,6 +213,7 @@ fn check(ctx: *Ctx) !Exit {
         } else .check,
     });
     defer comp.deinit();
+    try registerStages(&comp);
     for (o.positionals) |path| _ = comp.addFile(.cwd(), path) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => {
@@ -214,7 +239,7 @@ fn check(ctx: *Ctx) !Exit {
         if (o.dump_ast and f.ast.nodes.len > 0) try ast_dump.dump(&f.ast, ctx.out.stdout);
     }
     for (ds) |d| if (d.severity == .@"error") return .failed;
-    // A full check that ran no resolve or check stage has not shown the program
+    // A full check that skipped resolve or check has not shown the program
     // valid, so it must not report success.
     if (o.stop_after == null and !hasSemanticStages(&comp)) {
         try ctx.out.stderr.writeAll("error: name resolution and type checking are not implemented yet (stage 0); use `--stop-after lex|parse`\n");
@@ -223,12 +248,13 @@ fn check(ctx: *Ctx) !Exit {
     return .ok;
 }
 
-/// Whether any stage-3 or stage-4 hook (B.1) is registered.
+/// Whether both a stage-3 (resolve) and a stage-4 (check) hook (B.1) are
+/// registered.
 fn hasSemanticStages(comp: *const Compilation) bool {
     for ([_]Compilation.HookStage{ .resolve, .check }) |s| {
-        if (comp.hooks[@backingInt(s)].items.len > 0) return true;
+        if (comp.hooks[@backingInt(s)].items.len == 0) return false;
     }
-    return false;
+    return true;
 }
 
 /// `--dump-tokens`: one line per token, `line:column kind "text"`.
@@ -322,7 +348,9 @@ test "check: an error exits 1 with one JSON diagnostic per line" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
     // shortcut: E0104 (lexer) stands in for the E0214 of T024's acceptance
-    // until the Pratt parser (T023) reports E0214; conformance covers that case.
+    // until the Pratt parser reports it. Follow-up for T023: switch this test
+    // to `a < b < c` with `--stop-after parse` and expect E0214
+    // (conformance/03-syntax/e0214_chained_comparison.pr covers it meanwhile).
     const path = try writeCase(arena.allocator(), &tmp, "bad.pr", "fn main() {}\nconst x = 1 ` 2;\n");
     var c: Captured = try .init(&.{ "check", "--message-format=json", "--stop-after", "lex", path });
     defer c.deinit();
@@ -376,4 +404,36 @@ test "check: missing file or no file" {
     var d: Captured = try .init(&.{"check"});
     defer d.deinit();
     try testing.expectEqual(Exit.internal, d.exit);
+}
+
+test "check: full check needs both resolve and check stages" {
+    var comp: Compilation = undefined;
+    try comp.init(testing.allocator, testing.io, .{ .jobs = 1 });
+    defer comp.deinit();
+    const noop: Compilation.Hook = .{ .run = struct {
+        fn run(_: ?*anyopaque, _: *Compilation) anyerror!void {}
+    }.run };
+    try testing.expect(!hasSemanticStages(&comp));
+    try comp.addHook(.resolve, noop);
+    try testing.expect(!hasSemanticStages(&comp));
+    try comp.addHook(.check, noop);
+    try testing.expect(hasSemanticStages(&comp));
+}
+
+test "panic handler exits 3" {
+    // `--debug-ice` panics through the root `panic`, which is the test runner's
+    // here, so this runs the `pyro` handler itself in a forked child.
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    const linux = std.os.linux;
+    const rc = linux.fork();
+    try testing.expectEqual(linux.E.SUCCESS, linux.errno(rc));
+    if (rc == 0) {
+        _ = linux.close(2); // keep the ICE report out of the test log
+        panicExit("forced by test", null);
+    }
+    var status: i32 = 0;
+    _ = linux.waitpid(@intCast(rc), &status, 0);
+    const st: u32 = @bitCast(status);
+    try testing.expect(linux.W.IFEXITED(st));
+    try testing.expectEqual(@backingInt(Exit.internal), linux.W.EXITSTATUS(st));
 }

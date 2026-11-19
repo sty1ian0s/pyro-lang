@@ -25,6 +25,10 @@ pub const Expand = enum { normal, full };
 /// `--stop-after` (debug): the last front-end stage to run.
 pub const StopAfter = enum { lex, parse };
 
+/// Largest accepted `--jobs`. Each job gets its own arenas up front, so an
+/// unbounded count could exhaust memory before any work starts.
+pub const max_jobs = 1024;
+
 /// One `--set key=value`.
 pub const Set = struct { key: []const u8, value: []const u8 };
 
@@ -37,7 +41,7 @@ pub const Options = struct {
     target: ?[]const u8 = null,
     backend: ?Backend = null,
     set: []const Set = &.{},
-    /// `--jobs n` (n >= 1); null: one per logical CPU.
+    /// `--jobs n` (1 <= n <= `max_jobs`); null: one per logical CPU.
     jobs: ?u32 = null,
     offline: bool = false,
     locked: bool = false,
@@ -169,6 +173,7 @@ pub fn parse(arena: Allocator, args: []const []const u8, msg: *[]const u8) Error
         } else if (std.mem.eql(u8, field, "jobs")) {
             o.jobs = std.fmt.parseInt(u32, v, 10) catch 0;
             if (o.jobs == 0) return usage(arena, msg, "`--jobs` needs a positive integer, got `{s}`", .{v});
+            if (o.jobs.? > max_jobs) return usage(arena, msg, "`--jobs` must be at most {d}, got `{s}`", .{ max_jobs, v });
         } else if (std.mem.eql(u8, field, "seed")) {
             o.seed = std.fmt.parseInt(u64, v, 0) catch
                 return usage(arena, msg, "`--seed` needs an integer, got `{s}`", .{v});
@@ -302,6 +307,7 @@ test "invalid usage" {
     try expectUsage(&.{ "check", "--frobnicate" }, "unknown flag `--frobnicate`");
     try expectUsage(&.{ "check", "--jobs" }, "`--jobs` needs a value");
     try expectUsage(&.{ "check", "--jobs", "0" }, "`--jobs` needs a positive integer, got `0`");
+    try expectUsage(&.{ "check", "--jobs", "1025" }, "`--jobs` must be at most 1024, got `1025`");
     try expectUsage(&.{ "check", "--color", "pink" }, "`--color` must be auto|always|never, got `pink`");
     try expectUsage(&.{ "check", "--stop-after", "check" }, "`--stop-after` must be lex|parse, got `check`");
     try expectUsage(&.{ "check", "--offline=yes" }, "`--offline` takes no value");
