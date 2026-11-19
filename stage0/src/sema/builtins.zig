@@ -6,7 +6,10 @@
 //! `info` is the one table. A builtin's `tir.BuiltinId` is its `Builtin`
 //! ordinal, so TIR `builtin` instructions are keyed by this table. Tasks
 //! that give a builtin its semantics (SIMD, GPU, unsafe, comptime) add
-//! lowering or evaluation in their own files, never rows.
+//! lowering or evaluation in their own files, never rows. Every row has its
+//! final `Rule`; a rule whose typing needs a later task has a `typeCall`
+//! arm that records the construct as unsupported with that task, and that
+//! task fills in only the arm.
 //!
 //! Checking a builtin call (`check`, `callIntrinsic`) reports, in order:
 //! an unknown name, a variable written with parentheses or a function
@@ -169,8 +172,36 @@ pub const Allowed = union(enum) {
 /// How a call's result type follows from its arguments (§8.7). Each rule
 /// is implemented by `typeCall`.
 pub const Rule = enum {
-    /// Typed by a later task: see `Info.owner`.
-    deferred,
+    /// `@size_of`, `@align_of`, `@type_info`, `@type_name`,
+    /// `@variant_count`, `@has_field`, `@has_method`, `@implements`,
+    /// `@field_type` (T069).
+    reflect,
+    /// `(x, comptime str) -> F` (T072).
+    field,
+    /// `(f, args...) -> R` (T071).
+    call,
+    /// `(f) -> FnInfo` (T071).
+    fn_info,
+    /// `(E, I) -> Option<E>` (T053).
+    enum_from_int,
+    /// `(I, I) -> Option<I>` (T053).
+    checked,
+    /// `@compile_error` and `@compile_log` (T061).
+    compile_diag,
+    /// `(u32) -> void` (T059).
+    eval_quota,
+    /// `@embed_file`, `@env`, `@env_or`, `@target` (T073).
+    comptime_input,
+    /// `(x) -> u64` (T066).
+    hash,
+    /// `(vec<N, T>, comptime [M]u32) -> vec<M, T>` (T126).
+    shuffle,
+    /// `(T) -> usize` (T129).
+    vector_width,
+    /// `@todo_err` (T140).
+    todo_err,
+    /// `(ordering) -> void` (T130).
+    atomic_fence,
     /// `(T) -> T`, `T` plain.
     zero,
     /// `(N, x) -> vec<N, T>`.
@@ -229,8 +260,10 @@ pub const Rule = enum {
     prefetch,
     /// `(bool) -> bool`.
     hint,
-    /// `(comptime str, args...)`.
+    /// `(comptime str, args...) -> void`.
     format,
+    /// `(mut []u8, comptime str, args...) -> Result<str, fmt.Overflow>`.
+    format_into,
 };
 
 /// One row of the registry.
@@ -241,8 +274,6 @@ pub const Info = struct {
     variadic: bool = false,
     allowed: Allowed = .any,
     rule: Rule,
-    /// For `.deferred`: what the construct is and the task that types it.
-    owner: []const u8 = "",
 };
 
 /// The registry: the row of builtin `b`.
@@ -250,22 +281,20 @@ pub fn info(b: Builtin) Info {
     const compute: Allowed = .{ .stages = .initMany(&.{ .compute, .task, .mesh }) };
     const fragment: Allowed = .{ .stages = .initOne(.fragment) };
     const ray: Allowed = .{ .stages = .initMany(&.{ .ray_gen, .miss, .closest_hit, .any_hit, .intersection }) };
-    const reflection = "reflection builtins (T069)";
-    const inputs = "comptime inputs (T073)";
     return switch (b) {
-        .size_of, .align_of, .type_info, .type_name, .variant_count => .{ .arity = 1, .allowed = .@"comptime", .rule = .deferred, .owner = reflection },
-        .has_field, .has_method, .implements, .field_type => .{ .arity = 2, .allowed = .@"comptime", .rule = .deferred, .owner = reflection },
-        .field => .{ .arity = 2, .rule = .deferred, .owner = "`@field` (T072)" },
-        .call => .{ .arity = 1, .variadic = true, .rule = .deferred, .owner = "`@call` (T071)" },
-        .fn_info => .{ .arity = 1, .allowed = .@"comptime", .rule = .deferred, .owner = "`@fn_info` (T071)" },
-        .enum_from_int => .{ .arity = 2, .rule = .deferred, .owner = "`@enum_from_int` (T053)" },
-        .compile_error => .{ .arity = 1, .allowed = .@"comptime", .rule = .deferred, .owner = "`@compile_error` (T061)" },
-        .compile_log => .{ .variadic = true, .allowed = .@"comptime", .rule = .deferred, .owner = "`@compile_log` (T061)" },
-        .set_eval_quota => .{ .arity = 1, .allowed = .@"comptime", .rule = .deferred, .owner = "`@set_eval_quota` (T059)" },
-        .embed_file, .env => .{ .arity = 1, .allowed = .@"comptime", .rule = .deferred, .owner = inputs },
-        .env_or => .{ .arity = 2, .allowed = .@"comptime", .rule = .deferred, .owner = inputs },
-        .target => .{ .allowed = .@"comptime", .rule = .deferred, .owner = inputs },
-        .hash => .{ .arity = 1, .allowed = .comptime_arg, .rule = .deferred, .owner = "`@hash` (T066)" },
+        .size_of, .align_of, .type_info, .type_name, .variant_count => .{ .arity = 1, .allowed = .@"comptime", .rule = .reflect },
+        .has_field, .has_method, .implements, .field_type => .{ .arity = 2, .allowed = .@"comptime", .rule = .reflect },
+        .field => .{ .arity = 2, .rule = .field },
+        .call => .{ .arity = 1, .variadic = true, .rule = .call },
+        .fn_info => .{ .arity = 1, .allowed = .@"comptime", .rule = .fn_info },
+        .enum_from_int => .{ .arity = 2, .rule = .enum_from_int },
+        .compile_error => .{ .arity = 1, .allowed = .@"comptime", .rule = .compile_diag },
+        .compile_log => .{ .variadic = true, .allowed = .@"comptime", .rule = .compile_diag },
+        .set_eval_quota => .{ .arity = 1, .allowed = .@"comptime", .rule = .eval_quota },
+        .embed_file, .env => .{ .arity = 1, .allowed = .@"comptime", .rule = .comptime_input },
+        .env_or => .{ .arity = 2, .allowed = .@"comptime", .rule = .comptime_input },
+        .target => .{ .allowed = .@"comptime", .rule = .comptime_input },
+        .hash => .{ .arity = 1, .allowed = .comptime_arg, .rule = .hash },
         .zero => .{ .arity = 1, .rule = .zero },
         .splat => .{ .arity = 2, .rule = .splat },
         .select => .{ .arity = 3, .rule = .select },
@@ -273,15 +302,15 @@ pub fn info(b: Builtin) Info {
         .count => .{ .arity = 1, .rule = .count },
         .reduce_add, .reduce_mul, .reduce_min, .reduce_max => .{ .arity = 1, .rule = .reduce },
         .reduce_and, .reduce_or => .{ .arity = 1, .rule = .reduce_bits },
-        .shuffle => .{ .arity = 2, .rule = .deferred, .owner = "`@shuffle` (T126)" },
-        .vector_width => .{ .arity = 1, .allowed = .@"comptime", .rule = .deferred, .owner = "`@vector_width` (T129)" },
+        .shuffle => .{ .arity = 2, .rule = .shuffle },
+        .vector_width => .{ .arity = 1, .allowed = .@"comptime", .rule = .vector_width },
         .fma => .{ .arity = 3, .rule = .fma },
         .add_wrap, .sub_wrap, .mul_wrap, .add_sat, .sub_sat, .mul_sat => .{ .arity = 2, .rule = .int_binary },
-        .add_checked, .sub_checked, .mul_checked, .shl_checked => .{ .arity = 2, .rule = .deferred, .owner = "checked arithmetic (T053)" },
+        .add_checked, .sub_checked, .mul_checked, .shl_checked => .{ .arity = 2, .rule = .checked },
         .clz, .ctz, .popcount, .bit_reverse => .{ .arity = 1, .rule = .bit_op },
         .bswap => .{ .arity = 1, .rule = .bswap },
         .bit_cast => .{ .arity = 2, .rule = .bit_cast },
-        .todo_err => .{ .arity = 1, .rule = .deferred, .owner = "`@todo_err` (T140)" },
+        .todo_err => .{ .arity = 1, .rule = .todo_err },
         .trap => .{ .arity = 1, .rule = .trap },
         .@"unreachable" => .{ .rule = .never },
         .old => .{ .arity = 1, .allowed = .ensures, .rule = .old },
@@ -300,11 +329,11 @@ pub fn info(b: Builtin) Info {
         .ptr_from_int => .{ .arity = 2, .allowed = .unsafe, .rule = .ptr_from_int },
         .ptr_add => .{ .arity = 2, .allowed = .unsafe, .rule = .ptr_add },
         .int_from_ptr => .{ .arity = 1, .rule = .int_from_ptr },
-        .atomic_fence => .{ .arity = 1, .rule = .deferred, .owner = "`@atomic_fence` (T130)" },
+        .atomic_fence => .{ .arity = 1, .rule = .atomic_fence },
         .prefetch => .{ .arity = 2, .rule = .prefetch },
         .likely, .unlikely => .{ .arity = 1, .rule = .hint },
         .print, .eprint => .{ .form = .intrinsic, .arity = 1, .variadic = true, .rule = .format },
-        .format => .{ .form = .intrinsic, .arity = 2, .variadic = true, .rule = .deferred, .owner = "`format` (T112)" },
+        .format => .{ .form = .intrinsic, .arity = 2, .variadic = true, .rule = .format_into },
     };
 }
 
@@ -421,7 +450,6 @@ fn call(c: *Checker, at: Node.Index, name: []const u8, b: Builtin, args: []const
         else
             try c.report(at, .E1005, "`{s}` is only available in GPU stage functions", .{name}),
     };
-    if (i.rule == .deferred) return c.unsupported(at, i.owner);
     var a: Args = .{ .c = c, .at = at, .name = name, .b = b, .ctx = ctx, .nodes = args, .refs = try c.arena.alloc(tir.Ref, args.len) };
     @memset(a.refs, .none);
     return typeCall(&a, i.rule, expected);
@@ -512,7 +540,20 @@ const Args = struct {
 fn typeCall(a: *Args, rule: Rule, expected: TypeId) Error!Typed {
     const c = a.c;
     switch (rule) {
-        .deferred => unreachable,
+        .reflect => return c.unsupported(a.at, "reflection builtins (T069)"),
+        .field => return c.unsupported(a.at, "`@field` (T072)"),
+        .call, .fn_info => return c.unsupported(a.at, "`@call` and `@fn_info` (T071)"),
+        .enum_from_int => return c.unsupported(a.at, "`@enum_from_int` (T053)"),
+        .checked => return c.unsupported(a.at, "checked arithmetic (T053)"),
+        .compile_diag => return c.unsupported(a.at, "`@compile_error` and `@compile_log` (T061)"),
+        .eval_quota => return c.unsupported(a.at, "`@set_eval_quota` (T059)"),
+        .comptime_input => return c.unsupported(a.at, "comptime inputs (T073)"),
+        .hash => return c.unsupported(a.at, "`@hash` (T066)"),
+        .shuffle => return c.unsupported(a.at, "`@shuffle` (T126)"),
+        .vector_width => return c.unsupported(a.at, "`@vector_width` (T129)"),
+        .todo_err => return c.unsupported(a.at, "`@todo_err` (T140)"),
+        .atomic_fence => return c.unsupported(a.at, "`@atomic_fence` (T130)"),
+        .format_into => return c.unsupported(a.at, "`format` into a buffer (T112)"),
         .zero => {
             const t = try a.typeArg(0);
             if (t != .err and try kinds.kind(c.items, t) != .plain) {
@@ -536,15 +577,18 @@ fn typeCall(a: *Args, rule: Rule, expected: TypeId) Error!Typed {
         },
         .select => {
             const m = try a.value(0, .none);
-            const x = try a.value(1, expected);
-            _ = try a.as(2, x.ty);
+            // `@splat`'s lane type comes from the other value (§8.7); it is
+            // checked first only when that cannot change evaluation order (§6.1).
+            const swap = expected == .none and constSplat(c, a.nodes[1]);
+            const x = try a.value(if (swap) 2 else 1, expected);
+            _ = try a.as(if (swap) 1 else 2, x.ty);
             const len = maskLen(c, m.ty) orelse return a.wrong(0, "a `mask<N>`", m.ty);
             const ok = switch (c.types.get(c.underlying(x.ty))) {
                 .vec => |v| v.len == len,
                 .mask => |k| k.len == len,
                 else => false,
             };
-            if (!ok) return a.wrong(1, "a `vec` or `mask` with the mask's lane count", x.ty);
+            if (!ok) return a.wrong(if (swap) 2 else 1, "a `vec` or `mask` with the mask's lane count", x.ty);
             return a.finish(x.ty);
         },
         .mask_test, .count => {
@@ -745,6 +789,22 @@ fn comptimeStr(a: *Args, i: usize) Error!void {
     }
 }
 
+/// Whether `n` is `@splat(N, k)` with `k` a numeric or `bool` literal,
+/// possibly negated: its lane type needs context and it has no effects.
+fn constSplat(c: *Checker, n: Node.Index) bool {
+    const ast = c.ast;
+    if (ast.kind(n) != .builtin_call or !std.mem.eql(u8, ast.tokenSlice(ast.mainToken(n)), "@splat")) return false;
+    const args = ast.data(n).builtin_call.args orelse return false;
+    if (args.len != 2) return false;
+    var k = args[1];
+    while (true) switch (ast.kind(k)) {
+        .paren => k = ast.data(k).paren.inner,
+        .prefix => k = ast.data(k).prefix.operand,
+        .int_lit, .float_lit, .bool_lit => return true,
+        else => return false,
+    };
+}
+
 fn maskLen(c: *Checker, ty: TypeId) ?u32 {
     return switch (c.types.get(c.underlying(ty))) {
         .mask => |m| m.len,
@@ -795,10 +855,8 @@ test "registry: lookup, forms and arities" {
     try testing.expectEqual(null, intrinsic("splat"));
     try testing.expectEqual(Form.variable, info(.frag_coord).form);
     try testing.expect(info(.print).variadic and info(.compile_log).variadic);
-    // Every row that waits for a later task names it.
     for (std.enums.values(Builtin)) |b| {
         const i = info(b);
-        try testing.expect((i.rule == .deferred) == (i.owner.len > 0));
         if (i.form == .variable) try testing.expectEqual(0, i.arity);
     }
 }
@@ -852,6 +910,8 @@ test "SIMD and bit builtin signatures" {
         \\    let zero: vec4<f32> = @splat(4, 0.0);
         \\    let m = a < b;
         \\    let pick: vec4<f32> = @select(m, a, zero);
+        \\    let swapped = @select(m, @splat(4, -(1.0)), b);
+        \\    let swapped_ty: vec4<f32> = swapped;
         \\    let hits: usize = @count(m);
         \\    let some: bool = @any(m) || @all(m & (b > zero));
         \\    let bits: u32 = @reduce_and(i) | @reduce_or(i);
@@ -948,6 +1008,17 @@ test "GPU builtin signatures in their stages" {
     defer f.deinit();
     try f.expectDiags(&.{.{ .E0310, "i" }});
     for ([_][]const u8{ "ids", "vs", "fs", "rg" }) |name| _ = try f.func(name);
+}
+
+test "a builtin typed by a later task names it from its rule's arm" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn later(x: u8) { let y = @add_checked(x, 1); }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    try testing.expectEqual(Rule.checked, info(.add_checked).rule);
+    try testing.expect(std.mem.indexOf(u8, f.bodies.unsupported.?.what, "T053") != null);
 }
 
 test "formatting intrinsics: comptime format string; the rest waits for T112" {
