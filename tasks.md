@@ -441,21 +441,21 @@ graph TD
   - Size: M · Parallel: W10
   - Blocked by: T032, T033, T039
   - Blocks: T041, T042, T043, T044
-- [ ] **T041** Layout engine: primitives, struct bit-field units, enums **[GATE]**
+- [x] **T041** Layout engine: primitives, struct bit-field units, enums **[GATE]**
   - Spec: §4.2.1, §4.2.2, §4.3.1, §4.4.1, §4.4.3, §4.11.1, §4.11.2, §4.11.4, §4.12, E0311
   - Deliverable: `stage0/src/sema/layout.zig`: size/align table, vec, arrays, tuples; bit-field classification and unit packing; stable align sort; `@align`; enum backing selection; payload enums; Option<Handle> niche; per-field (unit, bit offset, width); 2^48-1 limit; deterministic.
   - Acceptance: §4.11.2 PlayerState size 8 align 4 with exact bit positions; vec<3,f32> 16/16; [0]T size 0; 4-variant enum 2 bits; 70-bit run splits at 64; Option<Handle<T>> 8; repeat runs identical.
   - Size: M · Parallel: W11
   - Blocked by: T032, T040
   - Blocks: T045, T055, T056, T178
-- [ ] **T042** Type kinds: plain / resource / shared cell / view
+- [x] **T042** Type kinds: plain / resource / shared cell / view
   - Spec: §5.1, §5.2, §5.3.1, §5.4.1, §5.9, §4.3.2, E0304, E0325, E0328, E0330
   - Deliverable: `stage0/src/sema/kinds.zig`: kind(TypeId) post-instantiation; checks E0330, E0325, E0304, E0328 hook.
   - Acceptance: Option<[]u8> view, Option<u32> plain, Result<File,IoError> resource, Atomic field -> shared cell; pass+fail per code.
   - Size: S · Parallel: W11
   - Blocked by: T032, T040
   - Blocks: T064, T074, T080, T081, T130
-- [ ] **T043** Expression checker core + TIR emission **[CRITICAL]** **[GATE]**
+- [x] **T043** Expression checker core + TIR emission **[CRITICAL]** **[GATE]**
   - Spec: §6.1, §6.4.1, §6.6.1, §6.7.1, §6.7.4, §6.11, §6.11.1, §4.2.4, §7.2.1, B.1 stage 4, E0302, E0310, E0327, E0371
   - Deliverable: `stage0/src/sema/{check_expr,check_stmt,emit_tir}.zig`: bidirectional typing; operators incl. vec broadcast/mask; ==/< rules; if/loop/break values; blocks, noreturn; let/assign/compound; `_ = e`; missing return; emits typed TIR (no TIR on failure).
   - Acceptance: E0310 for Meters + Seconds, non-bool if, int+float; loop w/o break noreturn; vec<4,f32> * 2.0 ok; v < w : mask<4>; pass+fail E0371/E0302/E0327; golden TIR dumps.
@@ -463,7 +463,7 @@ graph TD
   - Blocked by: T033, T035, T039, T040
   - Blocks: T046, T047, T048, T049, T050, T051, T052, T054, T057, T067, T070, T078, T089, T123, T176
   - Conflicts: Hot file set; extension tasks add `check_*.zig`/`emit_*.zig` modules and register via one dispatch table.
-- [ ] **T044** Protocols: declarations, impls, coherence, bounds **[GATE]**
+- [x] **T044** Protocols: declarations, impls, coherence, bounds **[GATE]**
   - Spec: §7.5, §7.5.1-§7.5.3, §7.9, E0373, E0375, E0378, E0379
   - Deliverable: `stage0/src/sema/protocols.zig`: default methods, generic protocols, impl signature match, coherence, impl lookup, call-site bound checks, `plain` bound hook.
   - Acceptance: §7.5.1 Renderable checks; third-module impl E0379; protocol as type E0375; unmet bound E0373 at call site.
