@@ -35,6 +35,7 @@ const SourceMap = @import("../source/SourceMap.zig");
 const cmd_deps = @import("cmd_deps.zig");
 const cmd_fmt = @import("cmd_fmt.zig");
 const names = @import("../resolve/names.zig");
+const emit_tir = @import("../sema/emit_tir.zig");
 
 /// Exit statuses (§13.8).
 pub const Exit = enum(u8) { ok = 0, failed = 1, usage = 2, internal = 3 };
@@ -128,6 +129,7 @@ const Stage = struct { stage: Compilation.HookStage, hook: Compilation.Hook };
 /// `.{ .stage = .resolve, .hook = .{ .run = resolve.run } },`.
 const semantic_stages = [_]Stage{
     .{ .stage = .resolve, .hook = .{ .run = names.runFiles } },
+    .{ .stage = .check, .hook = .{ .run = emit_tir.runFiles } },
 };
 
 /// Registers `semantic_stages` on `comp`, in order.
@@ -230,7 +232,12 @@ fn check(ctx: *Ctx) !Exit {
             return .usage;
         },
     };
-    try comp.run();
+    // The check stage fails this way when it met a construct it cannot check yet.
+    var incomplete = false;
+    comp.run() catch |err| switch (err) {
+        error.CheckIncomplete => incomplete = true,
+        else => return err,
+    };
 
     const ds = comp.sink.finish();
     try renderDiagnostics(ctx, &comp.sources, ds);
@@ -244,6 +251,10 @@ fn check(ctx: *Ctx) !Exit {
     // valid, so it must not report success.
     if (o.stop_after == null and !hasSemanticStages(&comp)) {
         try ctx.out.stderr.writeAll("error: name resolution and type checking are not implemented yet (stage 0); use `--stop-after lex|parse`\n");
+        return .internal;
+    }
+    if (incomplete) {
+        try ctx.out.stderr.writeAll("error: the program uses constructs that type checking does not support yet (stage 0)\n");
         return .internal;
     }
     return .ok;
@@ -354,11 +365,17 @@ test "check: clean file exits 0 with no output" {
     try testing.expectEqual(Exit.ok, c.exit);
     try testing.expectEqualStrings("", c.stdout.written());
     try testing.expectEqualStrings("", c.stderr.written());
-    // Without a semantic stage, a full check cannot claim success.
+    // A full check runs the semantic stages.
     var full: Captured = try .init(&.{ "check", "--message-format", "json", path });
     defer full.deinit();
-    try testing.expectEqual(Exit.internal, full.exit);
+    try testing.expectEqual(Exit.ok, full.exit);
     try testing.expectEqualStrings("", full.stdout.written());
+    // A construct the checker does not support yet cannot pass as checked.
+    const later = try writeCase(arena.allocator(), &tmp, "later.pr", "fn main() { match 1 { _ => {} } }\n");
+    var inc: Captured = try .init(&.{ "check", "--message-format", "json", later });
+    defer inc.deinit();
+    try testing.expectEqual(Exit.internal, inc.exit);
+    try testing.expectEqualStrings("", inc.stdout.written());
 }
 
 test "check: an error exits 1 with one JSON diagnostic per line" {

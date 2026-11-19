@@ -1,5 +1,4 @@
 //@ covers: E0904
-//@ expected-fail: T038
 
 pub fn offset() -> u32 {
     1

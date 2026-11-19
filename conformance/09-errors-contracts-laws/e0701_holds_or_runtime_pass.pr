@@ -1,4 +1,3 @@
-//@ expected-fail: T137
 //@ covers: E0701
 // §9.5.3: a comptime-known condition that holds is fine, and a condition with a
 // runtime input is left to the runtime check (or none in `prod`).

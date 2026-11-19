@@ -1,4 +1,3 @@
-//@ expected-fail: T039
 // §6.3.1: a local that shadows a module item, or a prelude name that is not a
 // type or formatting intrinsic, gets W0301.
 

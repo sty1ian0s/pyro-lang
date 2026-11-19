@@ -1,4 +1,3 @@
-//@ expected-fail: T040
 // §4.11.4: discriminants continue from the previous one, so `store` is 1 like
 // `load`; duplicates are an error.
 

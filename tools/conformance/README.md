@@ -33,9 +33,10 @@ conveniences (T024).
 | `pyro run --env <env>` (cwd = example package) | build and run the package |
 
 Any other exit status of `pyro check` (2 usage, 3 internal error, a signal) fails the
-case. Stage 0: a full `pyro check` (no `--stop-after`) exits 3 until both a resolve and
-a check pass are registered in `semantic_stages` (`stage0/src/cli/main.zig`), so
-`stop-after: check` pass cases stay expected-fail until then. Each call is killed if it prints nothing for 60 s.
+case. Stage 0: a full `pyro check` (no `--stop-after`) without an error exits 3 when
+the program uses a construct the type checker does not support yet
+(`stage0/src/sema/emit_tir.zig`), so such pass cases stay expected-fail until the
+task that checks the construct. Each call is killed if it prints nothing for 60 s.
 
 ## JSON diagnostic format (`--message-format json`)
 

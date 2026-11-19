@@ -1,4 +1,3 @@
-//@ expected-fail: T043
 // §4.7, §6.4.1, §6.6.1: distinct types do not mix, arithmetic needs one numeric
 // type, and an `if` condition must be `bool`.
 

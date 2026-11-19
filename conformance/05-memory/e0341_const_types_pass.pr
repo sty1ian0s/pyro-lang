@@ -1,4 +1,4 @@
-//@ expected-fail: T040
+//@ expected-fail: T060
 //@ covers: E0341
 // §5.9, §7.7: every allowed `const` type.
 
