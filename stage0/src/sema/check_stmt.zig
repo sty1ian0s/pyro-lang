@@ -78,7 +78,7 @@ fn stmt(c: *Checker, s: Node.Index) Error!bool {
         .guard_let => return patterns.guardLet(c, s),
         .spawn, .nursery => _ = c.unsupported(s, "`nursery` and `spawn` (T125)"),
         .launch => _ = c.unsupported(s, "`launch` (T187)"),
-        .attributed => _ = c.unsupported(s, "attributes on statements (T062)"),
+        .attributed => _ = c.unsupported(s, "`@simd` loops and `@workgroup` variables (T156, T177)"),
         else => {
             const v = try check_expr.check(c, s, .none);
             try must_use.check(c, s, v.ty);
