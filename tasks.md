@@ -637,9 +637,9 @@ graph TD
   - Blocked by: T043, T062
   - Blocks: T135
 - [ ] **T068** Generic argument inference
-  - Spec: §7.6.3, §4.8, §6.2.2, E0372
+  - Spec: §7.6.3, §4.8, §6.2.2, §7.2.5, E0372
   - Deliverable: `stage0/src/sema/infer.zig`.
-  - Acceptance: max(1, x_f32) -> f32; max(1,2) -> i64; T only in return E0372; explicit comptime T path.
+  - Acceptance: max(1, x_f32) -> f32; max(1,2) -> i64; T only in return E0372; explicit comptime T path; `let f: fn(f32) -> f32 = clamp;` instantiates generic `clamp` from the expected type (§7.2.5; replaces the `instantiating generic functions (T068)` site in check_call.fnValue).
   - Size: M · Parallel: W18
   - Blocked by: T047, T064
   - Blocks: T070
