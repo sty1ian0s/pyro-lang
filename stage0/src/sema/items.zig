@@ -243,6 +243,8 @@ pub const Items = struct {
     std_pkg: Types.Package,
     /// The entry point, if the package is an executable with a valid one.
     main: ?Main = null,
+    /// Memoized type kinds, owned by `kinds.zig` (arena-backed).
+    kinds: type_kinds.Cache = .{},
 
     pub fn deinit(it: *Items) void {
         const gpa = it.arena.child_allocator;

@@ -44,11 +44,23 @@ const Flags = struct {
         return f.resource and f.view;
     }
 
-    /// A resource wins over a shared cell (§5.1); a type with a view inside
-    /// is a view.
+    /// A resource wins over a shared cell (§5.1). §5.1 also says "a struct
+    /// that contains a shared cell is itself a shared cell (unless it also
+    /// contains a resource)", so a shared cell wins over a view: a type
+    /// holding both must not be copied (E0328). View placement rules read
+    /// `Flags.view`, not the kind.
     fn kind(f: Flags) Kind {
-        return if (f.resource) .resource else if (f.view) .view else if (f.shared) .shared_cell else .plain;
+        return if (f.resource) .resource else if (f.shared) .shared_cell else if (f.view) .view else .plain;
     }
+};
+
+/// Memoized kinds, kept in `Items.kinds`. A null entry marks a type being
+/// computed; meeting it again means a recursive type (E0376), which then
+/// counts as holding nothing.
+pub const Cache = struct {
+    flags: std.AutoHashMapUnmanaged(TypeId, ?Flags) = .empty,
+    /// The first problem in the fields and payloads of a generic instance.
+    instances: std.AutoHashMapUnmanaged(TypeId, ?(?Problem)) = .empty,
 };
 
 // shortcut: the standard library is not loaded (T163), so its resources and
@@ -64,29 +76,38 @@ const std_containers = std.StaticStringMap(void).initComptime(.{
 /// The kind of `ty`. Generic parameters not yet substituted count as plain;
 /// a failed type is plain.
 pub fn kind(it: *Items, ty: TypeId) Error!Kind {
-    return (try flagsOf(it, ty, 0)).kind();
+    return (try flagsOf(it, ty)).kind();
 }
 
-fn flagsOf(it: *Items, ty: TypeId, depth: u32) Error!Flags {
-    if (depth > 64) return .{}; // recursive types are E0376
+fn flagsOf(it: *Items, ty: TypeId) Error!Flags {
+    const gpa = it.arena.allocator();
+    const gop = try it.kinds.flags.getOrPut(gpa, ty);
+    if (gop.found_existing) return gop.value_ptr.* orelse .{};
+    gop.value_ptr.* = null;
+    const f = try computeFlags(it, ty);
+    try it.kinds.flags.put(gpa, ty, f); // the recursion may have moved `gop`
+    return f;
+}
+
+fn computeFlags(it: *Items, ty: TypeId) Error!Flags {
     switch (it.types.get(ty)) {
         .simple => |s| return .{ .view = s == .str },
         .slice, .soa_slice, .mut_view => return .{ .view = true },
-        .array => |x| return flagsOf(it, x.elem, depth + 1),
-        .soa_array => |x| return flagsOf(it, x.elem, depth + 1),
+        .array => |x| return flagsOf(it, x.elem),
+        .soa_array => |x| return flagsOf(it, x.elem),
         .tuple => |x| {
             var f: Flags = .{};
-            for (x.elems) |e| f = f.merge(try flagsOf(it, e, depth + 1));
+            for (x.elems) |e| f = f.merge(try flagsOf(it, e));
             return f;
         },
         .nominal => |n| {
-            if (n.kind == .distinct) return flagsOf(it, n.underlying, depth + 1);
+            if (n.kind == .distinct) return flagsOf(it, n.underlying);
             if (n.lang == .atomic) return .{ .shared = true };
             var f: Flags = .{};
             if (isStd(it, n)) {
                 if (std_resources.has(it.types.strings.get(n.name))) return .{ .resource = true };
                 for (n.args) |arg| if (arg == .type) {
-                    f = f.merge(try flagsOf(it, arg.type, depth + 1));
+                    f = f.merge(try flagsOf(it, arg.type));
                 };
                 return f;
             }
@@ -95,10 +116,10 @@ fn flagsOf(it: *Items, ty: TypeId, depth: u32) Error!Flags {
             switch ((try it.info(ref)).*) {
                 .@"struct" => |s| {
                     f.resource = items_mod.hasAttr(astOf(it, ref.module), s.attrs, .resource);
-                    for (s.fields) |fld| f = f.merge(try flagsOf(it, try it.subst(fld.type, n.decl, n.args), depth + 1));
+                    for (s.fields) |fld| f = f.merge(try flagsOf(it, try it.subst(fld.type, n.decl, n.args)));
                 },
                 .@"enum" => |e| for (e.variants) |v| for (v.payload) |p| {
-                    f = f.merge(try flagsOf(it, try it.subst(p, n.decl, n.args), depth + 1));
+                    f = f.merge(try flagsOf(it, try it.subst(p, n.decl, n.args)));
                 },
                 else => {}, // protocols; declarations on a cycle
             }
@@ -144,9 +165,9 @@ pub fn check(it: *Items) Error!void {
             .@"struct" => |s| {
                 for (s.fields) |fld| try checkWritten(it, m, a.data(fld.node).field_decl.ty, fld.type, true);
                 for (s.methods) |f| try checkFn(it, m, f);
-                if (!(try flagsOf(it, s.type, 0)).mixed()) continue;
+                if (!(try flagsOf(it, s.type)).mixed()) continue;
                 const first_view: ?struct { TypeId, Ast.Node.Index } = outer: for (s.fields) |fld| {
-                    const fl = try flagsOf(it, fld.type, 0);
+                    const fl = try flagsOf(it, fld.type);
                     if (fl.mixed()) break :outer null; // reported where its type is declared or written
                     if (fl.view) break :outer .{ fld.type, a.data(fld.node).field_decl.ty };
                 } else null;
@@ -155,10 +176,10 @@ pub fn check(it: *Items) Error!void {
             .@"enum" => |e| {
                 for (e.variants) |v| for (v.payload, payloadNodes(a, v.node)) |p, pn| try checkWritten(it, m, pn, p, false);
                 for (e.methods) |f| try checkFn(it, m, f);
-                if (!(try flagsOf(it, e.type, 0)).mixed()) continue;
+                if (!(try flagsOf(it, e.type)).mixed()) continue;
                 const first_view: ?struct { TypeId, Ast.Node.Index } = outer: for (e.variants) |v| {
                     for (v.payload, payloadNodes(a, v.node)) |p, pn| {
-                        const f = try flagsOf(it, p, 0);
+                        const f = try flagsOf(it, p);
                         if (f.mixed()) break :outer null; // reported where `p` is declared or written
                         if (f.view) break :outer .{ p, pn };
                     }
@@ -211,7 +232,7 @@ fn checkWritten(it: *Items, m: ModuleId, node: Ast.Node.Index, ty: TypeId, store
 }
 
 fn problem(it: *Items, ty: TypeId, stored: bool, depth: u32) Error!?Problem {
-    if (depth > 64) return null; // recursive types are E0376
+    if (depth > 64) return null; // generic instances that grow without end
     switch (it.types.get(ty)) {
         .mask => return if (stored) .{ .code = .E0304, .outer = ty, .inner = ty } else null,
         inline .array, .soa_array => |x| {
@@ -227,24 +248,48 @@ fn problem(it: *Items, ty: TypeId, stored: bool, depth: u32) Error!?Problem {
             const container = isStd(it, n) and std_containers.has(it.types.strings.get(n.name));
             for (n.args) |arg| if (arg == .type) {
                 if (try problem(it, arg.type, stored or container, depth + 1)) |p| return p;
-                if (container) switch (try kind(it, arg.type)) {
-                    .resource => return .{ .code = .E0325, .outer = ty, .inner = arg.type },
-                    .view => return .{ .code = .E0330, .outer = ty, .inner = arg.type },
-                    else => {},
-                };
+                if (container) {
+                    const f = try flagsOf(it, arg.type);
+                    if (f.resource) return .{ .code = .E0325, .outer = ty, .inner = arg.type };
+                    if (f.view) return .{ .code = .E0330, .outer = ty, .inner = arg.type };
+                }
             };
             // A declaration that mixes for any arguments is reported where it is declared.
             if (n.args.len == 0) return null;
             if (!isStd(it, n)) {
                 if (it.declRef(ty)) |ref| switch ((try it.info(ref)).*) {
-                    inline .@"struct", .@"enum" => |d| if ((try flagsOf(it, d.type, 0)).mixed()) return null,
+                    inline .@"struct", .@"enum" => |d| if ((try flagsOf(it, d.type)).mixed()) return null,
                     else => {},
                 };
+                if (try instanceProblem(it, ty, n, depth)) |p| return p;
             }
         },
         else => return null,
     }
-    return if ((try flagsOf(it, ty, 0)).mixed()) .{ .code = .E0330, .outer = ty, .inner = ty } else null;
+    return if ((try flagsOf(it, ty)).mixed()) .{ .code = .E0330, .outer = ty, .inner = ty } else null;
+}
+
+/// The first problem in the fields (stored) and payloads of generic
+/// instance `ty`, after substituting its arguments (§5.1).
+fn instanceProblem(it: *Items, ty: TypeId, n: Types.Nominal, depth: u32) Error!?Problem {
+    const gpa = it.arena.allocator();
+    const gop = try it.kinds.instances.getOrPut(gpa, ty);
+    if (gop.found_existing) return gop.value_ptr.* orelse null;
+    gop.value_ptr.* = null;
+    const p: ?Problem = if (it.declRef(ty)) |ref| switch ((try it.info(ref)).*) {
+        .@"struct" => |s| for (s.fields) |fld| {
+            if (try problem(it, try it.subst(fld.type, n.decl, n.args), true, depth + 1)) |p| break p;
+        } else null,
+        .@"enum" => |e| outer: {
+            for (e.variants) |v| for (v.payload) |pt| {
+                if (try problem(it, try it.subst(pt, n.decl, n.args), false, depth + 1)) |p| break :outer p;
+            };
+            break :outer null;
+        },
+        else => null,
+    } else null;
+    try it.kinds.instances.put(gpa, ty, p);
+    return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -462,5 +507,60 @@ test "E0328: copying a shared cell; the hook allows other kinds" {
         .{ .E0328, "fn touch(s: Stats, n: Atomic<u64>, k: u32, f: File, c: [2]Atomic<u8>) {}" },
         .{ .E0328, "fn touch(s: Stats, n: Atomic<u64>, k: u32, f: File, c: [2]Atomic<u8>) {}" },
         .{ .E0328, "fn touch(s: Stats, n: Atomic<u64>, k: u32, f: File, c: [2]Atomic<u8>) {}" },
+    });
+}
+
+test "recursive types end (E0376) and kinds are memoized" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\struct T { a: T, b: T }
+        \\struct G<X> { a: G<X>, b: G<X> }
+        \\fn take(t: T, g: G<u8>) {}
+    );
+    defer f.deinit();
+    const ds = f.p.sink.finish();
+    try testing.expect(ds.len > 0);
+    for (ds) |d| try testing.expectEqual(@as(?diag.DiagCode, .E0376), d.code);
+    try testing.expectEqual(Kind.plain, try kind(&f.items, (try f.item("take")).@"fn".params[0].type));
+}
+
+test "kind rules apply to the fields of generic instances (§5.1)" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\@resource
+        \\struct File { fd: i32 }
+        \\struct Arr<T> { xs: [2]T }
+        \\struct Box<T> { l: List<T> }
+        \\struct W<T> { x: T }
+        \\enum E<T> { one(List<T>), none }
+        \\fn p1(a: Arr<File>) {}
+        \\fn p2(b: Box<str>) {}
+        \\fn p3(c: W<mask<4>>) {}
+        \\fn p4(d: E<File>, e: W<W<mask<2>>>) {}
+        \\fn ok(a: Arr<u8>, b: Box<u32>, c: W<str>, d: W<File>) {}
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{
+        .{ .E0325, "fn p1(a: Arr<File>) {}" },
+        .{ .E0330, "fn p2(b: Box<str>) {}" },
+        .{ .E0304, "fn p3(c: W<mask<4>>) {}" },
+        .{ .E0325, "fn p4(d: E<File>, e: W<W<mask<2>>>) {}" },
+        .{ .E0304, "fn p4(d: E<File>, e: W<W<mask<2>>>) {}" },
+    });
+}
+
+test "a shared cell with a view inside is a shared cell (§5.1, E0328)" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\struct S { a: Atomic<u32>, s: str }
+        \\fn touch(s: S, l: List<S>) {}
+    );
+    defer f.deinit();
+    const params = (try f.item("touch")).@"fn".params;
+    try testing.expectEqual(Kind.shared_cell, try kind(&f.items, params[0].type));
+    try testing.expect(!try checkCopy(&f.items, 0, astOf(&f.items, 0).mainToken(params[0].node), params[0].type));
+    try f.expectDiags(&.{
+        .{ .E0328, "fn touch(s: S, l: List<S>) {}" },
+        .{ .E0330, "fn touch(s: S, l: List<S>) {}" },
     });
 }
