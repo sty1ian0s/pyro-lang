@@ -16,6 +16,7 @@ const items_mod = @import("items.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_stmt = @import("check_stmt.zig");
+const check_call = @import("check_call.zig");
 const tir = @import("../tir/tir.zig");
 
 const Node = Ast.Node;
@@ -23,7 +24,6 @@ const TypeId = Types.TypeId;
 const Checker = emit_tir.Checker;
 const Typed = emit_tir.Typed;
 const Error = emit_tir.Error;
-const ModuleId = @import("../resolve/module_graph.zig").ModuleId;
 
 /// The operands of an aggregate being built, and whether one failed or
 /// diverges.
@@ -396,7 +396,7 @@ fn lookup(c: *Checker, at: Node.Index, name: []const u8, args: ?[]const Node.Ind
     if (args) |a| for (methods) |f| {
         const has_self = f.params.len > 0 and f.params[0].is_self;
         if (!has_self and (f.is_pub or !outside) and returnsSelf(c, f.ret, ty) and std.mem.eql(u8, f.name, name))
-            return try callMember(c, at, ref.module, f, a);
+            return try check_call.callFn(c, at, ref.module, f, null, a);
     };
     return null;
 }
@@ -413,7 +413,7 @@ fn returnsSelf(c: *Checker, ret: TypeId, ty: TypeId) bool {
 
 /// Variant `index` (named `name`) of enum `ty` with `payload` types, given
 /// `args` (null without parentheses).
-fn variant(c: *Checker, at: Node.Index, name: []const u8, ty: TypeId, index: u32, payload: []const TypeId, args: ?[]const Node.Index) Error!Typed {
+pub fn variant(c: *Checker, at: Node.Index, name: []const u8, ty: TypeId, index: u32, payload: []const TypeId, args: ?[]const Node.Index) Error!Typed {
     const given = args orelse &.{};
     // A `void` payload is written `.ok()` (§4.2.4); a void value has no operand.
     const void_payload = args != null and given.len == 0 and payload.len == 1 and payload[0] == .void;
@@ -432,19 +432,6 @@ fn argument(c: *Checker, at: Node.Index, a: Node.Index, to: TypeId) Error!Typed 
     const kind = c.ast.kind(a);
     if (kind == .named_arg or kind == .mut_arg) return c.unsupported(at, "argument modes and named arguments (T047)");
     return check_expr.checkAs(c, a, to);
-}
-
-/// A call of `f`, a function member of a type declared in module `m`.
-fn callMember(c: *Checker, at: Node.Index, m: ModuleId, f: items_mod.Fn, args: []const Node.Index) Error!Typed {
-    // shortcut: positional value arguments only, like `check_expr.call`; T047 binds the rest.
-    if (f.generics.len > 0) return c.unsupported(at, "generic calls (T068)");
-    if (f.params.len != args.len) return c.unsupported(at, "default arguments (T047)");
-    for (f.params) |p| if (p.mode != .value) return c.unsupported(at, "argument modes and named arguments (T047)");
-    if (f.ret == .err) c.failed = true;
-    var e: Elems = try .init(c, args.len);
-    for (args, f.params, 0..) |a, p, i| e.set(i, try argument(c, at, a, p.type));
-    const id = try c.bodies.fnId(m, f.node, f.name);
-    return e.finish(c, f.ret, .{ .call = .{ .callee = id, .args = e.refs } });
 }
 
 // ---------------------------------------------------------------------------

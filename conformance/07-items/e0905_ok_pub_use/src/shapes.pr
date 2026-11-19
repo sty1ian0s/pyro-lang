@@ -1,5 +1,4 @@
 //@ covers: E0905
-//@ expected-fail: T038
 
 pub struct Square {
     pub mut side: f32,

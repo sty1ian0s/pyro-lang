@@ -896,10 +896,9 @@ test "wrong context and unknown names are reported" {
     );
     defer f.deinit();
     try f.expectDiags(&.{
-        .{ .E1202, "@volatile_read" }, .{ .E1202, "@ptr_from_int" }, .{ .E1005, "@vertex_index" },
-        .{ .E1005, "@vertex_index" },  .{ .E1005, "@discard" },      .{ null, "@old" },
-        .{ null, "@frobnicate" },      .{ null, "@trap" },           .{ null, "@sample_index" },
-        .{ null, "@any" },
+        .{ .E1202, "@volatile_read" }, .{ .E1202, "@ptr_from_int" }, .{ .E1005, "@frag_coord" }, .{ .E1005, "@vertex_index" },
+        .{ .E1005, "@vertex_index" },  .{ .E1005, "@discard" },      .{ null, "@old" },          .{ null, "@frobnicate" },
+        .{ null, "@trap" },            .{ null, "@sample_index" },   .{ null, "@any" },
     });
 }
 

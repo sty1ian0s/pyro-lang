@@ -17,6 +17,7 @@ const attr_table = @import("../attr_table.zig");
 const conv = @import("convert.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
+const check_member = @import("check_member.zig");
 const must_use = @import("must_use.zig");
 
 const Node = Ast.Node;
@@ -114,21 +115,23 @@ fn let(c: *Checker, s: Node.Index) Error!bool {
 }
 
 /// An assignment target: its place instruction and type.
-const Place = struct { ref: tir.Ref, ty: TypeId };
+pub const Place = struct { ref: tir.Ref, ty: TypeId };
 
 /// The storage assignment target `n` names (§3.5, §1.6), or null after a
-/// diagnostic. Field, index and dereference targets are T050's, T051's and
-/// T054's.
+/// diagnostic. Fields are `check_member`'s; index and dereference targets
+/// are T051's and T054's.
 fn place(c: *Checker, n: Node.Index) Error!?Place {
     switch (c.ast.kind(n)) {
         .ident => {},
+        // A module member (`geo.origin`) is a name like an `ident`.
+        .field_access => if (c.items.names.get(c.m, n) == null) return check_member.assignTarget(c, n),
         .paren => return place(c, c.ast.data(n).paren.inner),
         .self_value => {
             if (c.self_local == .none) return null;
             return try localPlace(c, n, c.self_local);
         },
         else => {
-            _ = c.unsupported(n, "assignment to fields, elements and dereferences (T050, T051, T054)");
+            _ = c.unsupported(n, "assignment to elements and dereferences (T051, T054)");
             return null;
         },
     }
@@ -172,7 +175,7 @@ fn place(c: *Checker, n: Node.Index) Error!?Place {
 
 /// Local `l` as an assignment target at `n`: E0337 for an immutable `let`,
 /// E0338 for a parameter without `mut`, `move` ones included (§5.5.2).
-fn localPlace(c: *Checker, n: Node.Index, l: tir.Local) Error!?Place {
+pub fn localPlace(c: *Checker, n: Node.Index, l: tir.Local) Error!?Place {
     const info = c.b.locals.get(l.int());
     const name = c.types.strings.get(info.name);
     switch (info.kind) {
