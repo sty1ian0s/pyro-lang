@@ -30,6 +30,7 @@ const kinds = @import("kinds.zig");
 const layout = @import("layout.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
+const builtins_expr = @import("builtins_expr.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -182,9 +183,9 @@ pub const Rule = enum {
     call,
     /// `(f) -> FnInfo` (T071).
     fn_info,
-    /// `(E, I) -> Option<E>` (T053).
+    /// `(E, I) -> Option<E>`.
     enum_from_int,
-    /// `(I, I) -> Option<I>` (T053).
+    /// `(I, I) -> Option<I>`.
     checked,
     /// `@compile_error` and `@compile_log` (T061).
     compile_diag,
@@ -456,7 +457,7 @@ fn call(c: *Checker, at: Node.Index, name: []const u8, b: Builtin, args: []const
 }
 
 /// The arguments of one builtin call as they are checked.
-const Args = struct {
+pub const Args = struct {
     c: *Checker,
     at: Node.Index,
     name: []const u8,
@@ -475,17 +476,17 @@ const Args = struct {
     }
 
     /// Value argument `i`; an untyped constant gets its default type.
-    fn value(a: *Args, i: usize, expected: TypeId) Error!Typed {
+    pub fn value(a: *Args, i: usize, expected: TypeId) Error!Typed {
         return a.record(i, try a.c.materialize(try check_expr.check(a.c, a.nodes[i], expected), a.nodes[i]));
     }
 
     /// Value argument `i` converted to `to`.
-    fn as(a: *Args, i: usize, to: TypeId) Error!Typed {
+    pub fn as(a: *Args, i: usize, to: TypeId) Error!Typed {
         return a.record(i, try check_expr.checkAs(a.c, a.nodes[i], to));
     }
 
     /// Type argument `i`, passed as a `type` value.
-    fn typeArg(a: *Args, i: usize) Error!TypeId {
+    pub fn typeArg(a: *Args, i: usize) Error!TypeId {
         const t = try a.c.resolveType(a.nodes[i]);
         a.ok = a.ok and t != .err;
         a.refs[i] = try a.c.emit(.type, .{ .type = .{ .value = t } });
@@ -494,8 +495,8 @@ const Args = struct {
 
     /// Arguments `0..count`, converted to one type (§6.4.1): the first
     /// typed argument's, else `expected`, else the first constant's default.
-    fn common(a: *Args, count: usize, expected: TypeId) Error!TypeId {
-        var vs: [3]Typed = undefined;
+    pub fn common(a: *Args, count: usize, expected: TypeId) Error!TypeId {
+        var vs: [4]Typed = undefined;
         var ty: TypeId = .none;
         for (vs[0..count], 0..) |*v, i| {
             v.* = try check_expr.check(a.c, a.nodes[i], expected);
@@ -512,7 +513,7 @@ const Args = struct {
 
     /// E0310 at argument `i`: `found` is not `what`. Silent for a failed or
     /// diverging argument.
-    fn wrong(a: *Args, i: usize, what: []const u8, found: TypeId) Error!Typed {
+    pub fn wrong(a: *Args, i: usize, what: []const u8, found: TypeId) Error!Typed {
         if (found != .err and found != .noreturn) {
             try a.c.report(a.nodes[i], .E0310, "`{s}` expects {s}, found `{s}`", .{ a.name, what, try a.c.tyName(found) });
             a.ok = false;
@@ -521,7 +522,7 @@ const Args = struct {
     }
 
     /// The call's value, of type `ty`, once the arguments are checked.
-    fn finish(a: *Args, ty: TypeId) Error!Typed {
+    pub fn finish(a: *Args, ty: TypeId) Error!Typed {
         if (a.ok and a.diverges) return .never;
         if (!a.ok or ty == .err) {
             a.c.failed = true;
@@ -543,8 +544,8 @@ fn typeCall(a: *Args, rule: Rule, expected: TypeId) Error!Typed {
         .reflect => return c.unsupported(a.at, "reflection builtins (T069)"),
         .field => return c.unsupported(a.at, "`@field` (T072)"),
         .call, .fn_info => return c.unsupported(a.at, "`@call` and `@fn_info` (T071)"),
-        .enum_from_int => return c.unsupported(a.at, "`@enum_from_int` (T053)"),
-        .checked => return c.unsupported(a.at, "checked arithmetic (T053)"),
+        .enum_from_int => return builtins_expr.enumFromInt(a),
+        .checked => return builtins_expr.checked(a, expected),
         .compile_diag => return c.unsupported(a.at, "`@compile_error` and `@compile_log` (T061)"),
         .eval_quota => return c.unsupported(a.at, "`@set_eval_quota` (T059)"),
         .comptime_input => return c.unsupported(a.at, "comptime inputs (T073)"),
@@ -819,7 +820,7 @@ fn ptrOf(c: *Checker, ty: TypeId) ?@FieldType(Types.Key, "ptr") {
     };
 }
 
-fn isInt(c: *Checker, ty: TypeId) bool {
+pub fn isInt(c: *Checker, ty: TypeId) bool {
     return ty == .usize or ty == .isize or c.types.get(ty) == .int;
 }
 
@@ -832,7 +833,7 @@ fn intBits(c: *Checker, ty: TypeId) u32 {
 
 /// A valid `vec` element (§4.3.1, E0303): an integer of 1, 2, 4 or 8
 /// bytes, `f32`, `f64` or `bool`.
-fn vecElem(c: *Checker, ty: TypeId) bool {
+pub fn vecElem(c: *Checker, ty: TypeId) bool {
     if (ty == .f32 or ty == .f64 or ty == .bool or ty == .usize or ty == .isize) return true;
     return switch (c.types.get(ty)) {
         .int => |i| i.bits == 8 or i.bits == 16 or i.bits == 32 or i.bits == 64,
@@ -1013,12 +1014,12 @@ test "GPU builtin signatures in their stages" {
 test "a builtin typed by a later task names it from its rule's arm" {
     var f: Fixture = undefined;
     try f.init(
-        \\fn later(x: u8) { let y = @add_checked(x, 1); }
+        \\fn later(x: u8) { let y = @hash(x); }
     );
     defer f.deinit();
     try f.expectDiags(&.{});
-    try testing.expectEqual(Rule.checked, info(.add_checked).rule);
-    try testing.expect(std.mem.indexOf(u8, f.bodies.unsupported.?.what, "T053") != null);
+    try testing.expectEqual(Rule.hash, info(.hash).rule);
+    try testing.expect(std.mem.indexOf(u8, f.bodies.unsupported.?.what, "T066") != null);
 }
 
 test "formatting intrinsics: comptime format string; the rest waits for T112" {

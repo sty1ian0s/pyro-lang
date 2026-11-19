@@ -632,6 +632,19 @@ pub const Items = struct {
     fn stdNominal(it: *Items, m: ModuleId, index: u32, name: []const u8, is_protocol: bool, args: []const Node.Index, self_ty: TypeId) Error!TypeId {
         const out = try it.alloc().alloc(Types.Arg, args.len);
         for (args, out) |arg, *o| o.* = try it.genericArg(m, arg, .none, self_ty) orelse return .err;
+        return it.internStd(index, name, is_protocol, out);
+    }
+
+    /// `Option<payload>` (§14.1): the type the prelude name `Option`
+    /// denotes with argument `payload`.
+    pub fn optionOf(it: *Items, payload: TypeId) Error!TypeId {
+        const index = for (prelude.entries, 0..) |e, i| {
+            if (std.mem.eql(u8, e.name, "Option")) break i;
+        } else unreachable;
+        return it.internStd(@intCast(index), "Option", false, &.{.{ .type = payload }});
+    }
+
+    fn internStd(it: *Items, index: u32, name: []const u8, is_protocol: bool, out: []const Types.Arg) Error!TypeId {
         const langs = std.StaticStringMap(Types.Lang).initComptime(.{
             .{ "Option", .option }, .{ "Result", .result }, .{ "Atomic", .atomic }, .{ "Channel", .channel },
         });
