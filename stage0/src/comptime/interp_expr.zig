@@ -93,6 +93,7 @@ pub const Interp = struct {
 
     /// `ty` with `distinct` wrappers removed (§4.7).
     pub fn base(in: *const Interp, ty: TypeId) TypeId {
+        if (ty.isFixed()) return ty; // no lookup on the hot path
         var t = ty;
         while (true) switch (in.types().get(t)) {
             .nominal => |n| if (n.kind == .distinct) {
@@ -102,7 +103,8 @@ pub const Interp = struct {
         };
     }
 
-    fn intInfo(in: *const Interp, ty: TypeId) ?IntInfo {
+    inline fn intInfo(in: *const Interp, ty: TypeId) ?IntInfo {
+        if (ty.fixedInt()) |i| return .{ .signedness = i.signedness, .bits = i.bits };
         return convert.intInfo(in.types(), in.items.options.ptr_bits, in.base(ty));
     }
 
@@ -127,7 +129,7 @@ pub const Interp = struct {
     /// opcodes (`add` .. `ge`), yielding type `ty`; lane-wise on `vec`s and
     /// `mask`s (a scalar shift amount applies to every lane).
     pub fn binary(in: *const Interp, op: tir.Op, ty: TypeId, a: Value, b: Value) Error!Value {
-        if (in.lanes(a.ty)) |n| {
+        if (if (a.data == .aggregate) in.lanes(a.ty) else null) |n| {
             const out = try in.arena.alloc(Value, n);
             const lane_ty = in.laneType(ty);
             for (out, a.data.aggregate, 0..) |*o, x, i| {
@@ -202,7 +204,7 @@ pub const Interp = struct {
     /// `neg`, `bit_not` or `not` of `a`, yielding type `a.ty`; lane-wise on
     /// `vec`s and `mask`s.
     pub fn unary(in: *const Interp, op: tir.Op, a: Value) Error!Value {
-        if (in.lanes(a.ty)) |n| {
+        if (if (a.data == .aggregate) in.lanes(a.ty) else null) |n| {
             const out = try in.arena.alloc(Value, n);
             for (out, a.data.aggregate) |*o, x| o.* = try in.unary(op, x);
             return .{ .ty = a.ty, .data = .{ .aggregate = out } };
@@ -424,12 +426,12 @@ fn elem(v: Value, i: usize) Value {
 }
 
 /// The integer encoded by `x` (see `value.zig`).
-fn intOf(info: IntInfo, x: u64) i128 {
+inline fn intOf(info: IntInfo, x: u64) i128 {
     return if (info.signedness == .signed) @as(i64, @bitCast(x)) else x;
 }
 
 /// `x` encoded at `info`, or null if out of range.
-fn fit(info: IntInfo, x: i128) ?u64 {
+inline fn fit(info: IntInfo, x: i128) ?u64 {
     const signed = info.signedness == .signed;
     const min: i128 = if (signed) -(@as(i128, 1) << @intCast(info.bits - 1)) else 0;
     const max: i128 = (@as(i128, 1) << @intCast(info.bits - @intFromBool(signed))) - 1;

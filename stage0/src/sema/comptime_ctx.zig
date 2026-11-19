@@ -512,7 +512,8 @@ test "comptime expressions in bodies; runtime locals are E0801; the budget is E0
         \\const S: u32 = spin();
     );
     defer f.deinit();
-    try f.expectDiags(&.{ .{ .E0808, "while" }, .{ .E0801, "n" } });
+    // E0808 is reported at the evaluation: the `(` of `spin()`.
+    try f.expectDiags(&.{ .{ .E0801, "n" }, .{ .E0808, "(" } });
     try testing.expect(f.bodies.find(0, "a").?.func != null);
 }
 

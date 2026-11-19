@@ -1,4 +1,3 @@
-//@ expected-fail: T060
 //@ covers: E0808
 // §8.6: `@set_eval_quota` raises the budget of the evaluation it runs in, and
 // the budget is per top-level evaluation.

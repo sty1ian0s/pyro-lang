@@ -19,13 +19,13 @@ pub fn Index(comptime tag: @EnumLiteral()) type {
         pub const kind = tag;
 
         /// Wraps array position `i`. Asserts `i` fits and is not the sentinel.
-        pub fn from(i: usize) Self {
+        pub inline fn from(i: usize) Self {
             std.debug.assert(i < std.math.maxInt(u32));
             return @fromBackingInt(@intCast(i));
         }
 
         /// Returns the array position. Asserts `self` is not `.none`.
-        pub fn int(self: Self) u32 {
+        pub inline fn int(self: Self) u32 {
             std.debug.assert(self != .none);
             return @backingInt(self);
         }
