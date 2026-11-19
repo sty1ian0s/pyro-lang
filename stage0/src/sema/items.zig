@@ -43,6 +43,7 @@ const names_mod = @import("../resolve/names.zig");
 const prelude = @import("../resolve/prelude.zig");
 const attr_table = @import("../attr_table.zig");
 const type_kinds = @import("kinds.zig");
+const layout_soa = @import("layout_soa.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -517,10 +518,10 @@ pub const Items = struct {
             },
             .soa_array_type => |d| blk: {
                 const len = try it.arrayLen(m, d.len, self_ty) orelse break :blk .err;
-                break :blk it.types.intern(.{ .soa_array = .{ .len = len, .elem = try it.resolveType(m, d.elem, self_ty) } });
+                break :blk it.types.intern(.{ .soa_array = .{ .len = len, .elem = try layout_soa.elemType(it, m, d.elem, self_ty) } });
             },
             .slice_type => |d| it.types.intern(.{ .slice = .{ .elem = try it.resolveType(m, d.elem, self_ty) } }),
-            .soa_slice_type => |d| it.types.intern(.{ .soa_slice = .{ .elem = try it.resolveType(m, d.elem, self_ty) } }),
+            .soa_slice_type => |d| it.types.intern(.{ .soa_slice = .{ .elem = try layout_soa.elemType(it, m, d.elem, self_ty) } }),
             .ptr_type => |d| it.types.intern(.{ .ptr = .{ .elem = try it.resolveType(m, d.elem, self_ty), .is_const = false } }),
             .ptr_const_type => |d| it.types.intern(.{ .ptr = .{ .elem = try it.resolveType(m, d.elem, self_ty), .is_const = true } }),
             .mut_type => |d| it.types.intern(.{ .mut_view = .{ .elem = try it.resolveType(m, d.elem, self_ty) } }),

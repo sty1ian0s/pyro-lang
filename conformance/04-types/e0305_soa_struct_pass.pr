@@ -1,4 +1,4 @@
-//@ expected-fail: T045
+//@ expected-fail: T050
 //@ covers: E0305
 // §4.4.2, §4.11.5: SoA arrays and slices of a struct type; `a.f` is a column view.
 
