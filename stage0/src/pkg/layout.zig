@@ -88,9 +88,6 @@ pub fn findRoot(gpa: std.mem.Allocator, io: Io, start: []const u8) !?[]u8 {
     return null;
 }
 
-/// Errors `open` returns besides I/O failures.
-pub const Error = error{ InvalidManifest, InvalidLayout, OutOfMemory };
-
 /// Loads `<dir>/pyro.toml` into `sm` and maps the package. Manifest errors (E0909)
 /// and a missing or ambiguous root module (E0908, at the `[package]` header) go to
 /// `sink` and fail with `error.InvalidManifest` / `error.InvalidLayout`.
@@ -138,6 +135,8 @@ pub fn open(gpa: std.mem.Allocator, io: Io, sm: *SourceMap, sink: *diag.Sink, di
         };
     }
 
+    // Every arena allocation must precede the copy of `arena` into the result.
+    const lock_path = try std.fs.path.join(a, &.{ ws_dir, lock_name });
     return .{
         .arena = arena,
         .dir = abs,
@@ -146,13 +145,14 @@ pub fn open(gpa: std.mem.Allocator, io: Io, sm: *SourceMap, sink: *diag.Sink, di
         .package = package,
         .members = members,
         .workspace_dir = ws_dir,
-        .lock_path = try std.fs.path.join(a, &.{ ws_dir, lock_name }),
+        .lock_path = lock_path,
     };
 }
 
 /// The module path of `rel`, a `.pr` file path relative to `src/` (§7.8.1):
 /// the extension dropped and separators replaced by `.`.
-pub fn modulePath(a: std.mem.Allocator, rel: []const u8) ![]u8 {
+fn modulePath(a: std.mem.Allocator, rel: []const u8) ![]u8 {
+    std.debug.assert(std.mem.endsWith(u8, rel, ".pr"));
     const out = try a.dupe(u8, rel[0 .. rel.len - ".pr".len]);
     std.mem.replaceScalar(u8, out, std.fs.path.sep, '.');
     return out;
@@ -286,6 +286,33 @@ test "src/** maps to module paths; tests/ and assets/ are found" {
     try testing.expect(std.mem.endsWith(u8, p.assets.?, "assets"));
     try testing.expectEqualStrings(root, l.workspace_dir);
     try testing.expectEqual(0, sink.finish().len);
+}
+
+test "open frees every arena node, however full the last one is" {
+    // Each added module shifts how full the arena is when `open` makes its final
+    // allocation (`lock_path`); a long package path widens the window in which
+    // that allocation is the one that needs a new node.
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const long: [200]u8 = @splat('d');
+    const pkg = long ++ "/" ++ long ++ "/" ++ long ++ "/" ++ long;
+    const root = try tree(&tmp, &.{ .{ pkg ++ "/pyro.toml", pkg_toml }, .{ pkg ++ "/src/main.pr", "" } });
+    defer testing.allocator.free(root);
+    const dir = try std.fs.path.join(testing.allocator, &.{ root, pkg });
+    defer testing.allocator.free(dir);
+    var sub = try tmp.dir.openDir(testing.io, pkg ++ "/src", .{});
+    defer sub.close(testing.io);
+    for (0..100) |n| {
+        var name_buf: [long.len + 8]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "{d}{s}.pr", .{ n, long[0..150] });
+        try sub.writeFile(testing.io, .{ .sub_path = name, .data = "" });
+        var sink: diag.Sink = .init(testing.allocator, testing.io);
+        defer sink.deinit();
+        var sm: SourceMap = .init(testing.allocator, testing.io);
+        defer sm.deinit();
+        var l = try open(testing.allocator, testing.io, &sm, &sink, dir);
+        l.deinit();
+    }
 }
 
 test "workspace members share one lock path; findRoot walks up" {
