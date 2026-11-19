@@ -613,8 +613,7 @@ fn expectDiags(src: []const u8, expected: []const Expected) !void {
     try testing.expectEqualSlices(Expected, expected, got.items);
 }
 
-// Goldens print types and expressions as the T021/T023 stubs leave them:
-// `(invalid <first token>)`.
+// Goldens print blocks as the T025 stub leaves them: empty.
 
 test "golden: use" {
     try expectDump(
@@ -652,10 +651,10 @@ test "golden: const and type" {
         \\(const_decl pub const N
         \\  ty=(path u32
         \\    last=u32)
-        \\  value=(invalid 4))
+        \\  value=(int_lit 4))
         \\(const_decl const M
         \\  ty=_
-        \\  value=(invalid N))
+        \\  value=(ident N))
         \\(type_alias type Pair
         \\  generics=[
         \\    (generic_param A
@@ -698,8 +697,8 @@ test "golden: fn with attributes, generics, modes and defaults" {
         \\    (attribute @deprecated
         \\      args=[
         \\        (named_arg since
-        \\          value=(invalid "1.2"))
-        \\        (invalid "use g")])]
+        \\          value=(string_lit "1.2"))
+        \\        (string_lit "use g")])]
         \\  inner=(fn_decl pub fn f
         \\    generics=[
         \\      (generic_param T
@@ -730,7 +729,7 @@ test "golden: fn with attributes, generics, modes and defaults" {
         \\      (param move b
         \\        ty=(path T
         \\          last=T)
-        \\        default=(invalid d))]
+        \\        default=(ident d))]
         \\    ret=(path T
         \\      last=T)
         \\    body=(block {
@@ -769,7 +768,7 @@ test "golden: struct" {
         \\    (field_decl pub mut x
         \\      ty=(path T
         \\        last=T)
-        \\      default=(invalid 0))
+        \\      default=(int_lit 0))
         \\    (field_decl pub y
         \\      ty=(path T
         \\        last=T)
@@ -778,7 +777,7 @@ test "golden: struct" {
         \\      attrs=[
         \\        (attribute @align
         \\          args=[
-        \\            (invalid 4)])]
+        \\            (int_lit 4)])]
         \\      inner=(field_decl z
         \\        ty=(path u8
         \\          last=u8)
@@ -816,7 +815,7 @@ test "golden: struct" {
         \\    (const_decl pub const K
         \\      ty=(path u32
         \\        last=u32)
-        \\      value=(invalid 1))])
+        \\      value=(int_lit 1))])
         \\(struct_decl struct E
         \\  generics=_
         \\  fields=[]
@@ -853,7 +852,7 @@ test "golden: enum" {
         \\          last=T)
         \\        (path T
         \\          last=T)]
-        \\      value=(invalid 2))
+        \\      value=(int_lit 2))
         \\    (attributed @deprecated
         \\      attrs=[
         \\        (attribute @deprecated
@@ -927,7 +926,7 @@ test "golden: protocol and impl" {
         \\    (const_decl const K
         \\      ty=(path u32
         \\        last=u32)
-        \\      value=(invalid 1))])
+        \\      value=(int_lit 1))])
         \\(impl_decl impl
         \\  generics=[
         \\    (generic_param T
@@ -983,7 +982,7 @@ test "golden: extern and comptime" {
         \\      attrs=[
         \\        (attribute @link_name
         \\          args=[
-        \\            (invalid "abs")])]
+        \\            (string_lit "abs")])]
         \\      inner=(fn_decl pub fn abs
         \\        generics=_
         \\        params=[

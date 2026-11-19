@@ -206,7 +206,8 @@ pub fn parseCallArg(p: *Parser) Parser.Error!Node.Index {
 }
 
 fn parseModeArg(p: *Parser) Parser.Error!Node.Index {
-    const m = p.eat(.kw_mut) orelse return parseBuiltinArg(p);
+    // Without `mut`, the value may be a `move` (§3.8.2).
+    const m = p.eat(.kw_mut) orelse return if (startsTypeOnly(p.peek(0))) parseType(p) else expr.parseExprMove(p);
     return p.addNode(m, .{ .mut_arg = .{ .value = try parseBuiltinArg(p) } });
 }
 
@@ -304,9 +305,9 @@ fn expectType(src: []const u8, want: []const u8) !void {
 test "every type form" {
     try expectType("u32", "path:u32");
     try expectType("std.mem.Allocator", "path:std");
-    try expectType("[4]f32", "array_type(invalid:4 path:f32)");
+    try expectType("[4]f32", "array_type(int_lit:4 path:f32)");
     try expectType("[]u8", "slice_type(path:u8)");
-    try expectType("soa[N]P", "soa_array_type(invalid:N path:P)");
+    try expectType("soa[N]P", "soa_array_type(ident:N path:P)");
     try expectType("soa[]P", "soa_slice_type(path:P)");
     try expectType("*u8", "ptr_type(path:u8)");
     try expectType("*const u8", "ptr_const_type(path:u8)");
@@ -315,14 +316,14 @@ test "every type form" {
     try expectType("fn(i32, mut T, move U, mut mut V,) -> bool", "fn_type(path:i32 param_mode(path:T) param_mode(path:U) param_mode(mut_type(path:V)) path:bool)");
     try expectType("type", "type_type:type");
     try expectType("Self", "self_type:Self");
-    try expectType("@TypeOf(x, fn() -> u8)", "builtin_call(invalid:x fn_type(path:u8))");
+    try expectType("@TypeOf(x, fn() -> u8)", "builtin_call(ident:x fn_type(path:u8))");
     try expectType("@This()", "builtin_call:@This");
     try expectType("(T)", "paren(path:T)");
     try expectType("(T,)", "tuple(path:T)");
     try expectType("(A, B, C,)", "tuple(path:A path:B path:C)");
-    // Call arguments are expressions (stubbed until T023).
-    try expectType("Pool(Particle)", "call(path:Pool invalid:Particle)");
-    try expectType("Make(n: 4, mut x, fn())", "call(path:Make named_arg(invalid:4) mut_arg(invalid:x) fn_type(_))");
+    // Call arguments are expressions.
+    try expectType("Pool(Particle)", "call(path:Pool ident:Particle)");
+    try expectType("Make(n: 4, mut x, fn())", "call(path:Make named_arg(int_lit:4) mut_arg(ident:x) fn_type(_))");
 }
 
 test "anonymous struct body" {
@@ -338,7 +339,7 @@ test "anonymous struct body" {
 }
 
 test "generic arguments: literals, braced expressions and types" {
-    try expectType("Channel<Msg, {CAP * 2}>", "generic_inst(path:Channel path:Msg generic_expr_arg(invalid:CAP))");
+    try expectType("Channel<Msg, {CAP * 2}>", "generic_inst(path:Channel path:Msg generic_expr_arg(binary(ident:CAP int_lit:2)))");
     try expectType("A<1, -2, 'c', true, false, B,>", "generic_inst(path:A int_lit:1 prefix(int_lit:2) char_lit:'c' bool_lit:true bool_lit:false path:B)");
     try expectType("[]Map<K, V>", "slice_type(generic_inst(path:Map path:K path:V))");
 }

@@ -668,7 +668,7 @@ test "stubbed parse yields item skeletons" {
         \\      (param b
         \\        ty=(path T
         \\          last=T)
-        \\        default=(invalid 0))]
+        \\        default=(int_lit 0))]
         \\    ret=(path T
         \\      last=T)
         \\    body=(block {
