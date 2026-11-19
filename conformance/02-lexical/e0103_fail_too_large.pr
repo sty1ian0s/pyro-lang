@@ -1,0 +1,2 @@
+//~ E0103 the harness extends this file (sparse) to 2^32 bytes, one over the limit
+//@ extend-to: 4294967296

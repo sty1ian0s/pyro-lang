@@ -32,6 +32,8 @@ pub const Annotations = struct {
     debug_assertions: bool = false,
     /// `//@ covers: <codes>`: this case is a passing case for those codes.
     covers: []const []const u8 = &.{},
+    /// `//@ extend-to: <bytes>`: check a copy of the case extended (sparse) to this size.
+    extend_to: ?u64 = null,
 };
 
 /// Settings from `dir.conf` files. A key set in a nearer directory wins.
@@ -97,6 +99,9 @@ pub fn parse(arena: Allocator, source: []const u8, err_msg: *[]const u8) !Annota
             ann.expected_fail = value;
         } else if (std.mem.eql(u8, key, "debug_assertions")) {
             ann.debug_assertions = true;
+        } else if (std.mem.eql(u8, key, "extend-to")) {
+            ann.extend_to = std.fmt.parseInt(u64, value, 10) catch
+                return fail(arena, err_msg, "line {d}: extend-to needs a byte count, got `{s}`", .{ line_no, value });
         } else if (std.mem.eql(u8, key, "covers")) {
             var toks = std.mem.tokenizeAny(u8, value, " \t,");
             while (toks.next()) |tok| {
@@ -147,6 +152,7 @@ test "parse annotations and directives" {
         \\//@ stop-after: parse
         \\//@ expected-fail: needs sema
         \\//@ covers: E0101, W0201
+        \\//@ extend-to: 4294967296
         \\let x = 1 << 2 + 3; //~ W0201 E0201 shift mixed
         \\
         \\//~^^ E0102
@@ -154,9 +160,10 @@ test "parse annotations and directives" {
     try std.testing.expectEqual(Phase.parse, ann.stop_after.?);
     try std.testing.expectEqualStrings("needs sema", ann.expected_fail.?);
     try std.testing.expectEqual(@as(usize, 2), ann.covers.len);
+    try std.testing.expectEqual(@as(u64, 1 << 32), ann.extend_to.?);
     try std.testing.expectEqual(@as(usize, 3), ann.expected.len);
     try std.testing.expectEqualStrings("E0102", ann.expected[0].code);
-    try std.testing.expectEqual(@as(u32, 4), ann.expected[0].line);
+    try std.testing.expectEqual(@as(u32, 5), ann.expected[0].line);
     try std.testing.expectEqualStrings("E0201", ann.expected[1].code);
     try std.testing.expectEqualStrings("W0201", ann.expected[2].code);
 }
@@ -170,6 +177,7 @@ test "bad annotations are rejected with a reason" {
     try std.testing.expectError(error.BadCase, parse(arena.allocator(), "//~^ E0101", &msg));
     try std.testing.expectError(error.BadCase, parse(arena.allocator(), "//@ stop-after: emit", &msg));
     try std.testing.expectError(error.BadCase, parse(arena.allocator(), "//@ flaky", &msg));
+    try std.testing.expectError(error.BadCase, parse(arena.allocator(), "//@ extend-to: 4G", &msg));
 }
 
 test "dir.conf: nearer settings win" {

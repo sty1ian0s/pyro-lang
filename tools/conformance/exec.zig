@@ -74,8 +74,26 @@ fn checkDiagnostics(ctx: Ctx, case: *const Case, w: *Writer) !void {
     try args.appendSlice(ctx.arena, &.{ "check", "--message-format", "json" });
     if (case.stop_after == .lex or case.stop_after == .parse)
         try args.appendSlice(ctx.arena, &.{ "--stop-after", @tagName(case.stop_after) });
-    try args.append(ctx.arena, case.path);
-    const out = try pyro(ctx, args.items, null);
+    const out = if (case.ann.extend_to) |size| blk: {
+        // A sparse copy under .zig-cache/tmp, so no data is written and the tree stays clean.
+        var random: [12]u8 = undefined;
+        ctx.io.random(&random);
+        var name: [16]u8 = undefined;
+        _ = std.base64.url_safe.Encoder.encode(&name, &random);
+        const dir = try std.fs.path.join(ctx.arena, &.{ ".zig-cache", "tmp", &name });
+        try Io.Dir.cwd().createDirPath(ctx.io, dir);
+        defer Io.Dir.cwd().deleteTree(ctx.io, dir) catch {};
+        const copy = try std.fs.path.join(ctx.arena, &.{ dir, std.fs.path.basename(case.path) });
+        try Io.Dir.cwd().copyFile(case.path, Io.Dir.cwd(), copy, ctx.io, .{});
+        const f = try Io.Dir.cwd().openFile(ctx.io, copy, .{ .mode = .read_write });
+        defer f.close(ctx.io);
+        try f.setLength(ctx.io, size);
+        try args.append(ctx.arena, copy);
+        break :blk try pyro(ctx, args.items, null);
+    } else blk: {
+        try args.append(ctx.arena, case.path);
+        break :blk try pyro(ctx, args.items, null);
+    };
 
     const exit: ?u8 = if (out.term == .exited) out.term.exited else null;
     if (exit != 0 and exit != 1)

@@ -97,6 +97,7 @@ must produce no diagnostics.
 | `//@ stop-after: lex\|parse\|check\|run` | overrides the directory setting |
 | `//@ expected-fail: <reason>` | known failure: reported as XFAIL; if it passes, XPASS fails the run |
 | `//@ debug_assertions` | run output may differ in `prod` (§13.3); see below |
+| `//@ extend-to: <bytes>` | check a temporary copy extended (sparse, zero-filled) to this size; for E0103 |
 
 An unknown directive or a malformed `//~` fails the case.
 
