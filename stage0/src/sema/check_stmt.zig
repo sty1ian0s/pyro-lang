@@ -154,7 +154,7 @@ fn place(c: *Checker, n: Node.Index) Error!?Place {
                 else => "type",
             },
             .unresolved => {
-                c.failed = true;
+                _ = c.unsupported(n, "names from modules not loaded (multi-file check)");
                 return null;
             },
             .module => "module",
@@ -166,7 +166,7 @@ fn place(c: *Checker, n: Node.Index) Error!?Place {
 }
 
 /// Local `l` as an assignment target at `n`: E0337 for an immutable `let`,
-/// E0338 for a parameter without `mut`.
+/// E0338 for a parameter without `mut`, `move` ones included (§5.5.2).
 fn localPlace(c: *Checker, n: Node.Index, l: tir.Local) Error!?Place {
     const info = c.b.locals.get(l.int());
     const name = c.types.strings.get(info.name);
@@ -175,11 +175,11 @@ fn localPlace(c: *Checker, n: Node.Index, l: tir.Local) Error!?Place {
             try c.reportAt(c.ast.mainToken(n), .E0337, &.{"declare it with `let mut` to allow writes"}, "cannot assign to `{s}`: it is an immutable binding", .{name});
             return null;
         },
-        .param => {
+        .param, .param_move => {
             try c.reportAt(c.ast.mainToken(n), .E0338, &.{"declare the parameter `mut` to write through it"}, "cannot assign to parameter `{s}`: it is not `mut`", .{name});
             return null;
         },
-        .let_mut, .param_mut, .param_move, .temp => {},
+        .let_mut, .param_mut, .temp => {},
     }
     return .{ .ref = try c.emit(info.ty, .{ .local = .{ .local = l } }), .ty = info.ty };
 }
@@ -249,7 +249,9 @@ fn @"return"(c: *Checker, s: Node.Index) Error!bool {
 }
 
 /// `break (:label)? value?;` (§6.7.1): all value `break`s of one `loop` agree
-/// on the type, which the first one fixes (or the loop's expected type).
+/// on the type, which the first typed one fixes. Untyped constants wait for
+/// it, or take the loop's expected type or their default type at its end
+/// (§4.8), as `if` branches do.
 fn @"break"(c: *Checker, s: Node.Index) Error!bool {
     const d = c.ast.data(s).@"break";
     const loop = c.findLoop(if (d.label) |t| c.ast.tokenSlice(t) else null) orelse {
@@ -259,8 +261,9 @@ fn @"break"(c: *Checker, s: Node.Index) Error!bool {
     loop.has_break = true;
     const value = d.value orelse {
         loop.has_void_break = true;
-        if (loop.result != .none) {
-            try c.report(s, .E0310, "mismatched types: `break` without a value in a `loop` whose `break`s give `{s}`", .{try c.tyName(loop.result)});
+        if (loop.result != .none or loop.pending.items.len > 0) {
+            const ty = if (loop.result != .none) loop.result else loop.pending.items[0].value.ty;
+            try c.report(s, .E0310, "mismatched types: `break` without a value in a `loop` whose `break`s give `{s}`", .{try c.tyName(ty)});
         }
         try c.br(loop.exit, .none);
         return true;
@@ -270,22 +273,42 @@ fn @"break"(c: *Checker, s: Node.Index) Error!bool {
         _ = try check_expr.check(c, value, .none);
         return true;
     }
-    const exit = loop.exit;
-    const want = if (loop.result != .none) loop.result else loop.expected;
-    var v = try c.coerce(try check_expr.check(c, value, want), want, valueNode(c.ast, value));
+    const v = try check_expr.check(c, value, if (loop.result != .none) loop.result else loop.expected);
+    const at = valueNode(c.ast, value);
     // `c.loops` may grow while `value` is checked: find the loop again.
     const l = c.findLoop(if (d.label) |t| c.ast.tokenSlice(t) else null).?;
     if (v.ty == .noreturn or v.ty == .err) return true;
     if (l.result == .none) {
         if (l.has_void_break) {
             try c.report(s, .E0310, "mismatched types: this `break` gives `{s}`, another gives no value", .{try c.tyName(v.ty)});
-            v = .err;
+            return true;
         }
-        l.result = v.ty;
-        l.param = try c.blockParam(exit, v.ty);
+        if (v.isUntyped()) {
+            try l.pending.append(c.arena, .{ .block = c.b.block, .value = v, .node = at });
+            c.setBlock(try c.addBlock()); // for the dead code after the `break`
+            return true;
+        }
+        try settle(c, l, v.ty);
     }
-    try c.br(exit, v.ref);
+    try c.br(l.exit, (try c.coerce(v, l.result, at)).ref);
     return true;
+}
+
+/// Fixes the type of `l`'s `break` values to `ty` and ends the blocks of its
+/// pending untyped `break`s.
+fn settle(c: *Checker, l: *emit_tir.Loop, ty: TypeId) Error!void {
+    l.result = ty;
+    l.param = try c.blockParam(l.exit, ty);
+    const here = c.b.block;
+    const node = c.b.node;
+    for (l.pending.items) |p| {
+        c.setBlock(p.block);
+        c.b.node = p.node;
+        try c.br(l.exit, (try c.coerce(p.value, ty, p.node)).ref);
+    }
+    l.pending.clearRetainingCapacity();
+    c.setBlock(here);
+    c.b.node = node;
 }
 
 /// `continue (:label)?;`
@@ -320,7 +343,7 @@ pub fn ifExpr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const else_end = c.b.block;
 
     if (cond.ty == .noreturn or (tv.ty == .noreturn and ev.ty == .noreturn)) return .never;
-    const join_ty: TypeId = if (d.@"else" == null) .void else if (expected != .none and expected != .err) expected else try common(c, d, tv, ev) orelse return .err;
+    const join_ty: TypeId = if (d.@"else" == null) .void else try common(c, d, tv, ev, expected) orelse return .err;
     const join = try c.addBlock();
     const param: tir.Ref = if (join_ty == .void or join_ty == .err) .none else try c.blockParam(join, join_ty);
     for ([_]Typed{ tv, ev }, [_]tir.Block{ then_end, else_end }, [_]?Node.Index{ d.then, d.@"else" }) |v, end, node| {
@@ -335,23 +358,51 @@ pub fn ifExpr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     return .{ .ty = join_ty, .ref = param };
 }
 
-/// The common type of two branch values without an expected type: the
-/// typed one (a narrower integer or `f32` widens), or the default type of
-/// untyped constants. E0310 and null if there is none.
-fn common(c: *Checker, d: @FieldType(Ast.Data, "if"), a: Typed, b: Typed) Error!?TypeId {
+/// The common type of two branch values (§6.6.1): the typed one (a
+/// narrower integer or `f32` widens), or the type `untypedType` gives
+/// untyped constants. `hint` (the expected type, or `.none`) only picks the
+/// type of untyped constants and of typed values that both widen to it: it
+/// does not force a conversion, so an `if` operand has the same type in any
+/// context. E0310 and null if there is none.
+fn common(c: *Checker, d: @FieldType(Ast.Data, "if"), a: Typed, b: Typed, hint: TypeId) Error!?TypeId {
     if (a.ty == .err or b.ty == .err) return .err;
-    if (a.ty == .noreturn) return conv.defaultType(b.ty);
-    if (b.ty == .noreturn) return conv.defaultType(a.ty);
-    if (a.isUntyped() and b.isUntyped())
-        return if (a.ty == .untyped_float or b.ty == .untyped_float) TypeId.f64 else TypeId.int(.signed, 64);
+    if (a.ty == .noreturn) return if (b.isUntyped()) try untypedType(c, hint, &.{b}) else b.ty;
+    if (b.ty == .noreturn) return if (a.isUntyped()) try untypedType(c, hint, &.{a}) else a.ty;
+    if (a.isUntyped() and b.isUntyped()) return try untypedType(c, hint, &.{ a, b });
     if (a.isUntyped()) return b.ty;
     if (b.isUntyped() or a.ty == b.ty) return a.ty;
-    for ([_][2]TypeId{ .{ a.ty, b.ty }, .{ b.ty, a.ty } }) |p| switch (conv.coerce(c.types, p[0], p[1], .{})) {
-        .int_widen, .float_widen => return p[1],
-        else => {},
-    };
+    if (widens(c, a.ty, b.ty)) return b.ty;
+    if (widens(c, b.ty, a.ty)) return a.ty;
+    if (hint != .none and hint != .err and widens(c, a.ty, hint) and widens(c, b.ty, hint)) return hint;
     try c.report(valueNode(c.ast, d.@"else".?), .E0310, "`if` and `else` have different types: `{s}` and `{s}`", .{ try c.tyName(a.ty), try c.tyName(b.ty) });
     return null;
+}
+
+fn widens(c: *Checker, from: TypeId, to: TypeId) bool {
+    return switch (conv.coerce(c.types, from, to, .{})) {
+        .int_widen, .float_widen => true,
+        else => false,
+    };
+}
+
+/// The type untyped constants `vs` take at run time (§4.8): `hint`, if each
+/// converts to it (a value that does not fit is reported on conversion),
+/// else the default type, `f64` if one is a float. A `vec` hint gives its
+/// element type, as a scalar operand of a `vec` is broadcast (§6.4.1), and
+/// `Option<T>` gives `T` (§4.9.1).
+fn untypedType(c: *Checker, hint: TypeId, vs: []const Typed) Error!TypeId {
+    if (hint != .none and hint != .err) {
+        const h = switch (c.types.get(hint)) {
+            .vec => |x| x.elem,
+            else => conv.optionPayload(c.types, hint) orelse hint,
+        };
+        for (vs) |v| switch (try conv.convertConst(c.arena, c.types, c.items.options.ptr_bits, v.konst.?, h)) {
+            .ok => {},
+            .err => |code| if (code == .E0310) break,
+        } else return h;
+    }
+    for (vs) |v| if (v.ty == .untyped_float) return .f64;
+    return .int(.signed, 64);
 }
 
 /// `loop { body }`: the type of its `break` values, `void` if no `break`
@@ -371,7 +422,12 @@ fn loopLabeled(c: *Checker, n: Node.Index, expected: TypeId, label: ?[]const u8)
         _ = try c.coerce(body, .void, valueNode(c.ast, c.ast.data(n).loop.body));
         try c.br(head, .none);
     }
-    const l = c.loops.pop().?;
+    var l = c.loops.pop().?;
+    if (l.pending.items.len > 0) {
+        const vs = try c.arena.alloc(Typed, l.pending.items.len);
+        for (vs, l.pending.items) |*v, p| v.* = p.value;
+        try settle(c, &l, try untypedType(c, expected, vs));
+    }
     c.setBlock(exit);
     if (l.result != .none) return .{ .ty = l.result, .ref = l.param };
     return if (l.has_break) .void_value else .never;
@@ -524,6 +580,10 @@ test "let, assignment and compound assignment: E0207, E0337, E0338" {
     var f: Fixture = undefined;
     try f.init(
         \\const LIMIT: i32 = 10;
+        \\@resource
+        \\struct File { fd: i32 }
+        \\fn open() -> File { loop {} }
+        \\fn close(move f: File) { f = open(); }
         \\fn helper() {}
         \\fn writes(n: i32, mut m: i32) {
         \\    let x = 1;
@@ -540,7 +600,7 @@ test "let, assignment and compound assignment: E0207, E0337, E0338" {
     );
     defer f.deinit();
     try f.expectDiags(&.{
-        .{ .E0207, "LIMIT" }, .{ .E0207, "helper" }, .{ .E0337, "x" }, .{ .E0338, "n" }, .{ .E0306, "+=" },
+        .{ .E0338, "f" }, .{ .E0207, "LIMIT" }, .{ .E0207, "helper" }, .{ .E0337, "x" }, .{ .E0338, "n" }, .{ .E0306, "+=" },
     });
 }
 
@@ -571,4 +631,84 @@ test "if and loop typing: common types, break agreement, labels" {
     defer f.deinit();
     try f.expectDiags(&.{ .{ .E0310, "1u8" }, .{ .E0310, "\"s\"" }, .{ .E0310, "\"s\"" } });
     for ([_][]const u8{ "pick", "dflt", "void_if", "breaks" }) |name| _ = try f.func(name);
+}
+
+test "an expected type only guides untyped branches and breaks" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn scale(c: bool, w: vec<4, f32>) -> vec<4, f32> {
+        \\    let v: vec<4, f32> = (if c { 1.0 } else { 2.0 }) * w;
+        \\    v
+        \\}
+        \\fn shift(n: u32) -> u64 { let v: u64 = (if n > 0 { n } else { 1 }) << 2u8; v }
+        \\fn widen(c: bool, a: u32, b: i32) -> i64 { if c { a } else { b } }
+        \\fn first_untyped(c: bool, n: u32) -> u32 {
+        \\    let x = loop { if c { break 0; } break n; };
+        \\    x
+        \\}
+        \\fn hinted(c: bool) -> u8 { loop { if c { break 1; } break 2; } }
+        \\fn dflt(c: bool) -> i64 { let x = loop { if c { break 1; } break 2; }; x }
+        \\fn too_big() -> u8 { loop { break 300; } }
+        \\fn void_after(c: bool) { loop { if c { break 1; } break; } }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ .E0306, "300" }, .{ .E0310, "break" } });
+    for ([_][]const u8{ "scale", "widen", "first_untyped", "hinted", "dflt" }) |name| _ = try f.func(name);
+    try f.expectDump("first_untyped",
+        \\fn first_untyped(l0 c: bool, l1 n: u32) -> u32 {
+        \\  l2 x: u32
+        \\b0:
+        \\  br b1, []
+        \\b1:
+        \\  %1: bool = local l0
+        \\  %2: bool = load %1
+        \\  cond_br %2, b3, b4
+        \\b2(%7: u32):
+        \\  %11: u32 = local l2
+        \\  store %11, %7
+        \\  %13: u32 = local l2
+        \\  %14: u32 = load %13
+        \\  ret %14
+        \\b3:
+        \\  %8: u32 = int 0
+        \\  br b2, [%8]
+        \\b4:
+        \\  br b6, []
+        \\b5:
+        \\  unreachable
+        \\b6:
+        \\  %5: u32 = local l1
+        \\  %6: u32 = load %5
+        \\  br b2, [%6]
+        \\}
+        \\
+    );
+    try f.expectDump("shift",
+        \\fn shift(l0 n: u32) -> u64 {
+        \\  l1 v: u64
+        \\b0:
+        \\  %0: u32 = local l0
+        \\  %1: u32 = load %0
+        \\  %2: u32 = int 0
+        \\  %3: bool = gt %1, %2
+        \\  cond_br %3, b1, b2
+        \\b1:
+        \\  %5: u32 = local l0
+        \\  %6: u32 = load %5
+        \\  br b3, [%6]
+        \\b2:
+        \\  %9: u32 = int 1
+        \\  br b3, [%9]
+        \\b3(%7: u32):
+        \\  %11: u8 = int 2
+        \\  %12: u32 = shl %7, %11
+        \\  %13: u64 = coerce %12
+        \\  %14: u64 = local l1
+        \\  store %14, %13
+        \\  %16: u64 = local l1
+        \\  %17: u64 = load %16
+        \\  ret %17
+        \\}
+        \\
+    );
 }

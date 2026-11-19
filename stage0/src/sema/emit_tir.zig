@@ -82,11 +82,17 @@ pub const Loop = struct {
     result: TypeId = .none,
     /// The exit block's parameter: the loop's value once `result` is set.
     param: tir.Ref = .none,
+    /// Untyped `break` values that wait for `result` (§4.8): set by a typed
+    /// `break` or at the loop's end.
+    pending: std.ArrayList(PendingBreak) = .empty,
     /// Some `break` targets this loop.
     has_break: bool = false,
     /// Some `break` without a value targets this loop.
     has_void_break: bool = false,
 };
+
+/// A `break` of an untyped constant, whose block ends once its type is known.
+pub const PendingBreak = struct { block: tir.Block, value: Typed, node: Node.Index };
 
 /// A construct that has no checker yet.
 pub const Unsupported = struct {
@@ -265,7 +271,10 @@ pub const Checker = struct {
     /// `at`. `to == .none` gives an untyped constant its default type.
     pub fn coerce(c: *Checker, v: Typed, to: TypeId, at: Node.Index) Error!Typed {
         if (to == .none) return c.materialize(v, at);
-        if (v.ty == .err or to == .err) return .err;
+        if (v.ty == .err or to == .err) {
+            c.failed = true; // reported with the value or the type
+            return .err;
+        }
         switch (convert.coerce(c.types, v.ty, to, .{})) {
             .identity => return .{ .ty = to, .ref = v.ref },
             .never => return v,
@@ -874,4 +883,41 @@ test "pyro check stage: unsupported constructs make the check incomplete" {
     try testing.expectEqualStrings("`match` (T052)", f.bodies.unsupported.?.what);
     try testing.expectEqual(null, f.bodies.find(0, "a").?.func);
     _ = try f.func("b");
+}
+
+test "pyro check stage: names from modules not loaded make the check incomplete, arguments are still checked" {
+    for ([_]struct { []const u8, ?diag.DiagCode }{
+        .{ "thing(1)", null },
+        .{ "thing(true + 1)", .E0310 },
+    }) |case| {
+        var comp: Compilation = undefined;
+        try comp.init(testing.allocator, testing.io, .{ .jobs = 1, .stop_after = .check });
+        defer comp.deinit();
+        try comp.addHook(.resolve, .{ .run = names_mod.runFiles });
+        try comp.addHook(.check, .{ .run = runFiles });
+        const src = try std.mem.concat(testing.allocator, u8, &.{ "use physics.helpers.thing;\nfn main() { let x: u32 = ", case[0], "; }\n" });
+        defer testing.allocator.free(src);
+        _ = try comp.addSource("a.pr", src);
+        const res = comp.run();
+        const ds = comp.sink.finish();
+        if (case[1]) |code| {
+            try res;
+            try testing.expectEqual(1, ds.len);
+            try testing.expectEqual(code, ds[0].code.?);
+        } else {
+            try testing.expectError(error.CheckIncomplete, res);
+            try testing.expectEqual(0, ds.len);
+        }
+    }
+}
+
+test "a parameter type that failed to resolve fails the calling body too" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn g(x: Bogus) {}
+        \\fn f() { g(1); }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{.{ null, "Bogus" }});
+    try testing.expectEqual(null, f.bodies.find(0, "f").?.func);
 }

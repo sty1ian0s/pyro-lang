@@ -163,10 +163,9 @@ fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
                     else => c.unsupported(n, "types as values (T065)"),
                 };
             },
-            .unresolved => {
-                c.failed = true; // already reported, or in a module not loaded
-                return .err;
-            },
+            // Already reported (the check fails anyway), or from a module a
+            // single-file check did not load: not shown valid either way.
+            .unresolved => return c.unsupported(n, "names from modules not loaded (multi-file check)"),
             .prelude => return c.unsupported(n, "prelude functions and values (T048)"),
             .external => return c.unsupported(n, "standard library items (T163)"),
             .module => {
@@ -544,11 +543,11 @@ fn call(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     const d = c.ast.data(n).call;
     const ast = c.ast;
     if (ast.kind(d.callee) != .ident) return c.unsupported(n, "calls of this form (T047, T050)");
-    const e = c.items.names.get(c.m, d.callee) orelse return check(c, d.callee, .none);
+    const e = c.items.names.get(c.m, d.callee) orelse return failedCall(c, d);
     const ref = switch (e.res) {
         .global => |t| switch (t) {
             .item => |ref| ref,
-            .unresolved => return check(c, d.callee, .none),
+            .unresolved => return failedCall(c, d),
             else => return c.unsupported(n, "calls of this form (T047, T048)"),
         },
         .local => return c.unsupported(n, "calls through function pointers (T047)"),
@@ -583,6 +582,14 @@ fn call(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
         return .never;
     }
     return .{ .ty = sig.ret, .ref = r };
+}
+
+/// A call whose callee is unknown or unresolved: the callee reports (or
+/// records) why, and the arguments are still checked for their own errors.
+fn failedCall(c: *Checker, d: @FieldType(Ast.Data, "call")) Error!Typed {
+    _ = try check(c, d.callee, .none);
+    for (d.args) |a| _ = try check(c, a, .none);
+    return .err;
 }
 
 // ---------------------------------------------------------------------------
@@ -645,9 +652,10 @@ test "calls: direct calls emit `call`; unknown names are reported" {
         \\fn add(a: u32, b: u32) -> u32 { a + b }
         \\fn twice(x: u32) -> u32 { add(x, 1) + add(x, x) }
         \\fn oops() -> u32 { missing + 1 }
+        \\fn args() -> u32 { missing_fn(true + 1) }
     );
     defer f.deinit();
-    try f.expectDiags(&.{.{ null, "missing" }});
+    try f.expectDiags(&.{ .{ null, "missing" }, .{ null, "missing_fn" }, .{ .E0310, "+" } });
     try f.expectDump("twice",
         \\fn twice(l0 x: u32) -> u32 {
         \\b0:
