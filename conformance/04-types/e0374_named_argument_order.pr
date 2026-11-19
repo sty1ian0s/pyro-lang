@@ -1,4 +1,3 @@
-//@ expected-fail: T047
 // §7.2.4: positional arguments come first, and each parameter is given once.
 
 fn spawn_actor(position: vec2<f32>, scale: f32 = 1.0, layer: u8 = 0) {}

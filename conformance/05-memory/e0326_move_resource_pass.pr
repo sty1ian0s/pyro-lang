@@ -1,4 +1,4 @@
-//@ expected-fail: T047
+//@ expected-fail: T080
 //@ covers: E0326
 // §5.5.2: `move` on a resource parameter; a generic `move` parameter
 // instantiated with a plain type simply copies.

@@ -1,4 +1,4 @@
-//@ expected-fail: T047
+//@ expected-fail: T050
 //@ covers: E0334
 // §5.5.2, §6.3.3: `mut` at the call site; receivers and UFCS first arguments
 // need no marker.

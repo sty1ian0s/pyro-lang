@@ -1,4 +1,3 @@
-//@ expected-fail: T063
 // §5.5.2, §8.2: an argument to a `comptime` parameter must be comptime-known.
 
 fn repeat(comptime n: usize, x: u8) -> [n]u8 { [x; n] }

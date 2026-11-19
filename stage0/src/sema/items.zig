@@ -710,7 +710,7 @@ pub const Items = struct {
 
     /// The first name use in `n` that denotes a runtime value: a parameter
     /// (other than a `comptime` one), a `let` binding or `self`.
-    fn runtimeRef(it: *const Items, m: ModuleId, n: Node.Index) ?Node.Index {
+    pub fn runtimeRef(it: *const Items, m: ModuleId, n: Node.Index) ?Node.Index {
         const a = it.ast(m);
         switch (a.kind(n)) {
             .self_value => return n,

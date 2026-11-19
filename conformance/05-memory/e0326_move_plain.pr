@@ -1,4 +1,3 @@
-//@ expected-fail: T047
 // §5.5.2: `move` on a parameter of a concrete plain type is an error: plain
 // values are always copied.
 

@@ -20,6 +20,7 @@ const convert = @import("convert.zig");
 const items_mod = @import("items.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_stmt = @import("check_stmt.zig");
+const check_call = @import("check_call.zig");
 const tir = @import("../tir/tir.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
@@ -48,7 +49,7 @@ const handlers = blk: {
         .{ .prefix, prefix },
         .{ .binary, binary },
         .{ .cast, cast },
-        .{ .call, call },
+        .{ .call, check_call.call },
         .{ .block, check_stmt.block },
         .{ .@"if", check_stmt.ifExpr },
         .{ .loop, check_stmt.loopExpr },
@@ -159,7 +160,7 @@ fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
                 const item = c.items.im.graph.modules[ref.module].items[ref.item];
                 return switch (item.kind) {
                     .@"const" => constValue(c, n, try c.items.constValue(ref.module, item.node, .none)),
-                    .@"fn", .extern_fn => c.unsupported(n, "function values (T047)"),
+                    .@"fn", .extern_fn => check_call.fnValue(c, n, ref),
                     else => c.unsupported(n, "types as values (T065)"),
                 };
             },
@@ -510,7 +511,7 @@ fn supportsOrd(c: *Checker, ty: TypeId) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Casts and calls
+// Casts
 
 /// `value as T` (§4.9.2).
 fn cast(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
@@ -534,62 +535,6 @@ fn cast(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     if (kind == .identity) return .{ .ty = to, .ref = v.ref };
     // shortcut: `usize as *T` is only legal in `unsafe` code; T054 adds the context check (E1202).
     return .{ .ty = to, .ref = try c.emit(to, .{ .cast = .{ .value = v.ref } }) };
-}
-
-/// A direct call `f(args)` of a non-generic function with positional
-/// arguments for value parameters (§6.9). Method calls, named and default
-/// arguments, parameter modes and function pointers are T047's and T050's.
-fn call(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
-    const d = c.ast.data(n).call;
-    const ast = c.ast;
-    if (ast.kind(d.callee) != .ident) return c.unsupported(n, "calls of this form (T047, T050)");
-    const e = c.items.names.get(c.m, d.callee) orelse return failedCall(c, d);
-    const ref = switch (e.res) {
-        .global => |t| switch (t) {
-            .item => |ref| ref,
-            .unresolved => return failedCall(c, d),
-            else => return c.unsupported(n, "calls of this form (T047, T048)"),
-        },
-        .local => return c.unsupported(n, "calls through function pointers (T047)"),
-    };
-    const item = c.items.im.graph.modules[ref.module].items[ref.item];
-    const sig = switch ((try c.items.info(ref)).*) {
-        .@"fn" => |f| f,
-        else => return c.unsupported(n, "calls of this form (T046, T065)"),
-    };
-    if (sig.generics.len > 0) return c.unsupported(n, "generic calls (T068)");
-    if (sig.params.len != d.args.len) return c.unsupported(n, "default arguments (T047)");
-    for (sig.params, d.args) |p, a| {
-        if (p.mode != .value or ast.kind(a) == .named_arg or ast.kind(a) == .mut_arg)
-            return c.unsupported(n, "argument modes and named arguments (T047)");
-    }
-    if (sig.ret == .err) c.failed = true;
-    const args = try c.arena.alloc(tir.Ref, d.args.len);
-    var ok = true;
-    var diverges = false;
-    for (sig.params, d.args, args) |p, a, *o| {
-        const v = try checkAs(c, a, p.type);
-        ok = ok and v.ty != .err;
-        diverges = diverges or v.ty == .noreturn;
-        o.* = v.ref;
-    }
-    if (!ok) return .err;
-    if (diverges) return .never;
-    const id = try c.bodies.fnId(ref.module, item.node, item.name);
-    const r = try c.emit(sig.ret, .{ .call = .{ .callee = id, .args = args } });
-    if (sig.ret == .noreturn) {
-        _ = try c.emit(.void, .{ .@"unreachable" = .{} });
-        return .never;
-    }
-    return .{ .ty = sig.ret, .ref = r };
-}
-
-/// A call whose callee is unknown or unresolved: the callee reports (or
-/// records) why, and the arguments are still checked for their own errors.
-fn failedCall(c: *Checker, d: @FieldType(Ast.Data, "call")) Error!Typed {
-    _ = try check(c, d.callee, .none);
-    for (d.args) |a| _ = try check(c, a, .none);
-    return .err;
 }
 
 // ---------------------------------------------------------------------------

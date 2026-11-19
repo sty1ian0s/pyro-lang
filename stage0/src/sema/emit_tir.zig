@@ -508,6 +508,7 @@ fn comptimeValue(bs: *Bodies, m: ModuleId, node: Node.Index, v: items_mod.Value,
 /// Checks function `f` if it has a body. Generic bodies are checked per
 /// instantiation (T070).
 fn checkDecl(bs: *Bodies, it: *Items, m: ModuleId, f: items_mod.Fn, self_ty: TypeId, type_generics: []const TypeId) Error!void {
+    try @import("check_call.zig").checkSignature(it, m, f);
     for (f.params) |p| if (p.default) |v| comptimeValue(bs, m, p.node, v, p.type);
     const ast = it.im.graph.modules[m].ast;
     if (ast.data(f.node).fn_decl.body == null) return;
