@@ -52,12 +52,13 @@ pub fn parseExprMove(p: *Parser) Error!Node.Index {
 }
 
 /// Parses a `condition` (`if`, `while`): `expr_ns`, or `"let" pattern "="
-/// expr_ns` as a `let_cond` whose value may be a `move` (§3.8.2).
-pub fn parseCondition(p: *Parser) Error!Node.Index {
+/// expr_ns` as a `let_cond`. `move_ok` is true only for `if`: §3.8.2 allows
+/// `move` as an `if let` scrutinee but not a `while let` one (E0213).
+pub fn parseCondition(p: *Parser, move_ok: bool) Error!Node.Index {
     const kw = p.eat(.kw_let) orelse return parseExprNs(p);
     const pattern = try patterns.parsePattern(p);
     _ = try p.expect(.eq);
-    const value = try parseBp(p, 0, .{ .ns = true, .move_ok = true });
+    const value = try parseBp(p, 0, .{ .ns = true, .move_ok = move_ok });
     return p.addNode(kw, .{ .let_cond = .{ .pattern = pattern, .value = value } });
 }
 
@@ -259,7 +260,7 @@ fn parsePrimary(p: *Parser, ctx: Ctx) Error!Node.Index {
     const t = p.tok_i;
     switch (p.peek(0)) {
         .int_lit => {
-            try checkFit(p, t);
+            try checkIntFit(p, t);
             return p.addNode(p.next(), .{ .int_lit = .{} });
         },
         .float_lit => return p.addNode(p.next(), .{ .float_lit = .{} }),
@@ -454,7 +455,7 @@ fn parseLambda(p: *Parser, ctx: Ctx) Error!Node.Index {
 /// `if_expr`: `"if" condition block ( "else" ( block | if_expr ) )?`.
 fn parseIf(p: *Parser) Error!Node.Index {
     const kw = try p.expect(.kw_if);
-    const cond = try parseCondition(p);
+    const cond = try parseCondition(p, true);
     const then = try stmt.parseBlock(p);
     const else_ = if (p.eat(.kw_else) == null)
         null
@@ -536,8 +537,9 @@ fn checkShift(p: *Parser, op: TokenIndex, lhs: Node.Index, rhs: Node.Index) std.
 
 /// E0108 if integer literal `t` has a signed suffix and is the magnitude of
 /// the most negative value, which fits only under a prefix `-` (§2.6.1).
-/// Larger magnitudes are rejected by the lexer.
-fn checkFit(p: *Parser, t: TokenIndex) std.mem.Allocator.Error!void {
+/// Larger magnitudes are rejected by the lexer. Callers skip it for the
+/// operand of a `-INT_LIT` fold.
+pub fn checkIntFit(p: *Parser, t: TokenIndex) std.mem.Allocator.Error!void {
     const text = p.ast.tokenSlice(t);
     const v = literals.decodeInt(text) catch return; // reported by the lexer
     switch (v.suffix) {
@@ -546,13 +548,13 @@ fn checkFit(p: *Parser, t: TokenIndex) std.mem.Allocator.Error!void {
     }
     const suffix = text[std.mem.indexOfAny(u8, text, "ui").?..];
     var msg: [64]u8 = undefined;
-    var help: [320]u8 = undefined;
+    var help: [128]u8 = undefined;
     try report(
         p,
         .E0108,
         t,
         std.fmt.bufPrint(&msg, "integer literal does not fit `{s}`", .{suffix}) catch unreachable,
-        std.fmt.bufPrint(&help, "the largest `{s}` is {d}; only the negated literal `-{s}` fits", .{ suffix, v.value - 1, text }) catch unreachable,
+        std.fmt.bufPrint(&help, "the largest `{s}` is {d}; only the negated literal fits", .{ suffix, v.value - 1 }) catch unreachable,
     );
 }
 
@@ -725,6 +727,20 @@ test "E0108: a prefix `-` folds into the literal" {
     try expectExpr("-128i8.abs()", "(-128i8.abs()) | E0108");
     try expectExpr("-(128i8)", "(-128i8) | E0108");
     try expectExpr("-128i8 as u8", "((-128i8) as u8)");
+    // Leading zeros make the literal arbitrarily long; the help must not echo it.
+    const zeros: [400]u8 = @splat('0');
+    const long = zeros ++ "128i8";
+    try expectExpr(long, long ++ " | E0108");
+    try expectExpr("-" ++ long, "(-" ++ long ++ ")");
+}
+
+test "E0108: literal patterns and generic arguments" {
+    var buf: [128]u8 = undefined;
+    try testing.expectEqualStrings("128i8 | E0108", try parseFor(&buf, patterns.parsePattern, "128i8"));
+    try testing.expectEqualStrings("..= | E0108", try parseFor(&buf, patterns.parsePattern, "0..=128i8"));
+    try testing.expectEqualStrings("..=", try parseFor(&buf, patterns.parsePattern, "-128i8..=0"));
+    try testing.expectEqualStrings("< | E0108", try parseFor(&buf, types.parseType, "A<128i8>"));
+    try testing.expectEqualStrings("<", try parseFor(&buf, types.parseType, "A<-128i8>"));
 }
 
 test "E0213: `mut` and `move` positions" {
@@ -743,6 +759,16 @@ test "E0213: `mut` and `move` positions" {
     try testing.expectEqualStrings("(move a)", try parseFor(&buf, parseExprMove, "move a"));
     try testing.expectEqualStrings("((move a) + 1) | E0213", try parseFor(&buf, parseExprMove, "move a + 1"));
     try testing.expectEqualStrings("(-(move a)) | E0213", try parseFor(&buf, parseExprMove, "-move a"));
+    try testing.expectEqualStrings("let", try parseFor(&buf, ifCondition, "let x = move s"));
+    try testing.expectEqualStrings("let | E0213", try parseFor(&buf, whileCondition, "let x = move s"));
+}
+
+fn ifCondition(p: *Parser) Error!Node.Index {
+    return parseCondition(p, true);
+}
+
+fn whileCondition(p: *Parser) Error!Node.Index {
+    return parseCondition(p, false);
 }
 
 test "every primary form" {

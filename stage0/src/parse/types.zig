@@ -160,10 +160,14 @@ fn parseGenericArg(p: *Parser) Parser.Error!Node.Index {
 
 /// Parses `"-"? INT_LIT | CHAR_LIT | "true" | "false"` (generic arguments
 /// and `literal_pattern`); null, consuming nothing, if none starts here.
-/// `-INT_LIT` is a `prefix` `-` of an `int_lit`.
+/// `-INT_LIT` is a `prefix` `-` of an `int_lit`; a bare `INT_LIT` gets the
+/// E0108 fit check (§2.6.1).
 pub fn parseLiteral(p: *Parser) Parser.Error!?Node.Index {
     return switch (p.peek(0)) {
-        .int_lit => try p.addNode(p.next(), .{ .int_lit = .{} }),
+        .int_lit => {
+            try expr.checkIntFit(p, p.tok_i);
+            return try p.addNode(p.next(), .{ .int_lit = .{} });
+        },
         .char_lit => try p.addNode(p.next(), .{ .char_lit = .{} }),
         .kw_true, .kw_false => try p.addNode(p.next(), .{ .bool_lit = .{} }),
         .minus => {
