@@ -1,4 +1,4 @@
-//@ expected-fail: T055
+//@ expected-fail: T110
 //@ covers: E0339
 // §4.5.3, §5.5.4: the `mut` parameter mode, `-> mut Self` results and
 // `Option<mut T>` payloads.

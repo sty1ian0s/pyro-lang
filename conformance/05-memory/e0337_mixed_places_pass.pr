@@ -1,0 +1,26 @@
+//@ covers: E0337
+// §5.5.1, §5.5.3: fields and elements of mutable places, in any mix, are
+// mutable; a `mut T` local is a view that writes through.
+
+struct Particle {
+    pub mut x: f32,
+    pub mut hits: [4]u32,
+}
+
+struct World {
+    pub mut particles: [8]Particle,
+}
+
+fn bump(mut n: u32) { n += 1; }
+fn reset(mut p: Particle) { p.x = 0.0; }
+
+fn step(mut w: World, mut ps: []Particle, i: usize) -> f32 {
+    w.particles[i].x = 1.0;
+    w.particles[0].hits[i] += 1;
+    ps[i].hits[0] = 2;
+    bump(mut ps[i].hits[1]);
+    reset(mut w.particles[1]);
+    let p: mut Particle = ps[i];
+    p.x = 2.0;
+    w.particles[i].x + ps[0].x
+}

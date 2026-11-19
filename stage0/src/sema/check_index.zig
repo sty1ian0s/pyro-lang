@@ -2,10 +2,9 @@
 //! places they name and whether those may be written (§5.5.1, §6.5.4), and
 //! array-to-slice views (§4.9.1).
 //!
-//! A place keeps the binding it belongs to (its root) and whether it is
-//! mutable: an element or slice of a mutable place is mutable, of anything
-//! else read-only. Values that are not places (calls, literals) are spilled
-//! to a read-only temporary when indexed.
+//! Places are `mutability.Place`s: an element or slice of a mutable place
+//! is mutable, of anything else read-only. Values that are not places
+//! (calls, literals) are spilled to a read-only temporary when indexed.
 
 const std = @import("std");
 const Ast = @import("../ast/Ast.zig");
@@ -15,37 +14,20 @@ const check_expr = @import("check_expr.zig");
 const check_call = @import("check_call.zig");
 const unsafe = @import("unsafe.zig");
 const builtins = @import("builtins.zig");
+const mutability = @import("mutability.zig");
 const tir = @import("../tir/tir.zig");
 
 const Node = Ast.Node;
+const Place = mutability.Place;
 const TypeId = Types.TypeId;
 const Checker = emit_tir.Checker;
 const Typed = emit_tir.Typed;
 const Error = emit_tir.Error;
 
-/// The storage a place expression names.
-pub const Place = struct {
-    /// The place instruction; `.none` when `ty` is `.err` or `.noreturn`.
-    ref: tir.Ref = .none,
-    /// The type of the storage; `.err` after a diagnostic, `.noreturn` in
-    /// dead code.
-    ty: TypeId,
-    /// The binding the storage belongs to; `.none` for a temporary.
-    root: tir.Local = .none,
-    /// Whether the storage may be written (§5.5.1, §6.5.4).
-    mutable: bool = false,
-    /// An element `p[i]` of a raw pointer (§12.2).
-    through_ptr: bool = false,
-
-    fn bad(p: Place) bool {
-        return p.ty == .err or p.ty == .noreturn;
-    }
-};
-
 /// `e[i]` (§6.5.2) or `e[a..b]` (§6.5.4) as a value.
 pub fn index(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
-    if (isSlice(c.ast, n)) return (try sliceOf(c, n)).value;
-    const p = try elemPlace(c, n);
+    if (isSlice(c.ast, n)) return (try sliceOf(c, n, .read)).value;
+    const p = try elemPlace(c, n, .read);
     if (p.bad()) return .{ .ty = p.ty };
     return .{ .ty = p.ty, .ref = try c.emit(p.ty, .{ .load = .{ .place = p.ref } }) };
 }
@@ -90,93 +72,14 @@ fn rangeElem(c: *Checker, expected: TypeId, name: []const u8) TypeId {
     };
 }
 
-/// The storage expression `n` names: a binding, `self`, or an element of
-/// a place. Any other expression, and a slice, is evaluated and stored in
-/// a temporary; a slice keeps the root and mutability of what it views.
-pub fn place(c: *Checker, n: Node.Index) Error!Place {
-    switch (c.ast.kind(n)) {
-        .paren => return place(c, c.ast.data(n).paren.inner),
-        .index => if (!isSlice(c.ast, n)) return elemPlace(c, n),
-        else => if (check_call.localOf(c, n)) |l| {
-            const info = c.b.locals.get(l.int());
-            return .{
-                .ref = try c.emit(info.ty, .{ .local = .{ .local = l } }),
-                .ty = info.ty,
-                .root = l,
-                .mutable = switch (info.kind) {
-                    .let_mut, .param_mut, .temp => true,
-                    .let, .param, .param_move => false,
-                },
-            };
-        },
-    }
-    if (c.ast.kind(n) == .index) {
-        const s = try sliceOf(c, n);
-        return spill(c, s.value, n, s.base.root, s.base.mutable);
-    }
-    return spill(c, try check_expr.check(c, n, .none), n, .none, false);
-}
-
-/// Assignment target `e[i]` (§3.5): its place, or null after E0337, E0338
-/// or E0207 if it may not be written. A diverging target is returned with
-/// type `.noreturn`. A slice `e[a..b]` is a view value, not a place: E0207.
-// shortcut: a read-only slice bound to `let mut` (or a `mut` param) becomes
-// writable here, since its origin is not tracked; T081 (view origins) fixes it.
-pub fn writable(c: *Checker, n: Node.Index) Error!?Place {
-    const p = try place(c, n);
-    if (p.ty == .err) return null;
-    if (p.ty == .noreturn) return p;
-    var target = n;
-    while (c.ast.kind(target) == .paren) target = c.ast.data(target).paren.inner;
-    if (isSlice(c.ast, target)) {
-        try c.reportAt(c.ast.mainToken(target), .E0207, &.{"assign to its elements instead, e.g. `s[i] = x`"}, "cannot assign to a slice: it is a view, not a place", .{});
-        return null;
-    }
-    if (p.mutable) return p;
-    var root = n; // the diagnostic points at the indexed binding
-    while (c.ast.kind(root) == .index or c.ast.kind(root) == .paren)
-        root = if (c.ast.kind(root) == .index) c.ast.data(root).index.lhs else c.ast.data(root).paren.inner;
-    const tok = c.ast.mainToken(root);
-    if (p.through_ptr) {
-        try c.reportAt(tok, .E0337, &.{"use a `*T` pointer to write through it"}, "cannot write through a `*const {s}` pointer", .{try c.tyName(p.ty)});
-        return null;
-    }
-    if (p.root != .none) {
-        const info = c.b.locals.get(p.root.int());
-        const name = c.types.strings.get(info.name);
-        switch (info.kind) {
-            .let => {
-                try c.reportAt(tok, .E0337, &.{"declare it with `let mut` to allow writes"}, "cannot assign to an element of `{s}`: it is an immutable binding", .{name});
-                return null;
-            },
-            .param, .param_move => {
-                try c.reportAt(tok, .E0338, &.{"declare the parameter `mut` to write through it"}, "cannot assign to an element of parameter `{s}`: it is not `mut`", .{name});
-                return null;
-            },
-            .let_mut, .param_mut, .temp => {},
-        }
-    }
-    try c.reportAt(tok, .E0207, &.{"only elements of a mutable binding or `mut` parameter can be assigned; `str` bytes are read-only"}, "cannot assign to this element: it is not a mutable place", .{});
-    return null;
-}
-
 /// Array (or SoA array) place `v`, a `load`, viewed as slice type `to`
 /// (§4.9.1): a read-only view of the place it was loaded from.
 pub fn arrayToSlice(c: *Checker, v: Typed, to: TypeId) Error!Typed {
     return .{ .ty = to, .ref = try c.emit(to, .{ .view = .{ .place = c.b.data(v.ref).load.place } }) };
 }
 
-/// `v` stored in a fresh temporary.
-fn spill(c: *Checker, value: Typed, at: Node.Index, root: tir.Local, mutable: bool) Error!Place {
-    const v = try c.materialize(value, at);
-    if (v.ty == .err or v.ty == .noreturn) return .{ .ty = v.ty };
-    const l = try c.b.addLocal(.{ .ty = v.ty, .name = .none, .kind = .temp, .node = at });
-    const p = try c.emit(v.ty, .{ .local = .{ .local = l } });
-    _ = try c.emit(.void, .{ .store = .{ .place = p, .value = v.ref } });
-    return .{ .ref = p, .ty = v.ty, .root = root, .mutable = mutable };
-}
-
-fn isSlice(ast: *const Ast, n: Node.Index) bool {
+/// Whether index expression `n` is a slice `e[a..b]`.
+pub fn isSlice(ast: *const Ast, n: Node.Index) bool {
     return ast.kind(ast.data(n).index.index) == .range;
 }
 
@@ -184,28 +87,16 @@ fn isInclusive(ast: *const Ast, n: Node.Index) bool {
     return ast.tokens.items(.kind)[ast.mainToken(n)] == .dot_dot_eq;
 }
 
-/// The place of `base`, through a `mut T` view to the storage it refers to.
-fn basePlace(c: *Checker, base: Node.Index) Error!Place {
-    var p = try place(c, base);
-    if (p.bad()) return p;
-    switch (c.types.get(p.ty)) {
-        .mut_view => |v| {
-            const view = try c.emit(p.ty, .{ .load = .{ .place = p.ref } });
-            p = .{ .ref = try c.emit(v.elem, .{ .deref = .{ .ptr = view } }), .ty = v.elem, .root = p.root, .mutable = true };
-        },
-        else => {},
-    }
-    return p;
-}
-
-/// Element `e[i]` (§6.5.2): `i` is a `usize`; arrays, slices, SoA, `vec`
-/// and `str` (bytes, read-only) can be indexed.
-fn elemPlace(c: *Checker, n: Node.Index) Error!Place {
+/// Element `e[i]` (§6.5.2) of the place `e` names, used by `access`: `i`
+/// is a `usize`; arrays, slices, SoA, `vec` and `str` (bytes, read-only)
+/// can be indexed. The element keeps the root, mutability and
+/// addressability of `e`.
+pub fn elemPlace(c: *Checker, n: Node.Index, access: mutability.Access) Error!Place {
     const saved = c.b.node;
     c.b.node = n;
     defer c.b.node = saved;
     const d = c.ast.data(n).index;
-    const base = try basePlace(c, d.lhs);
+    const base = try mutability.basePlace(c, d.lhs, access);
     if (base.bad()) return base;
     const u = c.underlying(base.ty);
     const elem: TypeId = if (u == .str) .int(.unsigned, 8) else switch (c.types.get(u)) {
@@ -220,6 +111,8 @@ fn elemPlace(c: *Checker, n: Node.Index) Error!Place {
         .ty = elem,
         .root = base.root,
         .mutable = base.mutable and u != .str,
+        .through_ptr = base.through_ptr,
+        .unaddressable = base.unaddressable,
     };
 }
 
@@ -239,14 +132,20 @@ fn ptrElem(c: *Checker, n: Node.Index, base: Place, elem: TypeId, mutable: bool)
     return .{ .ref = try c.emit(elem, .{ .deref = .{ .ptr = moved } }), .ty = elem, .mutable = mutable, .through_ptr = true };
 }
 
-const Slice = struct { value: Typed, base: Place };
+/// A slice value and the place it views.
+pub const Slice = struct { value: Typed, base: Place };
 
 /// `e[a..b]` (§6.5.4): a slice of an array or slice, a SoA slice of SoA
 /// storage, or a `str` of a `str`. Missing bounds default to 0 and `len`.
-fn sliceOf(c: *Checker, n: Node.Index) Error!Slice {
+/// A bit field or `@packed` field cannot be viewed (E0308, §4.11.3).
+pub fn sliceOf(c: *Checker, n: Node.Index, access: mutability.Access) Error!Slice {
     const d = c.ast.data(n).index;
-    const base = try basePlace(c, d.lhs);
+    const base = try mutability.basePlace(c, d.lhs, access);
     if (base.bad()) return .{ .value = .{ .ty = base.ty }, .base = base };
+    if (base.unaddressable) {
+        try c.reportAt(mutability.rootToken(c.ast, d.lhs), .E0308, &.{"copy it out and slice the copy (§4.11.3)"}, "a field of a `@packed` struct has no address: it cannot be sliced", .{});
+        return .{ .value = .err, .base = .{ .ty = .err } };
+    }
     const u = c.underlying(base.ty);
     const ty: TypeId = if (u == .str) .str else switch (c.types.get(u)) {
         inline .array, .slice => |x| try c.types.intern(.{ .slice = .{ .elem = x.elem } }),
@@ -369,7 +268,7 @@ test "slices: views of arrays, slices, `str` and SoA; open bounds" {
     _ = try f.func("views");
 }
 
-test "slice of an immutable place is read-only: E0336, E0337, E0338" {
+test "slice of an immutable place is read-only: E0337, E0338" {
     var f: Fixture = undefined;
     try f.init(
         \\fn fill(mut xs: []u8) {}
@@ -392,7 +291,7 @@ test "slice of an immutable place is read-only: E0336, E0337, E0338" {
     );
     defer f.deinit();
     try f.expectDiags(&.{
-        .{ .E0336, "mut" }, .{ .E0336, "mut" }, .{ .E0338, "a" }, .{ .E0337, "b" }, .{ .E0207, "t" },
+        .{ .E0338, "mut" }, .{ .E0337, "mut" }, .{ .E0338, "a" }, .{ .E0337, "b" }, .{ .E0207, "t" },
     });
     _ = try f.func("ok");
 }

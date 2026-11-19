@@ -1,4 +1,3 @@
-//@ expected-fail: T055
 // §4.11.2, §4.11.3: bit fields and fields of `@packed` structs are not
 // addressable: they cannot be `mut` arguments or `mut` views.
 

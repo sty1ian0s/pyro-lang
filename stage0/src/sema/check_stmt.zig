@@ -17,7 +17,9 @@ const attr_table = @import("../attr_table.zig");
 const conv = @import("convert.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
-const check_member = @import("check_member.zig");
+const check_call = @import("check_call.zig");
+const check_index = @import("check_index.zig");
+const mutability = @import("mutability.zig");
 const must_use = @import("must_use.zig");
 const patterns = @import("patterns.zig");
 
@@ -26,6 +28,7 @@ const TypeId = Types.TypeId;
 const Checker = emit_tir.Checker;
 const Typed = emit_tir.Typed;
 const Error = emit_tir.Error;
+const Place = mutability.Place;
 
 /// The node whose value block `n` yields: its tail, recursively; `n` itself
 /// for any other expression. Conversion errors are reported there.
@@ -49,7 +52,9 @@ pub fn block(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
         defer c.b.node = saved;
         if (try stmt(c, s)) diverges = true;
     }
-    const v: Typed = if (d.tail) |t| try check_expr.check(c, t, expected) else .void_value;
+    // A `mut T` tail is a view of a place, as for `return` (§5.5.4).
+    const view = expected != .none and expected != .err and c.types.get(expected) == .mut_view;
+    const v: Typed = if (d.tail) |t| (if (view) try check_expr.checkAs(c, t, expected) else try check_expr.check(c, t, expected)) else .void_value;
     return if (diverges and v.ty != .err) .never else v;
 }
 
@@ -90,10 +95,6 @@ fn let(c: *Checker, s: Node.Index) Error!bool {
     const pk = c.ast.kind(d.pattern);
     if (pk != .pat_bind and pk != .pat_bind_mut and pk != .pat_wildcard) return patterns.letPattern(c, s);
     const decl: TypeId = if (d.ty) |t| try c.resolveType(t) else .none;
-    if (decl != .none and decl != .err and c.types.get(decl) == .mut_view) {
-        _ = c.unsupported(s, "`mut T` locals (T055)");
-        return false;
-    }
     const v = if (decl != .none) try check_expr.checkAs(c, d.init, decl) else try c.materialize(try check_expr.check(c, d.init, .none), d.init);
     if (pk == .pat_wildcard) return v.ty == .noreturn;
     const ty = if (decl != .none) decl else v.ty;
@@ -113,65 +114,46 @@ fn let(c: *Checker, s: Node.Index) Error!bool {
     return v.ty == .noreturn;
 }
 
-/// Whether place expression `n` has both a field (not a module member)
-/// and an element (not a slice) in its chain. `check_member.place` and
-/// `check_index.place` each handle one kind only.
-// shortcut: such places are unsupported until the two walkers compose.
-pub fn mixedPlace(c: *Checker, n: Node.Index) bool {
-    var fields = false;
-    var elems = false;
-    var v = n;
-    while (true) switch (c.ast.kind(v)) {
-        .paren => v = c.ast.data(v).paren.inner,
-        .field_access => {
-            if (c.items.names.get(c.m, v) != null) break;
-            fields = true;
-            v = c.ast.data(v).field_access.lhs;
+/// The storage assignment target `n` names (§3.5, §1.6), or null after a
+/// diagnostic: a binding, `*p`, or a field or element of a place
+/// (`mutability.operand`), which must be mutable (`mutability.require`).
+fn place(c: *Checker, n: Node.Index) Error!?Place {
+    switch (c.ast.kind(n)) {
+        .paren => return place(c, c.ast.data(n).paren.inner),
+        .ident => if (check_call.localOf(c, n) == null) return nameTarget(c, n),
+        // A module member (`geo.origin`) is a name like an `ident`.
+        .field_access => if (c.items.names.get(c.m, n) != null) return notPlace(c, n),
+        .self_value => if (c.self_local == .none) return null, // E0205 (parser)
+        .index => {},
+        .prefix => if (c.ast.tokens.items(.kind)[c.ast.mainToken(n)] != .star) return notPlace(c, n),
+        else => return notPlace(c, n),
+    }
+    const p = switch (try mutability.operand(c, n, .write)) {
+        .place => |p| p,
+        .value => |v| {
+            if (v.ty != .err) try c.reportAt(c.ast.mainToken(n), .E0207, &.{"bind the value with `let mut` first"}, "cannot assign to field `{s}` of a value that is not a place", .{c.ast.tokenSlice(c.ast.mainToken(n))});
+            c.failed = true;
+            return null;
         },
-        .index => {
-            elems = true;
-            v = c.ast.data(v).index.lhs;
-        },
-        else => break,
     };
-    return fields and elems;
+    if (p.ty == .err) return null;
+    if (p.ty == .noreturn) return p;
+    if (c.ast.kind(n) == .index and check_index.isSlice(c.ast, n)) {
+        try c.reportAt(c.ast.mainToken(n), .E0207, &.{"assign to its elements instead, e.g. `s[i] = x`"}, "cannot assign to a slice: it is a view, not a place", .{});
+        return null;
+    }
+    return if (try mutability.require(c, p, n, .assign)) p else null;
 }
 
-/// An assignment target: its place instruction and type.
-pub const Place = struct { ref: tir.Ref, ty: TypeId };
+fn notPlace(c: *Checker, n: Node.Index) Error!?Place {
+    _ = try check_expr.check(c, n, .none);
+    try c.reportAt(c.ast.mainToken(n), .E0207, &.{"assign to a binding, a field or element of one, or `*p`"}, "assignment target is not a place", .{});
+    return null;
+}
 
-/// The storage assignment target `n` names (§3.5, §1.6), or null after a
-/// diagnostic. Fields are `check_member`'s, elements `check_index`'s,
-/// dereferences `unsafe`'s.
-fn place(c: *Checker, n: Node.Index) Error!?Place {
-    if (mixedPlace(c, n)) {
-        _ = c.unsupported(n, "places mixing fields and elements (W13 follow-up)");
-        return null;
-    }
-    switch (c.ast.kind(n)) {
-        .ident => {},
-        // A module member (`geo.origin`) is a name like an `ident`.
-        .field_access => if (c.items.names.get(c.m, n) == null) return check_member.assignTarget(c, n),
-        .paren => return place(c, c.ast.data(n).paren.inner),
-        .self_value => {
-            if (c.self_local == .none) return null;
-            return try localPlace(c, n, c.self_local);
-        },
-        .index => {
-            const p = try @import("check_index.zig").writable(c, n) orelse return null;
-            return .{ .ref = p.ref, .ty = p.ty };
-        },
-        .prefix => if (c.ast.tokens.items(.kind)[c.ast.mainToken(n)] == .star) return @import("unsafe.zig").derefPlace(c, n, true),
-        else => {},
-    }
-    if (c.ast.kind(n) != .ident) {
-        _ = try check_expr.check(c, n, .none);
-        try c.reportAt(c.ast.mainToken(n), .E0207, &.{"assign to a binding, a field or element of one, or `*p`"}, "assignment target is not a place", .{});
-        return null;
-    }
-    switch (c.ast.kind(n)) {
-        else => {},
-    }
+/// Assignment target `n`, a name that is not a local: E0207 for a constant,
+/// function, type or module.
+fn nameTarget(c: *Checker, n: Node.Index) Error!?Place {
     const name = c.ast.tokenSlice(c.ast.mainToken(n));
     const e = c.items.names.get(c.m, n) orelse {
         try c.report(n, null, "cannot find `{s}` in this scope", .{name});
@@ -180,11 +162,8 @@ fn place(c: *Checker, n: Node.Index) Error!?Place {
     const what: []const u8 = switch (e.res) {
         .local => |l| switch (c.ast.kind(l)) {
             .pat_bind, .pat_bind_mut, .field_pat, .field_pat_mut, .param => {
-                const local = c.locals.get(l) orelse {
-                    _ = c.unsupported(n, "bindings of `for` loops and lambdas (T074, T076)");
-                    return null;
-                };
-                return try localPlace(c, n, local);
+                _ = c.unsupported(n, "bindings of `for` loops and lambdas (T074, T076)");
+                return null;
             },
             .const_decl => "constant",
             else => {
@@ -208,25 +187,6 @@ fn place(c: *Checker, n: Node.Index) Error!?Place {
     };
     try c.report(n, .E0207, "cannot assign to {s} `{s}`: it is not a place", .{ what, name });
     return null;
-}
-
-/// Local `l` as an assignment target at `n`: E0337 for an immutable `let`,
-/// E0338 for a parameter without `mut`, `move` ones included (§5.5.2).
-pub fn localPlace(c: *Checker, n: Node.Index, l: tir.Local) Error!?Place {
-    const info = c.b.locals.get(l.int());
-    const name = c.types.strings.get(info.name);
-    switch (info.kind) {
-        .let => {
-            try c.reportAt(c.ast.mainToken(n), .E0337, &.{"declare it with `let mut` to allow writes"}, "cannot assign to `{s}`: it is an immutable binding", .{name});
-            return null;
-        },
-        .param, .param_move => {
-            try c.reportAt(c.ast.mainToken(n), .E0338, &.{"declare the parameter `mut` to write through it"}, "cannot assign to parameter `{s}`: it is not `mut`", .{name});
-            return null;
-        },
-        .let_mut, .param_mut, .temp => {},
-    }
-    return .{ .ref = try c.emit(info.ty, .{ .local = .{ .local = l } }), .ty = info.ty };
 }
 
 /// `place op= value;` (§3.5): the place first, then the value, then the

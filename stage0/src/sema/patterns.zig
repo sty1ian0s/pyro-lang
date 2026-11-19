@@ -27,6 +27,7 @@ const convert = @import("convert.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_stmt = @import("check_stmt.zig");
+const mutability = @import("mutability.zig");
 const exhaustive = @import("exhaustive.zig");
 const tir = @import("../tir/tir.zig");
 
@@ -43,7 +44,7 @@ const Pat = exhaustive.Pat;
 /// `match e { P1 => a, P2 if g => b, ... }` (§6.6.3): the arms' common type.
 pub fn matchExpr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const d = c.ast.data(n).match;
-    var subj = try subject(c, d.subject, .none);
+    var subj = try subject(c, d.subject, .none, true);
     // shortcut: arms after a diverging subject are dead and not checked; check them when dead code gets diagnostics.
     if (subj.value.ty == .noreturn) return .never;
     // `e` is evaluated once (§6.6.3): a guard assigning to a mutable subject
@@ -115,7 +116,7 @@ pub fn matchExpr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
 /// Returns the checked value of `e`.
 pub fn letCond(c: *Checker, cond: Node.Index, then: tir.Block, otherwise: tir.Block) Error!Typed {
     const d = c.ast.data(cond).let_cond;
-    const subj = try subject(c, d.value, .none);
+    const subj = try subject(c, d.value, .none, true);
     if (subj.value.ty == .noreturn) return subj.value;
     var ok = true;
     const p = try check(c, d.pattern, subj.value.ty, &ok);
@@ -128,7 +129,7 @@ pub fn letCond(c: *Checker, cond: Node.Index, then: tir.Block, otherwise: tir.Bl
 /// bindings are in scope for the rest of the block. True if `e` diverges.
 pub fn guardLet(c: *Checker, s: Node.Index) Error!bool {
     const d = c.ast.data(s).guard_let;
-    const subj = try subject(c, d.value, .none);
+    const subj = try subject(c, d.value, .none, true);
     if (subj.value.ty == .noreturn) return true;
     var ok = true;
     const p = try check(c, d.pattern, subj.value.ty, &ok);
@@ -149,10 +150,12 @@ pub fn letPattern(c: *Checker, s: Node.Index) Error!bool {
     const d = c.ast.data(s).let;
     const decl: TypeId = if (d.ty) |t| try c.resolveType(t) else .none;
     if (decl != .none and decl != .err and c.types.get(decl) == .mut_view) {
-        _ = c.unsupported(s, "`mut T` locals (T055)");
+        // §5.5.3: a `mut T` view is bound to one local; parts of it are reached through it.
+        try c.reportAt(c.ast.mainToken(d.pattern), null, &.{"bind the view to a name, then use its fields"}, "a `mut T` view cannot be destructured", .{});
+        _ = try check_expr.check(c, d.init, .none);
         return false;
     }
-    const subj = try subject(c, d.init, decl);
+    const subj = try subject(c, d.init, decl, false);
     if (subj.value.ty == .noreturn) return true;
     var ok = true;
     const p = try check(c, d.pattern, subj.value.ty, &ok);
@@ -206,33 +209,59 @@ const Mode = enum { copy, view, move };
 const Subject = struct {
     /// The local holding it; its value or `.err`/`.noreturn` in `value`.
     root: tir.Local = .none,
+    /// The place of the subject when it is not all of `root` (a field,
+    /// element or `mut T` view target); `.none` for `root` itself.
+    base: tir.Ref = .none,
     value: Typed,
     mode: Mode = .copy,
-    /// The subject names a mutable place (`let mut`, `mut` parameter).
+    /// The subject names a mutable place (`let mut`, `mut` parameter, or a
+    /// part of one).
     mutable: bool = false,
+    /// A bit field or `@packed` field: `mut` bindings of it are E0308.
+    unaddressable: bool = false,
+    /// A copy of a mutable subject taken for a guarded `match`.
+    snapshot: bool = false,
 };
 
 /// The subject `e`: the local it names, `move x`, or a temporary holding
-/// its value (converted to `decl` unless `.none`).
-fn subject(c: *Checker, e: Node.Index, decl: TypeId) Error!Subject {
+/// its value (converted to `decl` unless `.none`). With `places` (match,
+/// `if let`, `guard let`), a field, element or `*p` subject is that place
+/// (§6.6.3); a `mut T` view local is always followed to its storage.
+fn subject(c: *Checker, e: Node.Index, decl: TypeId, places: bool) Error!Subject {
     if (decl == .none) {
         if (c.ast.kind(e) == .prefix and c.ast.tokens.items(.kind)[c.ast.mainToken(e)] == .kw_move) {
             const operand = c.ast.data(e).prefix.operand;
             const l = localOf(c, operand) orelse return .{ .value = c.unsupported(e, "`move` of fields and elements (T080)") };
             return .{ .root = l, .value = .{ .ty = c.b.locals.items(.ty)[l.int()] }, .mode = .move };
         }
-        if (localOf(c, e)) |l| {
+        const follow = if (localOf(c, e)) |l| blk: {
             const ty = c.b.locals.items(.ty)[l.int()];
             const kind = c.b.locals.items(.kind)[l.int()];
-            return .{
+            if (ty == .err or c.types.get(ty) != .mut_view) return .{
                 .root = l,
                 .value = .{ .ty = ty },
                 .mode = if (ty != .err and try check_stmt.isResource(c, ty)) .view else .copy,
                 .mutable = kind == .let_mut or kind == .param_mut,
             };
-        }
+            break :blk true;
+        } else places;
+        if (follow) switch (try mutability.operand(c, e, .read)) {
+            .place => |p| return if (p.bad()) .{ .value = .{ .ty = p.ty } } else .{
+                .root = p.root,
+                .base = p.ref,
+                .value = .{ .ty = p.ty },
+                .mode = if (try check_stmt.isResource(c, p.ty)) .view else .copy,
+                .mutable = p.mutable,
+                .unaddressable = p.unaddressable,
+            },
+            .value => |v| return temp(c, v, e),
+        };
     }
-    const v = if (decl != .none) try check_expr.checkAs(c, e, decl) else try c.materialize(try check_expr.check(c, e, .none), e);
+    return temp(c, if (decl != .none) try check_expr.checkAs(c, e, decl) else try c.materialize(try check_expr.check(c, e, .none), e), e);
+}
+
+/// Value `v` of subject `e` stored in a new `temp` local.
+fn temp(c: *Checker, v: Typed, e: Node.Index) Error!Subject {
     if (v.ty == .err or v.ty == .noreturn) return .{ .value = v };
     const l = try c.b.addLocal(.{ .ty = v.ty, .name = .none, .kind = .temp, .node = e });
     const slot = try c.emit(v.ty, .{ .local = .{ .local = l } });
@@ -247,7 +276,7 @@ fn snapshot(c: *Checker, subj: Subject, e: Node.Index) Error!Subject {
     const l = try c.b.addLocal(.{ .ty = ty, .name = .none, .kind = .temp, .node = e });
     const slot = try c.emit(ty, .{ .local = .{ .local = l } });
     _ = try c.emit(.void, .{ .store = .{ .place = slot, .value = v } });
-    return .{ .root = l, .value = subj.value };
+    return .{ .root = l, .value = subj.value, .snapshot = subj.mutable };
 }
 
 /// The TIR local expression `e` names, if it is a local binding or `self`.
@@ -594,7 +623,7 @@ fn expand(c: *Checker, p: Pat) Error![]const Pat {
 
 /// The place `path` leads to from the subject.
 fn place(c: *Checker, subj: Subject, path: []const Step) Error!tir.Ref {
-    var r = try c.emit(subj.value.ty, .{ .local = .{ .local = subj.root } });
+    var r = if (subj.base != .none) subj.base else try c.emit(subj.value.ty, .{ .local = .{ .local = subj.root } });
     for (path) |s| r = try c.emit(s.ty, switch (s.data) {
         .field => |i| .{ .field = .{ .base = r, .index = i } },
         .variant_field => |v| .{ .variant_field = .{ .base = r, .variant = v.variant, .index = v.index } },
@@ -678,26 +707,46 @@ fn bindAll(c: *Checker, subj: Subject, p: Pat, path: []const Step, named: *std.S
     }
 }
 
+/// E0308: `mut` binding `p` names a bit field or `@packed` field (§4.11.2).
+fn unaddressableBind(c: *Checker, p: Pat) Error!void {
+    try c.reportAt(c.ast.mainToken(p.bind), .E0308, &.{"bind it without `mut` and assign the field back (§4.11.2)"}, "a bit field or a field of a `@packed` struct has no address: it cannot be bound as a `mut` view", .{});
+}
+
 /// Binds `p.bind` to the part of the subject at `path` (§6.6.3).
 fn bind(c: *Checker, subj: Subject, p: Pat, path: []const Step, named: *std.StringHashMapUnmanaged(tir.Local), match_rules: bool) Error!void {
     const kind = c.ast.kind(p.bind);
     const is_mut = kind == .pat_bind_mut or kind == .field_pat_mut;
+    // `mut x` into a mutable subject place is a `mut` view of that part
+    // (§6.6.3); a `mut T` payload is bound as the view it is (§5.5.3).
+    const view = match_rules and is_mut and subj.mutable and p.ty != .err;
+    const ty = if (view) try c.types.intern(.{ .mut_view = .{ .elem = p.ty } }) else p.ty;
     const name = bindName(c, p.bind);
     const gop = try named.getOrPut(c.arena, name);
     if (!gop.found_existing) gop.value_ptr.* = try c.b.addLocal(.{
-        .ty = p.ty,
+        .ty = ty,
         .name = try c.types.strings.intern(name),
-        .kind = if (is_mut) .let_mut else .let,
+        .kind = if (is_mut and !view) .let_mut else .let,
         .node = p.bind,
     });
     const l = gop.value_ptr.*;
     try c.locals.put(c.arena, p.bind, l);
     if (p.ty == .err) return;
-    if ((match_rules and is_mut and subj.mutable) or c.types.get(p.ty) == .mut_view) {
-        _ = c.unsupported(p.bind, "`mut` views bound by patterns (T055)");
+    if (match_rules and is_mut and subj.snapshot) {
+        // The guard may change the subject after the arm's tests (§6.6.3).
+        _ = c.unsupported(p.bind, "`mut` views bound by a guarded `match` (T082)");
         return;
     }
     const at = try place(c, subj, path);
+    if (view) {
+        if (subj.unaddressable) return unaddressableBind(c, p);
+        // shortcut: enum payload fields are not checked for bit fields (§4.11.2 names struct fields), add them if the layout keeps packing them.
+        for (path, 0..) |s, i| if (s.data == .field and mutability.unaddressableField(c, if (i == 0) subj.value.ty else path[i - 1].ty, s.data.field))
+            return unaddressableBind(c, p);
+        const v = try c.emit(ty, .{ .view_mut = .{ .place = at } });
+        const slot = try c.emit(ty, .{ .local = .{ .local = l } });
+        _ = try c.emit(.void, .{ .store = .{ .place = slot, .value = v } });
+        return;
+    }
     const value = if (try check_stmt.isResource(c, p.ty)) switch (subj.mode) {
         .move => try c.emit(p.ty, .{ .move = .{ .place = at } }),
         .view, .copy => try c.emit(p.ty, .{ .view = .{ .place = at } }),
