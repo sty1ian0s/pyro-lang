@@ -101,7 +101,7 @@ pub const PendingBreak = struct { block: tir.Block, value: Typed, node: Node.Ind
 pub const Unsupported = struct {
     module: ModuleId,
     node: Node.Index,
-    /// What it is and the task that adds it: "`match` (T052)".
+    /// What it is and the task that adds it: "`for` loops (T076)".
     what: []const u8,
 };
 
@@ -183,8 +183,9 @@ pub const Checker = struct {
     }
 
     /// Reports at token `t`. `code` is null only for rules without an A.3 code.
+    /// A warning does not fail the body.
     pub fn reportAt(c: *Checker, t: Ast.TokenIndex, code: ?diag.DiagCode, help: []const []const u8, comptime fmt: []const u8, args: anytype) Error!void {
-        c.failed = true;
+        if (code == null or !code.?.isWarning()) c.failed = true;
         try c.sink.emit(.{
             .code = code,
             .severity = if (code) |k| .of(k) else .@"error",
@@ -906,12 +907,12 @@ test "E0371: missing return value" {
 test "pyro check stage: unsupported constructs make the check incomplete" {
     var f: Fixture = undefined;
     try f.init(
-        \\fn a(x: u32) -> u32 { match x { _ => 1 } }
+        \\fn a(x: u32) -> u32 { for i in x { } 1 }
         \\fn b() -> u32 { 2 }
     );
     defer f.deinit();
     try f.expectDiags(&.{});
-    try testing.expectEqualStrings("`match` (T052)", f.bodies.unsupported.?.what);
+    try testing.expectEqualStrings("`for` loops (T076)", f.bodies.unsupported.?.what);
     try testing.expectEqual(null, f.bodies.find(0, "a").?.func);
     _ = try f.func("b");
 }

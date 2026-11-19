@@ -1,4 +1,3 @@
-//@ expected-fail: T052
 //@ covers: E0357
 // §6.6.3: every variant, `_`, a binding arm, all four values of `u2`, and both
 // `bool` values.

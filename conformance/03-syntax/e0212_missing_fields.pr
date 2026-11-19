@@ -1,5 +1,4 @@
 //@ stop-after: check
-//@ expected-fail: T052
 // §3.7: a struct pattern without `..` names every field.
 struct Point { x: i32, y: i32 }
 

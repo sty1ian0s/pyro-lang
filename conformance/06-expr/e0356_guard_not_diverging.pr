@@ -1,4 +1,3 @@
-//@ expected-fail: T052
 // §6.6.2: the `else` block of `guard let` must have type `noreturn`.
 
 fn find(xs: []u32, v: u32) -> Option<usize> {

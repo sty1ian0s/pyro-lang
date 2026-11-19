@@ -1,4 +1,3 @@
-//@ expected-fail: T052
 // §6.6.3: arms must cover every value; guards count as possibly failing, and
 // integer types need `_` unless every value is listed.
 

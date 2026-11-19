@@ -1,6 +1,5 @@
 //@ stop-after: check
 //@ covers: E0212
-//@ expected-fail: T052
 // §3.7: struct patterns naming every field, or ending in `..`.
 struct Point { x: i32, y: i32 }
 
