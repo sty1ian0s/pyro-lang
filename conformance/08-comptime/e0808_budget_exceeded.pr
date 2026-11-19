@@ -1,4 +1,4 @@
-//@ expected-fail: T059
+//@ expected-fail: T060
 // §8.6: each top-level comptime evaluation may execute 10 000 000 backward
 // branches and calls; exceeding it is reported at the evaluation, with the
 // comptime trace.

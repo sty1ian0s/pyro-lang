@@ -39,6 +39,8 @@ const tir = @import("../tir/tir.zig");
 const emit_tir = @import("../sema/emit_tir.zig");
 const interp_expr = @import("interp_expr.zig");
 const Value = @import("value.zig").Value;
+const builtins = @import("../sema/builtins.zig");
+const limits = @import("limits.zig");
 
 const Interp = interp_expr.Interp;
 const TypeId = Types.TypeId;
@@ -158,6 +160,9 @@ pub const Machine = struct {
     /// Remaining steps: one per call and per backward branch (§8.6).
     /// Null is unbounded.
     budget: ?*u64 = null,
+    /// The limits `budget` points into, raised by `@set_eval_quota`
+    /// (`limits.Eval.attach`).
+    eval: ?*limits.Eval = null,
     hooks: ?Hooks = null,
     frames: std.ArrayList(*Frame) = .empty,
     scratch: std.ArrayList(Reg) = .empty,
@@ -230,6 +235,12 @@ pub const Machine = struct {
         b.* -= 1;
     }
 
+    /// Whether instruction `r` of `f` opens an `unsafe` block.
+    fn isUnsafe(m: *const Machine, f: *const Frame, r: Ref) bool {
+        const n = f.func.nodeOf(r).unwrap() orelse return false;
+        return m.in.items.im.graph.modules[m.bodies.fns.items[f.id.int()].module].ast.kind(n) == .unsafe_block;
+    }
+
     fn types(m: *const Machine) *Types {
         return m.in.items.types;
     }
@@ -244,6 +255,7 @@ pub const Machine = struct {
         const regs = try m.gpa.alloc(Reg, func.insts.len);
         errdefer m.gpa.free(regs);
         const locals = try m.gpa.alloc(Reg, func.locals.len);
+        errdefer m.gpa.free(locals);
         @memset(regs, .none);
         @memset(locals, .none);
         @memcpy(locals[0..args.len], args);
@@ -400,7 +412,9 @@ pub const Machine = struct {
                 const b = m.bodies.fns.items[x.func.int()];
                 break :blk .{ .ty = ty, .data = .{ .fn_ref = .{ .module = b.module, .node = b.node } } };
             },
-            .block_param, .scope_begin => return .next,
+            .block_param => return .next,
+            // `unsafe.block` marks each `unsafe` block's entry with a scope.
+            .scope_begin => return if (m.isUnsafe(f, r)) m.forbid("`unsafe` blocks") else .next,
 
             .local => |x| {
                 const slot = &f.locals[x.local.int()];
@@ -412,7 +426,7 @@ pub const Machine = struct {
                     out.* = f.regs[x.ptr.int()];
                     return .next;
                 },
-                else => return m.forbid("raw pointers at comptime (E0805, T059)"),
+                else => return m.forbid("raw-pointer operations"),
             },
             .field => |x| {
                 out.* = .{ .place = try m.sub(placeOf(f, x.base), .{ .member = x.index }) };
@@ -517,9 +531,13 @@ pub const Machine = struct {
                 out.* = .{ .place = .{ .root = root } };
                 return .next;
             },
-            .addr_of => return m.forbid("raw pointers at comptime (E0805, T059)"),
-            .builtin => return m.fail("builtin calls at comptime (T059)"),
-            .nursery_begin, .spawn, .spawn_indirect, .nursery_end, .pfor_begin, .pfor_end, .launch => return m.forbid("concurrency at comptime (E0805, T059)"),
+            .addr_of => return m.forbid("raw-pointer operations"),
+            .builtin => |x| blk: {
+                if (x.builtin != builtins.Builtin.set_eval_quota.id()) return m.fail("builtin calls at comptime (T060)");
+                if (m.eval) |e| e.raise(val(f, x.args[0]).data.scalar);
+                break :blk .{ .ty = .void, .data = .void };
+            },
+            .nursery_begin, .spawn, .spawn_indirect, .nursery_end, .pfor_begin, .pfor_end, .launch => return m.forbid("concurrency"),
             .@"unreachable" => return m.fail("`unreachable` reached at comptime"),
         };
         out.* = .{ .value = v };

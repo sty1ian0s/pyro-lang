@@ -189,7 +189,7 @@ pub const Rule = enum {
     checked,
     /// `@compile_error` and `@compile_log` (T061).
     compile_diag,
-    /// `(u32) -> void` (T059).
+    /// `(u32) -> void`; evaluated by `comptime/limits.zig`.
     eval_quota,
     /// `@embed_file`, `@env`, `@env_or`, `@target` (T073).
     comptime_input,
@@ -548,7 +548,10 @@ fn typeCall(a: *Args, rule: Rule, expected: TypeId) Error!Typed {
         .enum_from_int => return builtins_expr.enumFromInt(a),
         .checked => return builtins_expr.checked(a, expected),
         .compile_diag => return c.unsupported(a.at, "`@compile_error` and `@compile_log` (T061)"),
-        .eval_quota => return c.unsupported(a.at, "`@set_eval_quota` (T059)"),
+        .eval_quota => {
+            _ = try a.as(0, .int(.unsigned, 32));
+            return a.finish(.void);
+        },
         .comptime_input => return c.unsupported(a.at, "comptime inputs (T073)"),
         .hash => return c.unsupported(a.at, "`@hash` (T066)"),
         .shuffle => return c.unsupported(a.at, "`@shuffle` (T126)"),
