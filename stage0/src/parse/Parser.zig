@@ -87,7 +87,7 @@ pub fn parse(
     std.debug.assert(root.int() == 0);
     // MODULE_DOC* (§3.2): the root's docs are these leading tokens.
     while (p.peek(0) == .doc_comment and std.mem.startsWith(u8, p.ast.tokenSlice(p.tok_i), "//!")) _ = p.next();
-    while (p.peek(0) != .eof) {
+    while (!try items.docsThenEnd(&p, .eof)) { // W0101 for trailing docs
         const start = p.tok_i;
         const item = items.parseItem(&p) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -655,8 +655,17 @@ test "stubbed parse yields item skeletons" {
         \\    (attribute @inline
         \\      args=_)]
         \\  inner=(fn_decl pub fn add
-        \\    generics=_
-        \\    params=[]
+        \\    generics=[
+        \\      (generic_param T
+        \\        bounds=[
+        \\          (invalid Num)])]
+        \\    params=[
+        \\      (param a
+        \\        ty=(invalid T)
+        \\        default=_)
+        \\      (param b
+        \\        ty=(invalid T)
+        \\        default=(invalid 0))]
         \\    ret=(invalid T)
         \\    body=(block {
         \\      stmts=[]

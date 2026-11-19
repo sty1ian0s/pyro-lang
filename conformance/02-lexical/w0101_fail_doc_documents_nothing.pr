@@ -6,5 +6,9 @@ struct Point {
 //~^ W0101
 }
 
+//! Module docs belong only at the start of the file.
+//~^ W0101
+fn f() {}
+
 /// Nothing follows this doc comment at the end of the file.
 //~^ W0101
