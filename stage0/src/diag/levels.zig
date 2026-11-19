@@ -12,6 +12,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Ast = @import("../ast/Ast.zig");
+const attr_table = @import("../attr_table.zig");
 const diag = @import("diag.zig");
 const Sink = diag.Sink;
 const DiagCode = diag.DiagCode;
@@ -68,6 +69,9 @@ pub fn addFile(l: *Levels, gpa: Allocator, ast: *const Ast, file: diag.FileId) A
 
 fn addItem(l: *Levels, gpa: Allocator, ast: *const Ast, file: diag.FileId, n: Node.Index) Allocator.Error!void {
     const d = ast.data(n).attributed;
+    // §8.8: levels apply to items only; a misplaced attribute is E0203 (check.zig).
+    const pos = attr_table.Position.of(ast.kind(d.inner)) orelse return;
+    if (!attr_table.info(.allow).positions.contains(pos)) return;
     var end: ?u32 = null;
     for (d.attrs) |a| {
         const level: WarningLevel = if (std.mem.eql(u8, ast.tokenSlice(ast.mainToken(a)), "@allow"))
@@ -115,7 +119,8 @@ fn lastToken(ast: *const Ast, item: Node.Index) TokenIndex {
     while (true) : (t += 1) switch (kinds[t]) {
         .l_brace, .dot_l_brace, .l_paren, .l_bracket => depth += 1,
         .r_brace, .r_paren, .r_bracket => {
-            depth -|= 1;
+            if (depth == 0) return t - 1; // closer of the enclosing construct
+            depth -= 1;
             if (depth == 0 and open != null) return t;
         },
         .semicolon => if (depth == 0 and open == null) return t,
@@ -217,6 +222,14 @@ test "item extents: `;`-terminated items and nested braces" {
         \\@deny(W0201) fn f() { if true { g(.{ 1 }); } }
         \\fn h(a: u32) -> u32 { a << 1 + a }
     , "W0201:warning W0201:warning", false); // `Y` and `h`
+}
+
+test "@allow/@deny off an item is ignored" {
+    try expectRun(
+        \\struct S { @allow(W0201) x: u32 = 1, y: u32 = 1 << 2 + 3, }
+        \\fn g(@deny(W0201) a: u32) -> u32 { a << 1 + a }
+        \\fn h(a: u32) -> u32 { a << 1 + a }
+    , "W0201:warning W0201:warning W0201:warning", false); // E0203 is check.zig's, not run here
 }
 
 test "the last of an item's attributes for a code wins" {
