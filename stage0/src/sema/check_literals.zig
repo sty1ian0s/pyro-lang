@@ -219,7 +219,7 @@ pub fn anonLit(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     if (!named) return positional(c, n, elems, expected, true);
     if (expected == .err) return checkAlone(c, elems);
     if (expected == .none) {
-        try c.reportAt(c.ast.mainToken(n), .E0350, &.{"name the type: `Point { x: 1, y: 2 }`"}, "anonymous struct literal without an expected type", .{});
+        try c.reportAt(c.ast.mainToken(n), .E0350, &.{"write the type before the braces, as in `Point { x: 1, y: 2 }`, or give the binding a type"}, "anonymous struct literal without an expected type", .{});
         return checkAlone(c, elems);
     }
     const v = try construct(c, n, target, elems);
