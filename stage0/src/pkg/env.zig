@@ -239,7 +239,14 @@ pub fn resolve(
             continue;
         }
         const key = arg[0..eq];
-        r.put(key, try parseSetValue(arena, arg[eq + 1 ..])) catch |err| switch (err) {
+        const v = parseSetValue(arena, arg[eq + 1 ..]) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.IntegerOutOfRange => {
+                try r.fail(null, null, "`--set {s}`: integer out of range", .{arg});
+                continue;
+            },
+        };
+        r.put(key, v) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.WrongType => try r.fail(null, null, "`--set {s}`: `{s}` must be {s}", .{ arg, key, Reserved.expected(key) }),
         };
@@ -290,18 +297,26 @@ fn scalar(v: *const toml.Value) ?Value {
     };
 }
 
-/// Types a `--set` value: a single TOML scalar literal keeps its type; any other text
-/// is the string itself.
-fn parseSetValue(arena: std.mem.Allocator, text: []const u8) error{OutOfMemory}!Value {
+/// Types a `--set` value: text that is exactly one TOML string, boolean, integer or
+/// float literal (surrounding spaces aside) has that type; any other text, including a
+/// literal followed by a `#` comment, is the string itself. Integer-looking text outside
+/// the `i64` range is `error.IntegerOutOfRange`, as it is in a manifest.
+fn parseSetValue(arena: std.mem.Allocator, text: []const u8) error{ OutOfMemory, IntegerOutOfRange }!Value {
     const src = try std.fmt.allocPrint(arena, "v = {s}\n", .{text});
     var tdiag: toml.Diagnostic = undefined;
     var doc = toml.parse(arena, src, &tdiag) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return .{ .string = text },
+        else => {
+            // shortcut: Zig's base-0 integer syntax is a little looser than TOML's (`0X`, `1__0`), so such text overflowing i64 also errors.
+            if (std.fmt.parseInt(i64, std.mem.trim(u8, text, " \t"), 0)) |_| {} else |e| if (e == error.Overflow) return error.IntegerOutOfRange;
+            return .{ .string = text };
+        },
     };
     defer doc.deinit();
-    if (doc.root.entries.count() != 1) return .{ .string = text }; // e.g. "1\nw = 2"
-    const v = scalar(doc.root.get("v") orelse return .{ .string = text }) orelse return .{ .string = text };
+    const node = doc.root.get("v") orelse return .{ .string = text };
+    // The literal must be all of `text`: not `1 # note`, nor `1\nw = 2`.
+    if (node.span.slice(src).len != std.mem.trim(u8, text, " \t").len) return .{ .string = text };
+    const v = scalar(node) orelse return .{ .string = text };
     return switch (v) {
         .string => |s| .{ .string = try arena.dupe(u8, s) },
         else => v,
@@ -386,8 +401,9 @@ test "--set overrides [env.prod]" {
     defer arena.deinit();
     const src = pkg_head ++ "[env.prod]\nopt_level = \"O2\"\nlog_level = \"error\"\nlto = false\nn = 1\n";
     const e = try resolveOk(arena.allocator(), src, "prod", &.{
-        "opt_level=Oz",   "log_level=warn",  "lto=true",   "n=3",    "ratio=1.5",
-        "quoted=\"a b\"", "date=2024-01-01", "list=[1,2]", "empty=", "n=4",
+        "opt_level=Oz",   "log_level=warn",  "lto=true",    "n=3",          "ratio=1.5",
+        "quoted=\"a b\"", "date=2024-01-01", "list=[1,2]",  "empty=",       "n=4",
+        "c=1 # note",     "sp= 2 ",          "q=\"a\" # x", "two=1\nw = 2",
     });
     try testing.expectEqual(.Oz, e.reserved.opt_level);
     try testing.expect(e.reserved.lto);
@@ -399,6 +415,10 @@ test "--set overrides [env.prod]" {
     try testing.expectEqualStrings("2024-01-01", e.get("date").?.string);
     try testing.expectEqualStrings("[1,2]", e.get("list").?.string);
     try testing.expectEqualStrings("", e.get("empty").?.string);
+    try testing.expectEqualStrings("1 # note", e.get("c").?.string); // a comment is not dropped
+    try testing.expectEqual(2, e.get("sp").?.integer);
+    try testing.expectEqualStrings("\"a\" # x", e.get("q").?.string);
+    try testing.expectEqualStrings("1\nw = 2", e.get("two").?.string);
 }
 
 test "wrong reserved type in [env.*] is E0909 at the value" {
@@ -427,11 +447,13 @@ test "wrong reserved type, bad --set and unknown env are rejected" {
     defer arena.deinit();
     var sink: diag.Sink = .init(testing.allocator, testing.io);
     defer sink.deinit();
-    try testing.expectError(error.InvalidEnv, resolve(arena.allocator(), null, test_file, "dev", &.{ "contracts=maybe", "opt_level=3", "noequals", "=1" }, &sink));
+    try testing.expectError(error.InvalidEnv, resolve(arena.allocator(), null, test_file, "dev", &.{ "contracts=maybe", "opt_level=3", "noequals", "=1", "big=99999999999999999999", "neg=-9223372036854775809" }, &sink));
     try testing.expectError(error.InvalidEnv, resolve(arena.allocator(), null, test_file, "staging", &.{}, &sink));
     const ds = sink.finish(); // sorted by message: none has a location
     const want = [_][]const u8{
+        "`--set big=99999999999999999999`: integer out of range",
         "`--set contracts=maybe`: `contracts` must be `true` or `false`",
+        "`--set neg=-9223372036854775809`: integer out of range",
         "`--set opt_level=3`: `opt_level` must be one of \"O0\", \"O1\", \"O2\", \"O3\", \"Oz\"",
         "`--set` expects `key=value`, got `=1`",
         "`--set` expects `key=value`, got `noequals`",
