@@ -1,4 +1,4 @@
-//@ expected-fail: T159
+//@ expected-fail: T163
 // pyro.lock records a hash that does not match the source of `util` (§13.4).
 use util;
 

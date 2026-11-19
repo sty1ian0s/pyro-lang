@@ -57,6 +57,20 @@ pub const Lock = struct {
         l.* = undefined;
     }
 
+    /// Whether every package of `res` that has a lock entry under its name
+    /// resolved to one of its locked versions.
+    fn keptAll(l: *const Lock, res: resolve.Resolution) bool {
+        for (res.packages) |p| {
+            var named = false;
+            for (l.packages) |q| {
+                if (!std.mem.eql(u8, q.name, p.name)) continue;
+                if (q.version.order(p.version) == .eq) break;
+                named = true;
+            } else if (named) return false;
+        }
+        return true;
+    }
+
     /// The entry for `name` at `version`, if locked.
     pub fn find(l: *const Lock, name: []const u8, version: semver.Version) ?*const Package {
         for (l.packages) |*p| {
@@ -285,39 +299,45 @@ pub fn verify(pkg: *const Package, actual: Hash, sink: *diag.Sink) error{OutOfMe
     return false;
 }
 
-/// SHA-256 of the regular files under `dir` (opened with `.iterate = true`):
-/// for each file in byte order of its `/`-separated relative path, the path,
-/// a NUL byte, the content length as u64 little-endian, and the content.
-/// The hash depends only on paths and contents, not on directory order or
-/// timestamps.
-/// shortcut: symlinks, empty directories and permission bits are not hashed;
-/// include them if sources may carry them meaningfully.
+/// SHA-256 of the regular files and symlinks under `dir` (opened with
+/// `.iterate = true`): for each entry in byte order of its `/`-separated
+/// relative path, a kind byte (`f` file, `l` symlink), the path, a NUL byte,
+/// the payload length as u64 little-endian, and the payload (a file's content,
+/// a symlink's target; links are not followed). The hash depends only on
+/// paths, kinds and payloads, not on directory order or timestamps.
+/// shortcut: empty directories and permission bits are not hashed; include
+/// them if sources may carry them meaningfully.
 pub fn hashTree(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !Hash {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     defer arena.deinit();
     const a = arena.allocator();
-    var paths: std.ArrayList([]u8) = .empty;
+    const Entry = struct { path: []u8, link: bool };
+    var entries: std.ArrayList(Entry) = .empty;
     var walker = try dir.walk(gpa);
     defer walker.deinit();
     while (try walker.next(io)) |e| {
-        if (e.kind != .file) continue;
+        if (e.kind != .file and e.kind != .sym_link) continue;
         const p = try a.dupe(u8, e.path);
         std.mem.replaceScalar(u8, p, std.fs.path.sep, '/');
-        try paths.append(a, p);
+        try entries.append(a, .{ .path = p, .link = e.kind == .sym_link });
     }
-    std.mem.sort([]u8, paths.items, {}, struct {
-        fn lt(_: void, x: []u8, y: []u8) bool {
-            return std.mem.order(u8, x, y) == .lt;
+    std.mem.sort(Entry, entries.items, {}, struct {
+        fn lt(_: void, x: Entry, y: Entry) bool {
+            return std.mem.order(u8, x.path, y.path) == .lt;
         }
     }.lt);
     var h: std.crypto.hash.sha2.Sha256 = .init(.{});
-    for (paths.items) |p| {
-        const content = try dir.readFileAlloc(io, p, gpa, .unlimited);
-        defer gpa.free(content);
-        h.update(p);
+    var target: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    for (entries.items) |e| {
+        const payload = if (e.link)
+            target[0..try dir.readLink(io, e.path, &target)]
+        else
+            try dir.readFileAlloc(io, e.path, a, .unlimited);
+        h.update(if (e.link) "l" else "f");
+        h.update(e.path);
         h.update(&.{0});
-        h.update(std.mem.asBytes(&std.mem.nativeToLittle(u64, content.len)));
-        h.update(content);
+        h.update(std.mem.asBytes(&std.mem.nativeToLittle(u64, payload.len)));
+        h.update(payload);
     }
     return h.finalResult();
 }
@@ -337,7 +357,14 @@ pub fn resolveLocked(gpa: std.mem.Allocator, index: resolve.Index, lock: ?*const
         defer scratch.deinit();
         // The resolution copies names and versions out of the index's
         // releases, so it outlives `pref`'s filtered release arrays.
-        if (resolve.resolve(gpa, pref.index(), root_name, root, &scratch)) |res| return res else |err| switch (err) {
+        if (resolve.resolve(gpa, pref.index(), root_name, root, &scratch)) |res| {
+            var r = res;
+            // Hiding a locked line's other releases can push a requirement that
+            // rejects the locked version onto an older line; only accept
+            // results that are all locked or on unlocked packages.
+            if (l.keptAll(r)) return r;
+            r.deinit();
+        } else |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Unresolvable => {},
         }
@@ -628,4 +655,38 @@ test "--locked passes for an unchanged manifest and fails when it changed" {
     try testing.expectError(error.LockOutdated, checkLocked(testing.allocator, null, lockOf(grown, &buf), &sink));
     try testing.expect(sink.hasErrors());
     try expectMessages(&sink, null, &.{ "needs to be updated", "is missing" });
+}
+
+test "a requirement rejecting the locked version re-resolves on the same line" {
+    const ix: TestIndex = .{ .entries = &.{
+        .{ "base", &.{ .{ .version = ver("0.9.0") }, .{ .version = ver("1.1.0") }, .{ .version = ver("1.2.0") } } },
+    } };
+    const locked = [_]Package{.{ .name = "base", .version = ver("1.2.0"), .source = .{ .registry = null }, .sha256 = hashOf(4) }};
+    var sink: diag.Sink = .init(testing.allocator, testing.io);
+    defer sink.deinit();
+    const text = try render(testing.allocator, &locked);
+    defer testing.allocator.free(text);
+    var lock = try parse(testing.allocator, text, test_file, &sink);
+    defer lock.deinit();
+
+    // Fresh resolution picks 1.1.0; hiding 1.1.0 behind the locked 1.2.0 must not yield 0.9.0.
+    const root: resolve.Release = .{ .version = ver("0.1.0"), .deps = &.{dependsOn("base", ">=0.9, <1.2")} };
+    var res = try resolveLocked(testing.allocator, ix.index(), &lock, "app", &root, &sink);
+    defer res.deinit();
+    try testing.expectEqual(ver("1.1.0"), res.packages[1].version);
+    try testing.expect(!sink.hasErrors());
+}
+
+test "an added symlink changes the tree hash" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a.pr", .data = "pub fn f() {}\n" });
+    const before = try hashTree(testing.allocator, testing.io, tmp.dir);
+    try tmp.dir.symLink(testing.io, "../evil.pr", "b.pr", .{});
+    const linked = try hashTree(testing.allocator, testing.io, tmp.dir);
+    try testing.expect(!std.mem.eql(u8, &before, &linked));
+    // A file whose content equals a link's target does not collide with the link.
+    try tmp.dir.deleteFile(testing.io, "b.pr");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "b.pr", .data = "../evil.pr" });
+    try testing.expect(!std.mem.eql(u8, &linked, &try hashTree(testing.allocator, testing.io, tmp.dir)));
 }
