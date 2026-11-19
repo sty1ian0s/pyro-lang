@@ -20,6 +20,7 @@ const convert = @import("convert.zig");
 const items_mod = @import("items.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_stmt = @import("check_stmt.zig");
+const builtins = @import("builtins.zig");
 const tir = @import("../tir/tir.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
@@ -49,6 +50,7 @@ const handlers = blk: {
         .{ .binary, binary },
         .{ .cast, cast },
         .{ .call, call },
+        .{ .builtin_call, builtins.check },
         .{ .block, check_stmt.block },
         .{ .@"if", check_stmt.ifExpr },
         .{ .loop, check_stmt.loopExpr },
@@ -62,7 +64,6 @@ const handlers = blk: {
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
         .struct_lit, .anon_lit, .inferred_member, .array_lit, .array_repeat, .tuple => "literals (T046)",
-        .builtin_call => "builtin calls (T048)",
         .field_access => "field access and methods (T050)",
         .index, .range => "indexing and ranges (T051)",
         .match, .let_cond => "`match` (T052)",
@@ -166,7 +167,7 @@ fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
             // Already reported (the check fails anyway), or from a module a
             // single-file check did not load: not shown valid either way.
             .unresolved => return c.unsupported(n, "names from modules not loaded (multi-file check)"),
-            .prelude => return c.unsupported(n, "prelude functions and values (T048)"),
+            .prelude => return c.unsupported(n, "prelude functions and values (T105)"),
             .external => return c.unsupported(n, "standard library items (T163)"),
             .module => {
                 try c.report(n, .E0310, "module `{s}` is not a value", .{c.ast.tokenSlice(c.ast.mainToken(n))});
@@ -548,7 +549,8 @@ fn call(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
         .global => |t| switch (t) {
             .item => |ref| ref,
             .unresolved => return failedCall(c, d),
-            else => return c.unsupported(n, "calls of this form (T047, T048)"),
+            .prelude => |p| return (try builtins.callIntrinsic(c, n, p)) orelse c.unsupported(n, "prelude functions (T105)"),
+            else => return c.unsupported(n, "calls of this form (T047, T163)"),
         },
         .local => return c.unsupported(n, "calls through function pointers (T047)"),
     };

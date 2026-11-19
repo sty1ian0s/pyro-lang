@@ -1,0 +1,16 @@
+// §11.1.7, §8.7: stage builtins used in a stage that does not list them, or outside
+// any stage.
+
+@gpu_kernel(workgroup: 64)
+fn kernel_reads_vertex_index() {
+    let i: u32 = @vertex_index; //~ E1005
+}
+
+@gpu_vertex
+fn vs_discards() -> u32 {
+    @discard(); //~ E1005
+}
+
+fn cpu_side() -> bool {
+    @front_facing //~ E1005
+}

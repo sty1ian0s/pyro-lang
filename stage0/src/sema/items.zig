@@ -501,7 +501,8 @@ pub const Items = struct {
     pub fn resolveType(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId) Error!TypeId {
         const a = it.ast(m);
         return switch (a.data(n)) {
-            .path => it.pathType(m, n, null, self_ty),
+            // A bare name in a builtin argument (`@zero(T)`) is an `ident`.
+            .path, .ident => it.pathType(m, n, null, self_ty),
             .generic_inst => |g| it.pathType(m, g.base, g.args, self_ty),
             .paren => |p| it.resolveType(m, p.inner, self_ty),
             .self_type => if (self_ty == .none) .err else self_ty,
@@ -1488,6 +1489,7 @@ fn identText(a: *const Ast, t: Ast.TokenIndex) []const u8 {
 
 /// The source text of `path` node `n` (`a.b.C`).
 fn pathText(a: *const Ast, n: Node.Index) []const u8 {
+    if (a.kind(n) == .ident) return a.tokenSlice(a.mainToken(n));
     const starts = a.tokens.items(.start);
     const last = a.data(n).path.last;
     return a.source[starts[a.mainToken(n)] .. starts[last] + a.tokens.items(.len)[last]];
