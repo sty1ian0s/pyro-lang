@@ -178,10 +178,15 @@ fn field(c: *Checker, n: Node.Index, ty: TypeId, access: Access) Error!?Field {
         try c.reportAt(c.ast.mainToken(n), null, &.{}, "no field `{s}` on type `{s}`", .{ name, try c.tyName(ty) });
         return null;
     };
-    if (c.types.get(ty) != .nominal) return f;
-    const ref = c.items.declRef(ty).?;
+    // A SoA column is as visible as the element's field.
+    const owner = switch (c.types.get(ty)) {
+        inline .soa_array, .soa_slice => |x| x.elem,
+        else => ty,
+    };
+    if (c.types.get(owner) != .nominal) return f;
+    const ref = c.items.declRef(owner).?;
     if (ref.module == c.m) return f;
-    const vis = c.items.structOf(ty).?.fields[f.index].vis;
+    const vis = c.items.structOf(owner).?.fields[f.index].vis;
     if (vis == .private or (access == .write and vis != .pub_mut)) {
         const help: []const []const u8 = if (vis == .private) &.{"private fields are visible only inside the declaring module (§7.3.3)"} else &.{"only `pub mut` fields can be written outside the declaring module (§7.3.3)"};
         try c.reportAt(c.ast.mainToken(n), null, help, "field `{s}` of `{s}` is {s} outside its module", .{ name, try c.tyName(ty), if (vis == .private) "private" else "read-only" });
@@ -277,6 +282,19 @@ fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]
         const a = args orelse return check_call.fnOf(c, fa, ref.module, f);
         return check_call.callFn(c, at, ref.module, f, null, a);
     };
+    // A member of a visible `impl P for T` (§6.3.3 step 1).
+    if (c.bodies.protos) |protos| {
+        const found = try protos.findMethods(c.m, ty, name);
+        if (found.len > 1) {
+            try ambiguous(c, fa, ty, found);
+            return failed(c, args);
+        }
+        if (found.len == 1) {
+            const callee = try fromImpl(c, fa, found[0]) orelse return failed(c, args);
+            const a = args orelse return check_call.fnOf(c, fa, callee.m, callee.f);
+            return check_call.callFn(c, at, callee.m, callee.f, null, a);
+        }
+    }
     try c.reportAt(c.ast.mainToken(fa), null, &.{}, "no member `{s}` in `{s}`", .{ name, try c.tyName(ty) });
     return failed(c, args);
 }
@@ -302,7 +320,8 @@ fn protocolCall(c: *Checker, fa: Node.Index, at: Node.Index, proto: TypeId, args
         return failed(c, args[1..]);
     };
     for (try protos.findMethods(c.m, r.ty, name)) |mr| if (mr.protocol == proto) {
-        const callee = try fromImpl(c, fa, mr) orelse return failed(c, args[1..]);
+        const impl = try fromImpl(c, fa, mr) orelse return failed(c, args[1..]);
+        const callee = try asMethod(c, fa, r.ty, impl) orelse return failed(c, args[1..]);
         return methodCall(c, at, callee, r, args[1..]);
     };
     try c.reportAt(c.ast.mainToken(fa), null, &.{}, "`{s}` has no method `{s}` from `{s}`", .{ try c.tyName(r.ty), name, try c.tyName(proto) });
@@ -359,22 +378,16 @@ fn resolve(c: *Checker, fa: Node.Index, ty: TypeId) Error!?Callee {
                 _ = try private(c, fa, "method", name, ty, null);
                 return null;
             }
-            if (f.params.len == 0 or !f.params[0].is_self) {
-                try c.reportAt(c.ast.mainToken(fa), null, &.{try std.fmt.allocPrint(c.arena, "call it on the type: `{s}.{s}(...)`", .{ try c.tyName(ty), name })}, "`{s}` is an associated function of `{s}`, not a method", .{ name, try c.tyName(ty) });
-                return null;
-            }
-            return .{ .m = ref.module, .f = f };
+            return asMethod(c, fa, ty, .{ .m = ref.module, .f = f });
         };
     }
     if (c.bodies.protos) |protos| {
         const found = try protos.findMethods(c.m, ty, name);
         if (found.len > 1) {
-            var help: std.Io.Writer.Allocating = .init(c.arena);
-            for (found, 0..) |mr, i| help.writer.print("{s}`{s}.{s}(e, ...)`", .{ if (i == 0) "call one explicitly: " else " or ", try c.tyName(mr.protocol), name }) catch return error.OutOfMemory;
-            try c.reportAt(c.ast.mainToken(fa), .E0355, &.{help.written()}, "ambiguous method `{s}`: {d} protocol impls for `{s}` provide it", .{ name, found.len, try c.tyName(ty) });
+            try ambiguous(c, fa, ty, found);
             return null;
         }
-        if (found.len == 1) return fromImpl(c, fa, found[0]);
+        if (found.len == 1) return asMethod(c, fa, ty, try fromImpl(c, fa, found[0]) orelse return null);
     }
     // 2. UFCS: a free function visible by name whose first parameter accepts `ty`.
     // shortcut: locals do not shadow it here; a local function pointer is not a free function.
@@ -396,6 +409,23 @@ fn resolve(c: *Checker, fa: Node.Index, ty: TypeId) Error!?Callee {
         else => if (ty == .str) return unsupported(c, fa, "methods of `str` (T108)"),
     }
     try c.reportAt(c.ast.mainToken(fa), null, &.{}, "no method `{s}` on type `{s}`", .{ name, try c.tyName(ty) });
+    return null;
+}
+
+/// E0355: more than one visible protocol impl for `ty` provides member `fa`.
+fn ambiguous(c: *Checker, fa: Node.Index, ty: TypeId, found: []const @import("protocols.zig").MethodRef) Error!void {
+    const name = c.ast.tokenSlice(c.ast.mainToken(fa));
+    var help: std.Io.Writer.Allocating = .init(c.arena);
+    for (found, 0..) |mr, i| help.writer.print("{s}`{s}.{s}(e, ...)`", .{ if (i == 0) "call one explicitly: " else " or ", try c.tyName(mr.protocol), name }) catch return error.OutOfMemory;
+    try c.reportAt(c.ast.mainToken(fa), .E0355, &.{help.written()}, "ambiguous method `{s}`: {d} protocol impls for `{s}` provide it", .{ name, found.len, try c.tyName(ty) });
+}
+
+/// `callee`, a member `fa` of `ty`, if its first parameter is `self`;
+/// otherwise null after reporting it as an associated function.
+fn asMethod(c: *Checker, fa: Node.Index, ty: TypeId, callee: Callee) Error!?Callee {
+    if (callee.f.params.len > 0 and callee.f.params[0].is_self) return callee;
+    const name = c.ast.tokenSlice(c.ast.mainToken(fa));
+    try c.reportAt(c.ast.mainToken(fa), null, &.{try std.fmt.allocPrint(c.arena, "call it on the type: `{s}.{s}(...)`", .{ try c.tyName(ty), name })}, "`{s}` is an associated function of `{s}`, not a method", .{ name, try c.tyName(ty) });
     return null;
 }
 
@@ -561,7 +591,48 @@ test "E0355: two protocol impls provide the method; `Protocol.m(e)` resolves it"
     );
     defer f.deinit();
     try f.expectDiags(&.{.{ .E0355, "step" }});
-    _ = try f.func("ok");
+    try f.expectDump("ok",
+        \\fn ok(l0 b: Bot) -> u32 {
+        \\b0:
+        \\  %0: Bot = local l0
+        \\  %1: Bot = load %0
+        \\  %2: u32 = call @1, [%1]
+        \\  %3: Bot = local l0
+        \\  %4: Bot = load %3
+        \\  %5: u32 = call @2, [%4]
+        \\  %6: u32 = add %2, %5
+        \\  ret %6
+        \\}
+        \\
+    );
+}
+
+test "associated functions of protocol impls: `T.f()` finds them, `e.f()` rejects them" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\pub protocol Make { fn make() -> Self; fn conv(x: u32) -> Self; }
+        \\struct Bot { n: u32 }
+        \\impl Make for Bot {
+        \\    fn make() -> Bot { Bot { n: 0 } }
+        \\    fn conv(x: u32) -> Bot { Bot { n: x } }
+        \\}
+        \\fn ok() -> Bot { Bot.make() }
+        \\fn bad(b: Bot) {
+        \\    b.make();
+        \\    Make.make(b);
+        \\    b.conv();
+        \\}
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ null, "make" }, .{ null, "make" }, .{ null, "conv" } });
+    try f.expectDump("ok",
+        \\fn ok() -> Bot {
+        \\b0:
+        \\  %0: Bot = call @1, []
+        \\  ret %0
+        \\}
+        \\
+    );
 }
 
 test "fields: private fields are rejected outside their module, `pub` ones are read-only" {
@@ -575,11 +646,12 @@ test "fields: private fields are rejected outside their module, `pub` ones are r
             \\    p.y = 2.0;
             \\    p.x + p.y + origin().x
             \\}
+            \\fn column(ps: soa []Point) -> []f32 { ps.x }
         },
         .{ "geo", "pub struct Point { x: f32, pub y: f32, pub mut z: f32 }\npub fn origin() -> Point { Point { x: 0.0, y: 0.0, z: 0.0 } }\nfn own(p: Point) -> f32 { p.x }" },
     });
     defer f.deinit();
-    try f.expectDiags(&.{ .{ null, "y" }, .{ null, "x" }, .{ null, "x" } });
+    try f.expectDiags(&.{ .{ null, "y" }, .{ null, "x" }, .{ null, "x" }, .{ null, "x" } });
 }
 
 test "fields: SoA columns are `[]F`, tuples, temporaries, nested writes" {
