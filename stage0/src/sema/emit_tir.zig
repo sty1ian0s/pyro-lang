@@ -491,10 +491,19 @@ pub fn checkBodies(gpa: Allocator, it: *Items, protos: ?*const protocols_mod.Pro
             }
         };
     }
-    if (protos) |p| for (p.impls) |impl| {
-        if (impl.protocol == .err or impl.target == .err) continue;
-        for (impl.methods) |f| try checkDecl(&bs, it, impl.src.module, f, impl.target, impl.generics);
-    };
+    if (protos) |p| {
+        for (p.impls) |impl| {
+            if (impl.protocol == .err or impl.target == .err) continue;
+            for (impl.methods) |f| try checkDecl(&bs, it, impl.src.module, f, impl.target, impl.generics);
+        }
+        // Protocol method declarations have no checked body, but their
+        // parameters follow the same rules (§4.5.3, §5.5.2).
+        var it_protos = p.protos.valueIterator();
+        while (it_protos.next()) |pr| {
+            const ref = it.declRef(pr.type) orelse continue;
+            for (pr.methods) |md| try @import("check_call.zig").checkSignature(it, ref.module, md.f);
+        }
+    }
     return bs;
 }
 
@@ -926,6 +935,20 @@ test "pyro check stage: names from modules not loaded make the check incomplete,
             try testing.expectEqual(0, ds.len);
         }
     }
+}
+
+test "protocol method signatures: E0339 `mut T` parameter type, E0326 `move` of a plain type" {
+    var comp: Compilation = undefined;
+    try comp.init(testing.allocator, testing.io, .{ .jobs = 1, .stop_after = .check });
+    defer comp.deinit();
+    try comp.addHook(.resolve, .{ .run = names_mod.runFiles });
+    try comp.addHook(.check, .{ .run = runFiles });
+    _ = try comp.addSource("a.pr", "protocol Q { fn f(self, p: mut u32); fn g(self, move n: u32); }\npub fn main() {}\n");
+    try comp.run();
+    const ds = comp.sink.finish();
+    try testing.expectEqual(2, ds.len);
+    try testing.expectEqual(.E0339, ds[0].code.?);
+    try testing.expectEqual(.E0326, ds[1].code.?);
 }
 
 test "a parameter type that failed to resolve fails the calling body too" {

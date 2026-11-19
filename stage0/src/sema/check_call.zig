@@ -223,6 +223,11 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
         _ = try check_expr.check(c, value, .none);
         return .err;
     };
+    // A `move` argument needs the `move` prefix and ownership checks
+    // (§5.5.2). A concrete plain `move` parameter is E0326 at its
+    // declaration and its argument is checked as a copy.
+    if (p.mode == .move and p.type != .err and (mentionsParam(c.types, p.type) or try kinds.kind(c.items, p.type) != .plain))
+        return c.unsupported(value, "`move` arguments (T080)");
     // A resource or shared cell is passed to a read-only parameter as a
     // view of its place, not copied (§5.5.2, §5.1).
     const kind: kinds.Kind = if (p.mode == .value and p.type != .err) try kinds.kind(c.items, p.type) else .plain;
@@ -272,19 +277,26 @@ fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
 /// `let mut` binding, a `mut` parameter or `mut self`; E0336 otherwise.
 fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?tir.Local {
     const ast = c.ast;
-    switch (ast.kind(value)) {
+    var v = value;
+    while (ast.kind(v) == .paren) v = ast.data(v).paren.inner;
+    switch (ast.kind(v)) {
         .field_access, .index => {
-            _ = c.unsupported(value, "`mut` arguments of fields and elements (T050, T051)");
+            _ = c.unsupported(v, "`mut` arguments of fields and elements (T050, T051)");
             return null;
         },
-        .ident => if (c.items.names.get(c.m, value) == null) {
-            _ = try check_expr.check(c, value, .none); // reports the unknown name
+        // `*p` names a place through a raw pointer; other prefix forms are values.
+        .prefix => if (ast.tokens.items(.kind)[ast.mainToken(v)] == .star) {
+            _ = c.unsupported(v, "raw pointer operations (T054)");
+            return null;
+        },
+        .ident => if (c.items.names.get(c.m, v) == null) {
+            _ = try check_expr.check(c, v, .none); // reports the unknown name
             return null;
         },
         else => {},
     }
     const help: []const []const u8 = &.{"pass a `let mut` binding, a `mut` parameter, or a field or element of one"};
-    const l = localOf(c, value) orelse {
+    const l = localOf(c, v) orelse {
         try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
         return null;
     };
@@ -424,6 +436,7 @@ fn mentionsParam(t: *Types, ty: TypeId) bool {
 
 const testing = std.testing;
 const Fixture = emit_tir.Fixture;
+const diag = @import("../diag/diag.zig");
 
 test "binding: positional, named, defaults; `spawn_actor(position: p, scale: 2.0)` binds" {
     var f: Fixture = undefined;
@@ -551,24 +564,24 @@ test "E0801: `comptime` arguments must be comptime-known" {
     try f.expectDiags(&.{.{ .E0801, "count" }});
 }
 
-test "function pointers: `let f: fn(f32) -> f32 = clamp;`, indirect calls, named argument rejected" {
+test "function pointers: non-generic function as a value, indirect calls, named argument rejected" {
     var f: Fixture = undefined;
     try f.init(
-        \\fn clamp(x: f32) -> f32 { x }
+        \\fn half(x: f32) -> f32 { x }
         \\fn apply(g: fn(f32) -> f32, v: f32) -> f32 { g(v) }
         \\fn demo() -> f32 {
-        \\    let f: fn(f32) -> f32 = clamp;
-        \\    apply(clamp, f(1.0))
+        \\    let f: fn(f32) -> f32 = half;
+        \\    apply(half, f(1.0))
         \\}
         \\fn bad(g: fn(f32) -> f32, n: u32) {
         \\    let a = g(x: 1.0);
         \\    let b = g();
         \\    let c = n(1);
-        \\    let d: fn(u32) -> f32 = clamp;
+        \\    let d: fn(u32) -> f32 = half;
         \\}
     );
     defer f.deinit();
-    try f.expectDiags(&.{ .{ null, "x" }, .{ null, "g" }, .{ .E0310, "n" }, .{ .E0310, "clamp" } });
+    try f.expectDiags(&.{ .{ null, "x" }, .{ null, "g" }, .{ .E0310, "n" }, .{ .E0310, "half" } });
     try f.expectDump("demo",
         \\fn demo() -> f32 {
         \\  l0 f: fn(f32) -> f32
@@ -625,4 +638,46 @@ test "resource arguments of read-only parameters are passed as views" {
         \\}
         \\
     );
+}
+
+test "`move` arguments are unsupported until T080" {
+    for ([_][]const u8{
+        "fn demo(f: File) { keep(f); }",
+        "fn demo(move f: File) { keep(f); }",
+        "fn demo(g: fn(move File), f: File) { g(f); }",
+    }) |body| {
+        var f: Fixture = undefined;
+        const src = try std.mem.concat(testing.allocator, u8, &.{ "@resource\nstruct File { fd: i32 }\nfn keep(move f: File) {}\n", body });
+        defer testing.allocator.free(src);
+        try f.init(src);
+        defer f.deinit();
+        try f.expectDiags(&.{});
+        try testing.expectEqualStrings("`move` arguments (T080)", f.bodies.unsupported.?.what);
+        try testing.expectEqual(null, f.bodies.find(0, "demo").?.func);
+    }
+}
+
+test "`mut` arguments: parenthesized fields are unsupported, values are E0336" {
+    for ([_]struct { []const u8, ?diag.DiagCode, ?[]const u8 }{
+        .{ "heal(mut (p.health), 1);", null, "`mut` arguments of fields and elements (T050, T051)" },
+        .{ "heal(mut ((q)), 1);", null, null },
+        .{ "heal(mut -q, 1);", .E0336, null },
+        .{ "heal(mut (1), 1);", .E0336, null },
+    }) |case| {
+        var f: Fixture = undefined;
+        const src = try std.mem.concat(testing.allocator, u8, &.{
+            "struct P { health: u8 }\nfn heal(mut p: u8, amount: u8) { p += amount; }\nfn demo(mut p: P) {\n    let mut q: u8 = 1;\n    ",
+            case[0],
+            "\n}\n",
+        });
+        defer testing.allocator.free(src);
+        try f.init(src);
+        defer f.deinit();
+        const ds = f.p.sink.finish();
+        if (case[1]) |code| {
+            try testing.expectEqual(1, ds.len);
+            try testing.expectEqual(code, ds[0].code.?);
+        } else try testing.expectEqual(0, ds.len);
+        if (case[2]) |what| try testing.expectEqualStrings(what, f.bodies.unsupported.?.what) else try testing.expectEqual(null, f.bodies.unsupported);
+    }
 }
