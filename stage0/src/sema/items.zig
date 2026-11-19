@@ -450,7 +450,7 @@ pub const Items = struct {
 
     /// `.none` if generic parameter `g` of module `m` is a type parameter,
     /// else the type of the value parameter (`CAP: usize`, §7.6.1).
-    fn paramValueType(it: *Items, m: ModuleId, g: Node.Index) Error!TypeId {
+    pub fn paramValueType(it: *Items, m: ModuleId, g: Node.Index) Error!TypeId {
         const gp = it.mods[m].params.getPtr(g).?;
         if (gp.value_type) |t| return t;
         gp.value_type = .none; // also while resolving the bound

@@ -40,7 +40,6 @@ const module_graph = @import("../resolve/module_graph.zig");
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
 const ModuleId = module_graph.ModuleId;
-const Target = imports.Target;
 const Items = items_mod.Items;
 const Fn = items_mod.Fn;
 const Error = Allocator.Error;
@@ -249,10 +248,16 @@ pub const Protocols = struct {
                     continue;
                 }
                 const t = try p.resolveBound(m, g, bn, list.len);
-                // A non-protocol single bound makes a value parameter (§7.6.1).
-                switch (p.types().get(t)) {
-                    .nominal => |k| if (k.kind == .protocol) try out.append(p.alloc(), t),
-                    else => {},
+                const is_protocol = switch (p.types().get(t)) {
+                    .nominal => |k| k.kind == .protocol,
+                    else => false,
+                };
+                if (is_protocol) {
+                    _ = try p.checkArgs(m, bn, t);
+                    try out.append(p.alloc(), t);
+                } else if (list.len > 1 and t != .err) {
+                    // A non-protocol single bound makes a value parameter (§7.6.1).
+                    try p.report(p.tokSpan(m, typeToken(a, bn)), null, &.{}, "`{s}` is not a protocol", .{try p.tyName(t)});
                 }
             }
             b.protocols = out.items;
@@ -261,11 +266,12 @@ pub const Protocols = struct {
         return b;
     }
 
-    /// Resolves bound `bn` of generic parameter `g`. `items` already
-    /// resolved (and reported on) a single bound when it computed the
-    /// parameter's value type: resolve it again without reporting.
+    /// Resolves bound `bn` of generic parameter `g`. `items` resolves (and
+    /// reports on) a single bound when it computes the parameter's value
+    /// type: let it, then resolve again without reporting.
     fn resolveBound(p: *Protocols, m: ModuleId, g: Node.Index, bn: Node.Index, count: usize) Error!TypeId {
-        if (count != 1 or p.items.mods[m].params.get(g).?.value_type == null) return p.items.resolveType(m, bn, .none);
+        if (count != 1) return p.items.resolveType(m, bn, .none);
+        _ = try p.items.paramValueType(m, g);
         var quiet: diag.Sink = .init(p.alloc(), p.types().io);
         defer quiet.deinit();
         const saved = p.items.sink;
@@ -317,33 +323,72 @@ pub const Protocols = struct {
     /// Whether `ty` is an instance of `pattern`, binding the parameters of
     /// `owner` in `binds` (`.none` = unbound).
     fn match(p: *Protocols, pattern: TypeId, ty: TypeId, owner: Types.Decl, binds: []TypeId) bool {
-        if (pattern == ty) return true;
+        var v: Vars = .{ .owners = .{ owner, owner }, .binds = .{ binds, &.{} } };
+        return p.unify(pattern, ty, &v);
+    }
+
+    /// Unification variables: the generic parameters of up to two
+    /// declarations, bound in `binds` (`.none` = unbound).
+    const Vars = struct {
+        owners: [2]Types.Decl,
+        binds: [2][]TypeId,
+        depth: u32 = 0,
+
+        fn of(v: *Vars, t: *Types, ty: TypeId) ?*TypeId {
+            const k = switch (t.get(ty)) {
+                .param => |k| k,
+                else => return null,
+            };
+            for (v.owners, v.binds) |o, b| if (std.meta.eql(k.owner, o) and k.index < b.len) return &b[k.index];
+            return null;
+        }
+
+        fn resolve(v: *Vars, t: *Types, ty: TypeId) TypeId {
+            var x = ty;
+            while (v.of(t, x)) |b| x = if (b.* == .none) break else b.*;
+            return x;
+        }
+    };
+
+    /// Whether `x` and `y` unify, binding the variables of `v`. A binding
+    /// cycle (`T = Pair<T>`) recurses without end: the depth limit fails it,
+    /// in place of an occurs check.
+    fn unify(p: *Protocols, x_: TypeId, y_: TypeId, v: *Vars) bool {
         const t = p.types();
-        const k = t.get(ty);
-        switch (t.get(pattern)) {
-            .param => |x| {
-                if (!std.meta.eql(x.owner, owner) or x.index >= binds.len) return false;
-                if (binds[x.index] == .none) binds[x.index] = ty;
-                return binds[x.index] == ty;
-            },
-            .array => |x| return k == .array and x.len == k.array.len and p.match(x.elem, k.array.elem, owner, binds),
-            .soa_array => |x| return k == .soa_array and x.len == k.soa_array.len and p.match(x.elem, k.soa_array.elem, owner, binds),
-            .slice => |x| return k == .slice and p.match(x.elem, k.slice.elem, owner, binds),
-            .soa_slice => |x| return k == .soa_slice and p.match(x.elem, k.soa_slice.elem, owner, binds),
-            .vec => |x| return k == .vec and x.len == k.vec.len and p.match(x.elem, k.vec.elem, owner, binds),
-            .handle => |x| return k == .handle and p.match(x.elem, k.handle.elem, owner, binds),
-            .ptr => |x| return k == .ptr and x.is_const == k.ptr.is_const and p.match(x.elem, k.ptr.elem, owner, binds),
-            .mut_view => |x| return k == .mut_view and p.match(x.elem, k.mut_view.elem, owner, binds),
-            .tuple => |x| {
-                if (k != .tuple or x.elems.len != k.tuple.elems.len) return false;
-                for (x.elems, k.tuple.elems) |a, b| if (!p.match(a, b, owner, binds)) return false;
+        const x = v.resolve(t, x_);
+        const y = v.resolve(t, y_);
+        if (x == y) return true;
+        if (v.of(t, x)) |b| {
+            b.* = y;
+            return true;
+        }
+        if (v.of(t, y)) |b| {
+            b.* = x;
+            return true;
+        }
+        if (v.depth > 256) return false;
+        v.depth += 1;
+        defer v.depth -= 1;
+        const k = t.get(y);
+        switch (t.get(x)) {
+            .array => |e| return k == .array and e.len == k.array.len and p.unify(e.elem, k.array.elem, v),
+            .soa_array => |e| return k == .soa_array and e.len == k.soa_array.len and p.unify(e.elem, k.soa_array.elem, v),
+            .slice => |e| return k == .slice and p.unify(e.elem, k.slice.elem, v),
+            .soa_slice => |e| return k == .soa_slice and p.unify(e.elem, k.soa_slice.elem, v),
+            .vec => |e| return k == .vec and e.len == k.vec.len and p.unify(e.elem, k.vec.elem, v),
+            .handle => |e| return k == .handle and p.unify(e.elem, k.handle.elem, v),
+            .ptr => |e| return k == .ptr and e.is_const == k.ptr.is_const and p.unify(e.elem, k.ptr.elem, v),
+            .mut_view => |e| return k == .mut_view and p.unify(e.elem, k.mut_view.elem, v),
+            .tuple => |e| {
+                if (k != .tuple or e.elems.len != k.tuple.elems.len) return false;
+                for (e.elems, k.tuple.elems) |a, b| if (!p.unify(a, b, v)) return false;
                 return true;
             },
-            .nominal => |x| {
-                if (k != .nominal or !p.sameDecl(x, k.nominal) or x.args.len != k.nominal.args.len) return false;
-                for (x.args, k.nominal.args) |a, b| {
+            .nominal => |e| {
+                if (k != .nominal or !p.sameDecl(e, k.nominal) or e.args.len != k.nominal.args.len) return false;
+                for (e.args, k.nominal.args) |a, b| {
                     if (a == .type and b == .type) {
-                        if (!p.match(a.type, b.type, owner, binds)) return false;
+                        if (!p.unify(a.type, b.type, v)) return false;
                     } else if (!std.meta.eql(a, b)) return false;
                 }
                 return true;
@@ -378,8 +423,9 @@ pub const Protocols = struct {
         return null;
     }
 
-    /// Whether `ty` implements `protocol` (§7.5.2): through an impl, or as
-    /// a type parameter bounded by it. `.err` satisfies everything.
+    /// Whether `ty` implements `protocol` (§7.5.2): as a type parameter
+    /// bounded by it, or through an impl (also a blanket `impl<T> P for T`).
+    /// `.err` satisfies everything.
     pub fn satisfies(p: *Protocols, ty: TypeId, protocol: TypeId) Error!bool {
         if (ty == .err or protocol == .err) return true;
         if (p.depth > 32) return false;
@@ -395,7 +441,6 @@ pub const Protocols = struct {
                     const bk = p.types().get(b);
                     if (b == protocol or (bk == .nominal and p.sameDecl(bk.nominal, pk) and argsEql(bk.nominal.args, pk.args))) return true;
                 }
-                return false;
             },
             .nominal => |k| if (p.isStd(pk.decl) and p.isStd(k.decl)) return true,
             else => if (p.isStd(pk.decl)) return true,
@@ -450,25 +495,45 @@ pub const Protocols = struct {
     /// for `ty` whose protocol and type are nameable in `m` (its own method,
     /// else the protocol's default). Methods declared in a struct or enum
     /// body are `Items`'.
-    // shortcut: the first impl in declaration order wins; ambiguity between two protocols is the caller's.
+    /// The first of `findMethods`; null if there is none. Ambiguity (E0355,
+    /// §7.9) is the caller's: use `findMethods` to see every candidate.
     pub fn findMethod(p: *Protocols, m: ModuleId, ty: TypeId, name: []const u8) Error!?MethodRef {
-        if (p.types().get(ty) == .param) {
-            for ((try p.boundsOf(ty)).protocols) |b| {
-                const pr = try p.protocolOf(b) orelse continue;
-                if (pr.method(name)) |md| return .{ .f = md.f, .protocol = b, .impl = null };
-            }
-            return null;
-        }
-        for (p.impls) |*impl| {
-            if (impl.protocol == .err or !p.items.im.implVisible(m, impl.src)) continue;
+        const all = try p.findMethods(m, ty, name);
+        return if (all.len > 0) all[0] else null;
+    }
+
+    /// Every method `name` of receiver type `ty` from a protocol, as seen
+    /// from module `m`, in the order of `findMethod`: the bounds of a type
+    /// parameter, then the impls for `ty` (bounds checked) whose protocol
+    /// and type are nameable in `m`. One candidate per protocol; more than
+    /// one is ambiguous (E0355).
+    pub fn findMethods(p: *Protocols, m: ModuleId, ty: TypeId, name: []const u8) Error![]const MethodRef {
+        var out: std.ArrayList(MethodRef) = .empty;
+        if (p.types().get(ty) == .param) for ((try p.boundsOf(ty)).protocols) |b| {
+            const pr = try p.protocolOf(b) orelse continue;
+            if (pr.method(name)) |md| try out.append(p.alloc(), .{ .f = md.f, .protocol = b, .impl = null });
+        };
+        impls: for (p.impls) |*impl| {
+            if (impl.protocol == .err or impl.target == .err) continue;
+            var vis = impl.src;
+            if (p.types().get(impl.target) == .param) vis.target = null; // a blanket impl's `T` names no item
+            if (!p.items.im.implVisible(m, vis)) continue;
+            for (out.items) |c| if (c.protocol == impl.protocol) continue :impls; // a bound and a blanket impl
             const binds = try p.alloc().alloc(TypeId, impl.generics.len);
             @memset(binds, .none);
             if (!p.match(impl.target, ty, p.decl(impl.src.module, impl.src.node), binds)) continue;
-            for (impl.methods) |f| if (std.mem.eql(u8, f.name, name)) return .{ .f = f, .protocol = impl.protocol, .impl = impl, .args = binds };
-            const pr = try p.protocolOf(impl.protocol) orelse continue;
-            if (pr.method(name)) |md| if (md.has_default) return .{ .f = md.f, .protocol = impl.protocol, .impl = impl, .args = binds };
+            if (!try p.argsSatisfy(impl.generics, binds)) continue;
+            const f = for (impl.methods) |f| {
+                if (std.mem.eql(u8, f.name, name)) break f;
+            } else blk: {
+                const pr = try p.protocolOf(impl.protocol) orelse continue :impls;
+                const md = pr.method(name) orelse continue :impls;
+                if (!md.has_default) continue :impls;
+                break :blk md.f;
+            };
+            try out.append(p.alloc(), .{ .f = f, .protocol = impl.protocol, .impl = impl, .args = binds });
         }
-        return null;
+        return out.items;
     }
 
     // -----------------------------------------------------------------------
@@ -480,6 +545,15 @@ pub const Protocols = struct {
         const proto = p.protocolIn(ty) orelse return true;
         try p.report(p.tokSpan(m, typeToken(p.ast(m), node)), .E0375, &.{"a protocol is not a type: use a generic parameter bounded by it (`<T: P>`) or an enum (§7.5.3)"}, "protocol `{s}` used as a type", .{try p.tyName(proto)});
         return false;
+    }
+
+    /// Reports E0375 if a generic argument of `ty`, written as `node` of
+    /// module `m`, is or contains a protocol (`impl From<Shape> for W`,
+    /// `T: From<Shape>`). Returns whether it is fine.
+    fn checkArgs(p: *Protocols, m: ModuleId, node: Node.Index, ty: TypeId) Error!bool {
+        if (p.types().get(ty) != .nominal) return true;
+        for (p.types().get(ty).nominal.args) |arg| if (arg == .type) if (!try p.checkType(m, node, arg.type)) return false;
+        return true;
     }
 
     /// The first protocol in `ty`, if any.
@@ -565,6 +639,7 @@ pub const Protocols = struct {
                 try p.report(p.tokSpan(m, typeToken(a, d.protocol)), null, &.{}, "`{s}` is not a protocol", .{try p.tyName(protocol)});
             }
             if (!is_protocol) protocol = .err;
+            _ = try p.checkArgs(m, d.protocol, protocol);
             _ = try p.checkType(m, d.target, target);
             var methods: std.ArrayList(Fn) = .empty;
             for (d.members) |mn| {
@@ -584,25 +659,52 @@ pub const Protocols = struct {
             const d = a.data(impl.src.node).impl_decl;
             const at = p.tokSpan(m, typeToken(a, d.protocol));
             if (impl.protocol == .err or impl.target == .err) continue;
-            if (!placed(impl)) {
+            if (!p.placed(impl)) {
                 try p.report(at, .E0379, &.{"an `impl P for T` must be in the module that declares `P` or the one that declares `T`"}, "`impl {s} for {s}` is in neither the module of `{s}` nor the module of `{s}`", .{ try p.tyName(impl.protocol), try p.tyName(impl.target), try p.tyName(impl.protocol), try p.tyName(impl.target) });
                 continue;
             }
             for (p.impls[0..i]) |*prev| {
-                if (prev.protocol == .err or prev.target == .err or !placed(prev)) continue;
-                if (!try p.overlap(impl, prev) and !try p.overlap(prev, impl)) continue;
+                if (prev.protocol == .err or prev.target == .err or !p.placed(prev)) continue;
+                if (!try p.overlap(impl, prev)) continue;
                 try p.report(at, .E0379, &.{"there is at most one impl of a protocol for a type"}, "duplicate `impl {s} for {s}`", .{ try p.tyName(impl.protocol), try p.tyName(impl.target) });
                 break;
             }
         }
     }
 
-    /// Whether `general`'s patterns match `specific`'s types.
-    fn overlap(p: *Protocols, general: *const Impl, specific: *const Impl) Error!bool {
-        const binds = try p.alloc().alloc(TypeId, general.generics.len);
-        @memset(binds, .none);
-        const owner = p.decl(general.src.module, general.src.node);
-        return p.match(general.protocol, specific.protocol, owner, binds) and p.match(general.target, specific.target, owner, binds);
+    /// Whether some type has both impls: their headers unify.
+    fn overlap(p: *Protocols, a: *const Impl, b: *const Impl) Error!bool {
+        var v: Vars = .{
+            .owners = .{ p.decl(a.src.module, a.src.node), p.decl(b.src.module, b.src.node) },
+            .binds = .{ try p.alloc().alloc(TypeId, a.generics.len), try p.alloc().alloc(TypeId, b.generics.len) },
+        };
+        for (v.binds) |x| @memset(x, .none);
+        return p.unify(a.protocol, b.protocol, &v) and p.unify(a.target, b.target, &v);
+    }
+
+    /// Whether `impl` is in the module that declares its protocol or its
+    /// type (aliases resolved).
+    fn placed(p: *Protocols, impl: *const Impl) bool {
+        for ([_]TypeId{ impl.protocol, impl.target }) |t| {
+            if (p.items.declRef(t)) |r| if (r.module == impl.src.module) return true;
+        }
+        return false;
+    }
+
+    /// Resolves and reports the bounds of every generic parameter of the
+    /// package once, at its declaration.
+    fn checkBounds(p: *Protocols) Error!void {
+        for (p.items.mods) |*md| {
+            var keys: std.ArrayList(Node.Index) = .empty;
+            var it = md.params.keyIterator();
+            while (it.next()) |g| try keys.append(p.alloc(), g.*);
+            std.mem.sort(Node.Index, keys.items, {}, struct {
+                fn lt(_: void, x: Node.Index, y: Node.Index) bool {
+                    return x.int() < y.int();
+                }
+            }.lt);
+            for (keys.items) |g| _ = try p.boundsOf(md.params.get(g).?.type);
+        }
     }
 
     /// Signatures (§7.5.1, E0378).
@@ -696,17 +798,6 @@ fn sameType(a: TypeId, b: TypeId) bool {
     return a == b or a == .err or b == .err;
 }
 
-/// Whether `impl` is in the module of its protocol or of its type.
-fn placed(impl: *const Impl) bool {
-    return isIn(impl.src.protocol, impl.src.module) or isIn(impl.src.target, impl.src.module);
-}
-
-/// Whether `t` names an item of module `m`.
-fn isIn(t: ?Target, m: ModuleId) bool {
-    const x = t orelse return false;
-    return x == .item and x.item.module == m;
-}
-
 /// Checks the protocols and impls of the package `items` checked, and
 /// reports problems to `sink`. Errors are internal failures only. The
 /// result borrows `items`.
@@ -717,6 +808,7 @@ pub fn check(gpa: Allocator, sink: *diag.Sink, items: *Items, options: Options) 
     errdefer p.deinit();
     try p.buildImpls();
     try p.checkItemTypes();
+    try p.checkBounds();
     try p.checkCoherence();
     for (p.impls) |*impl| if (impl.protocol != .err and impl.target != .err) try p.checkMethods(impl);
     return p;
@@ -917,6 +1009,10 @@ test "E0379: impl placement and overlapping impls" {
             \\impl<T> Shape for L<T> { fn area(self) -> f32 { 0.0 } }
             \\impl Shape for L<u32> { fn area(self) -> f32 { 1.0 } }
             \\impl Shape for u32 { fn area(self) -> f32 { 1.0 } }
+            \\pub struct P2<A, B> { a: A, b: B }
+            \\impl<T> Shape for P2<T, T> { fn area(self) -> f32 { 0.0 } }
+            \\impl<U> Shape for P2<u8, U> { fn area(self) -> f32 { 0.0 } }
+            \\impl Shape for P2<u16, u32> { fn area(self) -> f32 { 0.0 } }
         },
         .{
             "geo",
@@ -933,14 +1029,20 @@ test "E0379: impl placement and overlapping impls" {
             \\struct Mine { v: u8 }
             \\impl Shape for Mine { fn area(self) -> f32 { 0.0 } }
             \\impl Shape for Sq { fn area(self) -> f32 { 0.0 } }
+            \\type A = Sq;
+            \\impl Shape for A { fn area(self) -> f32 { 0.0 } }
             \\impl From<u8> for Order { fn from(e: u8) -> Self { .equal } }
         },
     }, .{});
     defer f.deinit();
-    try f.expectDiags(&.{ .{ .E0379, "Shape" }, .{ .E0379, "Shape" }, .{ .E0379, "Shape" }, .{ .E0379, "From" } });
+    try f.expectDiags(&.{ .{ .E0379, "Shape" }, .{ .E0379, "Shape" }, .{ .E0379, "Shape" }, .{ .E0379, "Shape" }, .{ .E0379, "Shape" }, .{ .E0379, "From" } });
     const ds = f.p.sink.finish();
     try testing.expect(std.mem.indexOf(u8, ds[0].message, "duplicate `impl Shape for L<u32>`") != null);
-    try testing.expect(std.mem.indexOf(u8, ds[2].message, "neither") != null);
+    // `P2<T, T>` and `P2<u8, U>` overlap at `P2<u8, u8>`.
+    try testing.expect(std.mem.indexOf(u8, ds[1].message, "duplicate `impl Shape for P2<u8, U>`") != null);
+    try testing.expect(std.mem.indexOf(u8, ds[3].message, "neither") != null);
+    // Through an alias, still `Sq`, which `geo` declares.
+    try testing.expect(std.mem.indexOf(u8, ds[4].message, "neither") != null);
 }
 
 test "E0375: a protocol is not a type" {
@@ -1015,6 +1117,51 @@ test "E0373: unmet bounds at the call site" {
     const id = (try f.protos.findMethod(0, t, "id")).?;
     try testing.expectEqual(named, id.protocol);
     try testing.expectEqual(null, id.impl);
+    // Method lookup checks the impl's bounds too.
+    try testing.expect(try f.protos.findMethod(0, try f.inst("Pair", &.{square}), "area") != null);
+    try testing.expectEqual(null, try f.protos.findMethod(0, try f.inst("Pair", &.{u8_}), "area"));
+}
+
+test "bounds are checked at the declaration" {
+    var f: Fixture = undefined;
+    try f.init(&.{.{
+        "a",
+        \\pub protocol Shape { fn area(self) -> f32; }
+        \\struct Sq { s: f32 }
+        \\protocol Into2<E> {}
+        \\fn g<T: Nope + Shape>(x: T) {}
+        \\fn h<T: Shape + Sq>(x: T) {}
+        \\fn q<T: Into2<Shape>>(x: T) {}
+        \\impl Into2<Shape> for Sq {}
+    }}, .{});
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ null, "Nope" }, .{ null, "Sq" }, .{ .E0375, "Into2" }, .{ .E0375, "Into2" } });
+}
+
+test "blanket impls and ambiguous methods" {
+    var f: Fixture = undefined;
+    try f.init(&.{.{
+        "a",
+        \\pub protocol Shape { fn area(self) -> f32; }
+        \\impl<T> Shape for T { fn area(self) -> f32 { 0.0 } }
+        \\pub protocol Sized2 { fn area(self) -> f32; }
+        \\struct Sq { s: f32 }
+        \\impl Sized2 for Sq { fn area(self) -> f32 { self.s } }
+        \\fn free<T>(x: T) {}
+        \\fn bounded<T: Shape>(x: T) {}
+    }}, .{});
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    const shape = try f.ty("Shape");
+    const free = (try f.get("free")).@"fn".generics[0];
+    const bounded = (try f.get("bounded")).@"fn".generics[0];
+    try testing.expect(try f.protos.satisfies(free, shape));
+    try testing.expect(try f.protos.satisfies(.int(.unsigned, 8), shape));
+    try testing.expect(!try f.protos.satisfies(free, try f.ty("Sized2")));
+    try testing.expect((try f.protos.findMethod(0, free, "area")).?.impl != null);
+    // The bound and the blanket impl are one candidate; two protocols are two.
+    try testing.expectEqual(1, (try f.protos.findMethods(0, bounded, "area")).len);
+    try testing.expectEqual(2, (try f.protos.findMethods(0, try f.ty("Sq"), "area")).len);
 }
 
 fn notStr(_: ?*anyopaque, ty: TypeId) Error!bool {
