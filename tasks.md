@@ -283,21 +283,21 @@ graph TD
   - Size: S · Parallel: W04
   - Blocked by: T003, T014, T018
   - Blocks: T020, T021, T022, T023
-- [ ] **T020** Parser: items and declarations **[CRITICAL]**
+- [x] **T020** Parser: items and declarations **[CRITICAL]**
   - Spec: §3.2-§3.4, §2.8
   - Deliverable: `stage0/src/parse/items.zig`: module doc, attrs, `pub`, use/const/type(distinct)/fn/struct/enum/protocol/impl/extern/comptime; generics with bounds; param modes; fields `pub`/`pub mut`; doc attachment. E0201, E0204, E0205, E0206, W0101.
   - Acceptance: Golden AST per item form; fail case per listed code; `pub fn` vs `pub mut x: T` disambiguated.
   - Size: L · Parallel: W05
   - Blocked by: T019
   - Blocks: T026, T036, T037
-- [ ] **T021** Parser: types and patterns **[CRITICAL]**
+- [x] **T021** Parser: types and patterns **[CRITICAL]**
   - Spec: §3.6, §3.7
   - Deliverable: `stage0/src/parse/{types,patterns}.zig`: all type forms, generic args (INT_LIT, `-INT_LIT`, CHAR_LIT, bools, `{expr}`), `as`-target mode; all pattern forms incl. `|` alternatives.
   - Acceptance: `x as u32 < y` is a comparison; `Channel<Msg, {CAP * 2}>` parses; `Pool<Pool<T>>` closes via split.
   - Size: M · Parallel: W05
   - Blocked by: T019
   - Blocks: T023, T026, T037
-- [ ] **T022** Compilation session and pipeline orchestrator **[GATE]**
+- [x] **T022** Compilation session and pipeline orchestrator **[GATE]**
   - Spec: B.1, §13.7, §13.8
   - Deliverable: `stage0/src/driver/Compilation.zig`: owns files, SourceMap, interner, sink, pool, arenas; runs stages 1-2 in parallel; hook interfaces for stages 3-6; `stop_after` lex|parse|check|expand|build; skips poisoned inputs.
   - Acceptance: Multi-file input: identical diagnostics with `--jobs 1` and `--jobs 8`; stop after parse skips stage-3 hooks.
@@ -1307,7 +1307,7 @@ graph TD
   - Size: M · Parallel: W04
   - Blocked by: T007, T158
   - Blocks: T160, T163
-- [ ] **T160** Source fetching and content-addressed cache
+- [x] **T160** Source fetching and content-addressed cache
   - Spec: §13.4, §13.1
   - Deliverable: `stage0/src/pkg/{fetch,cache}.zig`: registry archives, git, path; read-only SHA-256 cache; parallel; offline. Registry protocol is an implementation decision (documented in `docs/registry.md`).
   - Acceptance: file:// registry + local git fixtures populate cache; second fetch writes nothing; path deps read in place.
