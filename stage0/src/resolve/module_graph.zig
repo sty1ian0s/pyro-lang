@@ -359,12 +359,12 @@ pub const Stage = struct {
 const testing = std.testing;
 
 /// A package of in-memory modules `{ path, source }`; `a.b` is file `src/a/b.pr`.
-const TestPackage = struct {
+pub const TestPackage = struct {
     asts: []Ast,
     inputs: []Input,
     sink: diag.Sink,
 
-    fn init(mods: []const [2][]const u8) !TestPackage {
+    pub fn init(mods: []const [2][]const u8) !TestPackage {
         const gpa = testing.allocator;
         const p: TestPackage = .{
             .asts = try gpa.alloc(Ast, mods.len),
@@ -380,7 +380,7 @@ const TestPackage = struct {
         return p;
     }
 
-    fn deinit(p: *TestPackage) void {
+    pub fn deinit(p: *TestPackage) void {
         for (p.asts, p.inputs) |*ast, in| {
             ast.deinit(testing.allocator);
             testing.allocator.free(in.module.file);
@@ -390,7 +390,7 @@ const TestPackage = struct {
         p.sink.deinit();
     }
 
-    fn graph(p: *TestPackage, options: Options) !Graph {
+    pub fn graph(p: *TestPackage, options: Options) !Graph {
         return build(testing.allocator, &p.sink, p.inputs, options);
     }
 };

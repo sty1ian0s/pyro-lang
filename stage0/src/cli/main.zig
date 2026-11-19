@@ -33,6 +33,7 @@ const ast_dump = @import("../ast/dump.zig");
 const diag = @import("../diag/diag.zig");
 const SourceMap = @import("../source/SourceMap.zig");
 const cmd_deps = @import("cmd_deps.zig");
+const imports = @import("../resolve/imports.zig");
 
 /// Exit statuses (§13.8).
 pub const Exit = enum(u8) { ok = 0, failed = 1, usage = 2, internal = 3 };
@@ -124,7 +125,9 @@ const Stage = struct { stage: Compilation.HookStage, hook: Compilation.Hook };
 /// The semantic passes run by `pyro check` and every command that compiles. A
 /// semantic task appends its pass here with one line, e.g.
 /// `.{ .stage = .resolve, .hook = .{ .run = resolve.run } },`.
-const semantic_stages = [_]Stage{};
+const semantic_stages = [_]Stage{
+    .{ .stage = .resolve, .hook = .{ .run = imports.runFiles } },
+};
 
 /// Registers `semantic_stages` on `comp`, in order.
 pub fn registerStages(comp: *Compilation) !void {
