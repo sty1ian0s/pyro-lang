@@ -39,6 +39,9 @@ const imports = @import("../resolve/imports.zig");
 const names_mod = @import("../resolve/names.zig");
 const Compilation = @import("../driver/Compilation.zig");
 const check_stmt = @import("check_stmt.zig");
+const kinds_mod = @import("kinds.zig");
+const layout_mod = @import("layout.zig");
+const protocols_mod = @import("protocols.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -452,7 +455,9 @@ fn closingBrace(ast: *const Ast, open: Ast.TokenIndex) Ast.TokenIndex {
 
 /// Checks every function body of the package whose items are `it`, and
 /// reports to `it.sink`. Errors are internal failures only.
-pub fn checkBodies(gpa: Allocator, it: *Items) Error!Bodies {
+/// `protos`, if given, supplies the `impl` blocks whose methods are checked;
+/// without it they are recorded as unsupported.
+pub fn checkBodies(gpa: Allocator, it: *Items, protos: ?*const protocols_mod.Protocols) Error!Bodies {
     const arena = try gpa.create(std.heap.ArenaAllocator);
     arena.* = .init(gpa);
     var bs: Bodies = .{ .arena = arena };
@@ -471,13 +476,14 @@ pub fn checkBodies(gpa: Allocator, it: *Items) Error!Bodies {
                 for (e.consts) |k| comptimeValue(&bs, m, k.node, k.value, k.type);
                 for (e.methods) |f| try checkDecl(&bs, it, m, f, e.type, e.generics);
             },
-            .protocol => try unsupportedBodies(&bs, cm.ast, m, item.node, "protocol default methods (T044)"),
+            // A default method is generic over `Self`.
+            .protocol => try unsupportedBodies(&bs, cm.ast, m, item.node, "protocol default methods (T070)"),
             .pending, .alias, .distinct => {},
         };
         if (cm.ast.nodes.len > 0) for (cm.ast.data(.from(0)).root.items) |n| {
             const inner = if (cm.ast.kind(n) == .attributed) cm.ast.data(n).attributed.inner else n;
             switch (cm.ast.kind(inner)) {
-                .impl_decl => try unsupportedBodies(&bs, cm.ast, m, inner, "`impl` methods (T044)"),
+                .impl_decl => if (protos == null) try unsupportedBodies(&bs, cm.ast, m, inner, "`impl` methods (T044)"),
                 .comptime_block => if (bs.unsupported == null) {
                     bs.unsupported = .{ .module = m, .node = inner, .what = "comptime blocks (T060)" };
                 },
@@ -485,6 +491,10 @@ pub fn checkBodies(gpa: Allocator, it: *Items) Error!Bodies {
             }
         };
     }
+    if (protos) |p| for (p.impls) |impl| {
+        if (impl.protocol == .err or impl.target == .err) continue;
+        for (impl.methods) |f| try checkDecl(&bs, it, impl.src.module, f, impl.target, impl.generics);
+    };
     return bs;
 }
 
@@ -551,7 +561,13 @@ pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
         const pkg: Types.Package = .{ .name = try comp.interner.intern(name), .line = .{ .major = 0 } };
         var it = try items_mod.check(comp.gpa, &comp.sink, &types, &im, &names, .{ .package = pkg });
         defer it.deinit();
-        var bs = try checkBodies(comp.gpa, &it);
+        try kinds_mod.check(&it);
+        var lay: layout_mod.Engine = .init(comp.gpa, &it);
+        defer lay.deinit();
+        try lay.check();
+        var protos = try protocols_mod.check(comp.gpa, &comp.sink, &it, .{});
+        defer protos.deinit();
+        var bs = try checkBodies(comp.gpa, &it, &protos);
         defer bs.deinit();
         if (bs.unsupported != null) incomplete = true;
     }
@@ -586,7 +602,7 @@ pub const Fixture = struct {
         f.types = try .init(testing.allocator, testing.io, &f.strings);
         const pkg: Types.Package = .{ .name = try f.strings.intern("app"), .line = .{ .major = 1 } };
         f.items = try items_mod.check(testing.allocator, &f.p.sink, &f.types, &f.im, &f.names, .{ .package = pkg });
-        f.bodies = try checkBodies(testing.allocator, &f.items);
+        f.bodies = try checkBodies(testing.allocator, &f.items, null);
     }
 
     pub fn deinit(f: *Fixture) void {

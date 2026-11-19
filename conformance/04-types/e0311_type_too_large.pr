@@ -1,4 +1,3 @@
-//@ expected-fail: T093
 // §4.12: the maximum type size is 2^48 - 1 bytes.
 
 type TooBig = [281474976710656]u8; //~ E0311

@@ -1,4 +1,4 @@
-//@ expected-fail: T042
+//@ expected-fail: T046
 //@ covers: E0325
 // §5.3.1: resources may be fields, tuple elements and enum payloads; many
 // resources are modelled as plain data plus handles.

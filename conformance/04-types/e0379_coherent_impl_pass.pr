@@ -1,4 +1,4 @@
-//@ expected-fail: T044
+//@ expected-fail: T050
 //@ covers: E0379
 // §7.5.1: a local protocol for a prelude type, and a prelude protocol for a
 // local type, are both in an allowed module.

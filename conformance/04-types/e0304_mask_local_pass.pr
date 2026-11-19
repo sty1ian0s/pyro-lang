@@ -1,4 +1,4 @@
-//@ expected-fail: T042
+//@ expected-fail: T048
 //@ covers: E0304
 // §4.3.2: masks are fine in locals and as operands of `@any`/`@select`.
 

@@ -1,4 +1,4 @@
-//@ expected-fail: T042
+//@ expected-fail: T050
 // §5.1, §10.5: a shared cell (`Atomic`, or a struct containing one) is never
 // copied; using its place as a value is an error.
 

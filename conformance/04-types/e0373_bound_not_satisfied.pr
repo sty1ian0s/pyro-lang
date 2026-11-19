@@ -1,4 +1,4 @@
-//@ expected-fail: T044
+//@ expected-fail: T070
 // §7.5.2: a call whose argument type has no `impl` for the bound is rejected at
 // the call site.
 

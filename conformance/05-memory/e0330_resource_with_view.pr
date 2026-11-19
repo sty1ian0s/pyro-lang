@@ -1,4 +1,3 @@
-//@ expected-fail: T042
 // §5.1, §5.4.1: a type cannot contain both a resource and a view.
 
 @resource

@@ -1,4 +1,3 @@
-//@ expected-fail: T042
 // §4.3.2: a `mask<N>` lives only in locals and registers; it cannot be a struct
 // field or an array element.
 

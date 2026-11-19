@@ -1,4 +1,4 @@
-//@ expected-fail: T044
+//@ expected-fail: T070
 //@ covers: E0378
 // §7.5.1: every required method with the exact signature; a default method may
 // be inherited or overridden.
