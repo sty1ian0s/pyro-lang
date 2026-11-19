@@ -134,7 +134,7 @@ extern "c" fn close(fd: std.c.fd_t) c_int;
 
 /// Runs `child` in a forked process with stderr captured; returns the exit
 /// status and the captured stderr in `buf`.
-fn runForked(child: *const fn () void, buf: []u8) !struct { status: u32, err: []const u8 } {
+pub fn runForked(child: *const fn () void, buf: []u8) !struct { status: u32, err: []const u8 } {
     var fds: [2]std.c.fd_t = undefined;
     try testing.expectEqual(0, std.c.pipe(&fds));
     const pid = fork();

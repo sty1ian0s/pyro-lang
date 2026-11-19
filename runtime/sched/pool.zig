@@ -15,6 +15,7 @@
 
 const std = @import("std");
 const trap = @import("../trap.zig");
+const deadlock = @import("deadlock.zig");
 const c = std.c;
 
 /// One spawned call. Lives in the spawning thread's task arena, followed by
@@ -24,26 +25,38 @@ pub const Task = struct {
     func: *const fn (args: ?*anyopaque) callconv(.c) void,
     args: ?*anyopaque,
     group: *Group,
+    /// Spawn number, from 1; names the task in a deadlock report.
+    id: u32 = 0,
 };
 
 /// The join counter of one nursery. Guarded by `mutex`.
 pub const Group = struct {
     pending: usize = 0,
+    /// The joiner is waiting for `pending` to reach 0 and is counted blocked
+    /// by the deadlock detector.
+    joiner_waiting: bool = false,
 };
 
-var mutex: c.pthread_mutex_t = .{};
+/// The scheduler lock; park.zig waits on it.
+pub var mutex: c.pthread_mutex_t = .{};
 /// Signaled once per queued task and broadcast when a group drains.
 var cond: c.pthread_cond_t = .{};
 var head: ?*Task = null;
 var tail: ?*Task = null;
 var started = false;
 var thread_count: usize = 0; // 0 until read or set: the hardware thread count
+var next_id: u32 = 0;
 
-fn lock() void {
+/// Id of the task running on this thread; 0 for the program's main body.
+pub threadlocal var current_task: u32 = 0;
+
+/// Takes the scheduler lock, which also guards parking (park.zig) and the
+/// deadlock counters (deadlock.zig).
+pub fn lock() void {
     std.debug.assert(c.pthread_mutex_lock(&mutex) == .SUCCESS);
 }
 
-fn unlock() void {
+pub fn unlock() void {
     std.debug.assert(c.pthread_mutex_unlock(&mutex) == .SUCCESS);
 }
 
@@ -85,11 +98,27 @@ pub fn ensureStarted() void {
     }
 }
 
+/// Starts one more worker, so queued tasks still run while a parked task holds
+/// a thread. Caller holds the lock. Traps `out_of_memory` if the thread cannot
+/// start: the queued tasks would never run.
+pub fn addWorker() void {
+    const t = std.Thread.spawn(.{}, workerMain, .{}) catch
+        trap.trap(.out_of_memory, "cannot start a worker thread for a parked task", @src().file, @src().line);
+    t.detach();
+}
+
+/// Whether a task is waiting to run. Caller holds the lock.
+pub fn queued() bool {
+    return head != null;
+}
+
 /// Queues `task` for any thread to run.
 pub fn push(task: *Task) void {
     lock();
     defer unlock();
     task.group.pending += 1;
+    next_id +%= 1;
+    task.id = next_id;
     if (tail) |t| t.next = task else head = task;
     tail = task;
     std.debug.assert(c.pthread_cond_signal(&cond) == .SUCCESS);
@@ -107,11 +136,33 @@ fn pop() ?*Task {
 /// the lock on entry and on return.
 fn run(task: *Task) void {
     const group = task.group; // the frame may be reclaimed once pending drops
+    const outer = current_task;
+    current_task = task.id;
     unlock();
     task.func(task.args);
     lock();
+    current_task = outer;
     group.pending -= 1;
-    if (group.pending == 0) std.debug.assert(c.pthread_cond_broadcast(&cond) == .SUCCESS);
+    if (group.pending == 0) {
+        unblockJoiner(group);
+        std.debug.assert(c.pthread_cond_broadcast(&cond) == .SUCCESS);
+    }
+}
+
+/// Counts `group`'s joiner as runnable again if it was waiting. Caller holds
+/// the lock.
+fn unblockJoiner(group: *Group) void {
+    if (!group.joiner_waiting) return;
+    group.joiner_waiting = false;
+    deadlock.wake();
+}
+
+/// Waits for queued work or a draining group as an idle thread. Caller holds
+/// the lock.
+fn waitIdle() void {
+    deadlock.idle += 1;
+    std.debug.assert(c.pthread_cond_wait(&cond, &mutex) == .SUCCESS);
+    deadlock.idle -= 1;
 }
 
 /// Blocks until every task of `group` has finished, running queued tasks
@@ -120,7 +171,16 @@ pub fn join(group: *Group) void {
     lock();
     defer unlock();
     while (group.pending > 0) {
-        if (pop()) |task| run(task) else std.debug.assert(c.pthread_cond_wait(&cond, &mutex) == .SUCCESS);
+        if (pop()) |task| {
+            unblockJoiner(group);
+            run(task);
+        } else {
+            if (!group.joiner_waiting) {
+                group.joiner_waiting = true;
+                deadlock.sleep();
+            }
+            waitIdle();
+        }
     }
     // A wake-up meant for queued work may have landed here; pass it on.
     if (head != null) std.debug.assert(c.pthread_cond_signal(&cond) == .SUCCESS);
@@ -129,7 +189,11 @@ pub fn join(group: *Group) void {
 fn workerMain() void {
     lock();
     while (true) {
-        if (pop()) |task| run(task) else std.debug.assert(c.pthread_cond_wait(&cond, &mutex) == .SUCCESS);
+        if (pop()) |task| {
+            deadlock.wake();
+            run(task);
+            deadlock.sleep();
+        } else waitIdle();
     }
 }
 
@@ -142,4 +206,7 @@ pub fn resetAfterFork() void {
     tail = null;
     started = false;
     thread_count = 0;
+    next_id = 0;
+    current_task = 0;
+    deadlock.resetAfterFork();
 }
