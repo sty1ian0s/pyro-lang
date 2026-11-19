@@ -294,23 +294,40 @@ pub const Engine = struct {
         return null;
     }
 
-    /// The value of `@align(n)` among `attrs`, if written and evaluable.
-    fn alignValue(e: *Engine, m: ModuleId, attrs: []const Node.Index) Error!?u64 {
+    /// The argument of `@align(n)` among `attrs`, if written.
+    fn alignArg(e: *Engine, m: ModuleId, attrs: []const Node.Index) ?Node.Index {
+        const a = e.ast(m);
         const n = e.attr(m, attrs, .@"align") orelse return null;
-        const args = e.ast(m).data(n).attribute.args orelse return null;
+        const args = a.data(n).attribute.args orelse return null;
         if (args.len == 0) return null;
-        var arg = args[0];
-        if (e.ast(m).kind(arg) == .named_arg) arg = e.ast(m).data(arg).named_arg.value;
-        return switch (try e.items.evalConst(m, arg, .none)) {
+        return if (a.kind(args[0]) == .named_arg) a.data(args[0]).named_arg.value else args[0];
+    }
+
+    /// The value of `@align` argument `arg`, or null if it is not a comptime
+    /// integer constant. Names does not resolve attribute arguments, so a
+    /// bare identifier is looked up among the module's items here.
+    fn alignValue(e: *Engine, m: ModuleId, arg: Node.Index) Error!?u64 {
+        const a = e.ast(m);
+        const v = if (a.kind(arg) == .ident) blk: {
+            const mod = e.items.im.graph.modules[m];
+            const i = mod.names.get(a.tokenSlice(a.mainToken(arg))) orelse return null;
+            if (mod.items[i].kind != .@"const") return null;
+            break :blk (try e.items.constValue(m, mod.items[i].node, .none)).value;
+        } else try e.items.evalConst(m, arg, .none);
+        return switch (v) {
             .untyped => |c| if (c == .int) c.int.toInt(u64) catch std.math.maxInt(u64) else null,
-            .scalar => |s| s.bits,
+            .scalar => |s| switch (e.items.types.get(s.type)) {
+                .int => s.bits,
+                .simple => |k| if (k == .usize or k == .isize) s.bits else null,
+                else => null,
+            },
             else => null,
         };
     }
 
     /// `@align(n)` among `attrs`, or 0 if absent or invalid.
     fn alignAttr(e: *Engine, m: ModuleId, attrs: []const Node.Index) Error!u32 {
-        const v = try e.alignValue(m, attrs) orelse return 0;
+        const v = try e.alignValue(m, e.alignArg(m, attrs) orelse return 0) orelse return 0;
         return if (validAlign(v)) @intCast(v) else 0;
     }
 
@@ -328,8 +345,8 @@ pub const Engine = struct {
 
     /// Lays out every non-generic struct, enum, alias and distinct type of
     /// the package and reports types over the size limit (E0311) and
-    /// invalid `@align(n)` arguments. A type that is too large only because
-    /// a field's nominal type is (or an array of one) is not reported again.
+    /// invalid `@align(n)` arguments. A type that is too large because a
+    /// declared non-generic type it contains is, is not reported again.
     pub fn check(e: *Engine) Error!void {
         for (e.items.im.graph.modules, 0..) |mod, mi| for (mod.items, 0..) |item, i| {
             const m: ModuleId = @intCast(mi);
@@ -356,20 +373,36 @@ pub const Engine = struct {
     }
 
     fn checkAlign(e: *Engine, m: ModuleId, attrs: []const Node.Index) Error!void {
-        const v = try e.alignValue(m, attrs) orelse return;
-        if (!validAlign(v)) try e.report(m, e.ast(m).mainToken(e.attr(m, attrs, .@"align").?), null, "`@align({d})`: the alignment must be a power of two no greater than {d}", .{ v, max_align });
+        const arg = e.alignArg(m, attrs) orelse return;
+        const tok = e.ast(m).mainToken(e.attr(m, attrs, .@"align").?);
+        const v = try e.alignValue(m, arg) orelse
+            return e.report(m, tok, null, "`@align` argument must be a comptime integer constant", .{});
+        if (!validAlign(v)) try e.report(m, tok, null, "`@align({d})`: the alignment must be a power of two no greater than {d}", .{ v, max_align });
     }
 
     fn checkSize(e: *Engine, m: ModuleId, item: collect.Item, ty: TypeId, parts: []const TypeId) Error!void {
         const l = try e.layoutOf(ty) orelse return;
         if (!l.tooLarge()) return;
-        for (parts) |p| {
-            var t = p;
-            while (e.items.types.get(t) == .array) t = e.items.types.get(t).array.elem;
-            if (e.items.types.get(t) == .nominal and e.items.declRef(t) != null)
-                if (try e.layoutOf(t)) |pl| if (pl.tooLarge()) return;
-        }
+        for (parts) |p| if (try e.reportedElsewhere(p)) return;
         try e.report(m, e.ast(m).mainToken(item.node) + 1, .E0311, "`{s}` is too large: {d} bytes; the maximum type size is 2^48 - 1 bytes", .{ item.name, l.size });
+    }
+
+    /// Whether `ty` is too large because of a type `check` reports itself:
+    /// a non-generic declared type, possibly inside arrays, tuples or
+    /// generic arguments.
+    fn reportedElsewhere(e: *Engine, ty: TypeId) Error!bool {
+        const l = try e.layoutOf(ty) orelse return false;
+        if (!l.tooLarge()) return false;
+        switch (e.items.types.get(ty)) {
+            .array => |a| return e.reportedElsewhere(a.elem),
+            .tuple => |t| for (t.elems) |el| if (try e.reportedElsewhere(el)) return true,
+            .nominal => |n| {
+                if (n.args.len == 0) return e.items.declRef(ty) != null;
+                for (n.args) |a| if (a == .type and try e.reportedElsewhere(a.type)) return true;
+            },
+            else => {},
+        }
+        return false;
     }
 };
 
@@ -624,9 +657,19 @@ test "stable alignment sort, tuples, @align" {
         \\@align(16) struct A { x: u8 }
         \\struct F { a: u8, @align(8) b: bool, c: bool }
         \\@align(3) struct Bad { x: u8 }
+        \\const J: usize = 32;
+        \\const K: usize = 3;
+        \\@align(J) struct ByName { x: u8 }
+        \\@align(K) struct BadName {}
+        \\@align(1.5) struct Float {}
+        \\@align(true) struct Flag {}
+        \\@align(Nope) struct Unknown {}
     );
     defer f.deinit();
-    try f.expectDiags(&.{.{ null, "@align" }});
+    try f.expectDiags(&.{ .{ null, "@align" }, .{ null, "@align" }, .{ null, "@align" }, .{ null, "@align" }, .{ null, "@align" } });
+    for (f.p.sink.finish()[1..], [_][]const u8{ "power of two", "comptime integer", "comptime integer", "comptime integer" }) |d, want|
+        try testing.expect(std.mem.indexOf(u8, d.message, want) != null);
+    try expectLayout(32, 32, try f.of("ByName"));
     const m = try f.of("M");
     try expectLayout(32, 8, m);
     // b, d (align 8), then e (align 4), c (2), a (1).
@@ -697,9 +740,13 @@ test "E0311: types over 2^48 - 1 bytes, reported once" {
         \\struct Edge { a: [281474976710655]u8 }
         \\struct Over { a: [281474976710655]u8, b: u8 }
         \\enum E { a([281474976710656]u8) }
+        \\struct G<T> { a: [281474976710656]T }
+        \\struct UsesG { g: G<u8> }
+        \\struct Wrap<T> { t: T }
+        \\struct UsesWrap { w: Wrap<Huge>, t: (Huge, u8) }
     );
     defer f.deinit();
-    try f.expectDiags(&.{ .{ .E0311, "TooBig" }, .{ .E0311, "D" }, .{ .E0311, "Huge" }, .{ .E0311, "Over" }, .{ .E0311, "E" } });
+    try f.expectDiags(&.{ .{ .E0311, "TooBig" }, .{ .E0311, "D" }, .{ .E0311, "Huge" }, .{ .E0311, "Over" }, .{ .E0311, "E" }, .{ .E0311, "UsesG" } });
     try testing.expect(!(try f.of("Edge")).tooLarge());
     try testing.expect((try f.of("Outer")).tooLarge());
 }
