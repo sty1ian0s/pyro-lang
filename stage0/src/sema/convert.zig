@@ -434,9 +434,11 @@ fn backingFitsPtr(types: *Types, from: TypeId, to: TypeId) bool {
     };
 }
 
-const IntInfo = struct { signedness: std.builtin.Signedness, bits: u8 };
+/// Signedness and width of an integer type.
+pub const IntInfo = struct { signedness: std.builtin.Signedness, bits: u8 };
 
-fn intInfo(types: *Types, ptr_bits: u8, ty: TypeId) ?IntInfo {
+/// The integer shape of `ty` (`usize`/`isize` are `ptr_bits` wide), or null.
+pub fn intInfo(types: *Types, ptr_bits: u8, ty: TypeId) ?IntInfo {
     return switch (ty) {
         .usize => .{ .signedness = .unsigned, .bits = ptr_bits },
         .isize => .{ .signedness = .signed, .bits = ptr_bits },
