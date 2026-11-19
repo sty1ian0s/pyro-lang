@@ -31,6 +31,7 @@ const layout = @import("layout.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const builtins_expr = @import("builtins_expr.zig");
+const comptime_ctx = @import("comptime_ctx.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -756,15 +757,23 @@ fn laneCount(a: *Args) Error!u32 {
     const n = a.nodes[0];
     const v = try check_expr.check(c, n, .none);
     if (v.ty == .err) return 0;
-    // shortcut: only untyped constants count as comptime-known; typed constants wait for the comptime evaluator (T060).
-    const k = v.konst orelse {
-        try c.report(n, .E0801, "the lane count of `@splat` must be a comptime-known integer", .{});
-        return 0;
-    };
-    const lanes: ?u64 = if (k == .int) switch (try convert.convertConst(c.arena, c.types, 64, k, .int(.unsigned, 64))) {
+    const lanes: ?u64 = if (v.konst) |k| (if (k == .int) switch (try convert.convertConst(c.arena, c.types, 64, k, .int(.unsigned, 64))) {
         .ok => |x| x.bits,
         .err => null,
-    } else null;
+    } else null) else blk: {
+        // A typed expression: the lane count is a comptime context (§8.1).
+        // shortcut: the operand was also emitted as dead runtime code above; a call in it would run at runtime too, until the checker can discard code.
+        const cx = comptime_ctx.of(c.items) orelse {
+            try c.report(n, .E0801, "the lane count of `@splat` must be a comptime-known integer", .{});
+            return 0;
+        };
+        const r = try cx.eval(c.items, c.m, n, v.ty) orelse {
+            c.failed = true; // reported, or recorded as unsupported
+            return 0;
+        };
+        // A negative signed count reads as a huge one.
+        break :blk if (r == .scalar and isInt(c, r.scalar.type)) r.scalar.bits else null;
+    };
     if (lanes == null or lanes.? < 1 or lanes.? > 64) {
         try c.report(n, .E0303, "a `vec` has 1 to 64 lanes", .{});
         return 0;
@@ -772,8 +781,8 @@ fn laneCount(a: *Args) Error!u32 {
     return @intCast(lanes.?);
 }
 
-/// Argument `i` is a comptime-known `str` (E0801): a string literal or a
-/// `const`.
+/// Argument `i` is a comptime-known `str` (E0801): a string literal, a
+/// `const`, or another expression evaluated at comptime (§8.1).
 fn comptimeStr(a: *Args, i: usize) Error!void {
     const c = a.c;
     if ((try a.as(i, .str)).ty != .str) return;
@@ -785,8 +794,14 @@ fn comptimeStr(a: *Args, i: usize) Error!void {
             .local => |l| c.ast.kind(l) == .const_decl,
             .global => |t| t == .item and c.items.im.graph.modules[t.item.module].items[t.item.item].kind == .@"const",
         } else false,
-        // shortcut: other constant expressions wait for the comptime evaluator (T060).
-        else => false,
+        // Any other expression is a comptime context (§8.1).
+        else => if (comptime_ctx.of(c.items)) |cx| {
+            if (try cx.eval(c.items, c.m, n, .str) == null) {
+                c.failed = true; // reported, or recorded as unsupported
+                a.ok = false;
+            }
+            return;
+        } else false,
     };
     if (!known) {
         try c.report(a.nodes[i], .E0801, "`{s}` needs a comptime-known string here", .{a.name});

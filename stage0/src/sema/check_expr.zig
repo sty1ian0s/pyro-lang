@@ -27,6 +27,7 @@ const check_index = @import("check_index.zig");
 const builtins = @import("builtins.zig");
 const patterns = @import("patterns.zig");
 const unsafe = @import("unsafe.zig");
+const comptime_ctx = @import("comptime_ctx.zig");
 const tir = @import("../tir/tir.zig");
 const interp_expr = @import("../comptime/interp_expr.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
@@ -74,6 +75,7 @@ const handlers = blk: {
         .{ .labeled, check_stmt.labeled },
         .{ .match, patterns.matchExpr },
         .{ .unsafe_block, unsafe.block },
+        .{ .comptime_block, comptime_ctx.expr },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -81,7 +83,7 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .comptime_block, .comptime_if => "comptime evaluation (T060)",
+        .comptime_if => "`comptime if` (T061)",
         .lambda => "lambdas (T074)",
         .@"for", .for_inline => "`for` loops (T076)",
         .try_op, .array_comp => "`?` and comprehensions (T077)",
@@ -165,7 +167,14 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     };
     switch (e.res) {
         .local => |l| switch (c.ast.kind(l)) {
-            .pat_bind, .pat_bind_mut, .field_pat, .field_pat_mut, .param => return c.load(c.locals.get(l) orelse return c.unsupported(n, "bindings of `for` loops and lambdas (T074, T076)")),
+            .pat_bind, .pat_bind_mut, .field_pat, .field_pat_mut, .param => return c.load(c.locals.get(l) orelse {
+                // Comptime code sees no runtime local of the enclosing function (§8.1).
+                if (c.in_comptime) {
+                    try c.report(n, .E0801, "`{s}` is a runtime value and cannot be used at comptime", .{c.ast.tokenSlice(c.ast.mainToken(n))});
+                    return .err;
+                }
+                return c.unsupported(n, "bindings of `for` loops and lambdas (T074, T076)");
+            }),
             .const_decl => return constValue(c, n, try c.items.constValue(c.m, l, c.self_ty)),
             .generic_param => return c.unsupported(n, "generic value parameters (T064)"),
             else => return c.unsupported(n, "`result` in contracts (T135)"),
@@ -198,10 +207,11 @@ pub fn constValue(c: *Checker, n: Node.Index, k: items_mod.Const) Error!Typed {
         .untyped => |u| .{ .ty = u.typeOf(), .konst = u },
         .scalar => |s| c.constant(s),
         .type => c.unsupported(n, "types as values (T065)"),
+        .computed => |cv| comptime_ctx.use(c, n, cv),
         .unknown => if (k.type == .err) blk: {
             c.failed = true; // reported with the const
             break :blk .err;
-        } else c.unsupported(n, "consts evaluated at comptime (T060)"),
+        } else c.unsupported(n, "values the comptime evaluator could not compute"),
     };
 }
 
@@ -228,7 +238,7 @@ fn prefix(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
         .star => return unsafe.deref(c, n, expected),
         .amp => return unsafe.addrOf(c, n, expected),
         .kw_move => return c.unsupported(n, "`move` (T080)"),
-        else => return c.unsupported(n, "`comptime` expressions (T060)"),
+        else => return comptime_ctx.expr(c, n, expected),
     }
     const v = try check(c, operand, if (op == .bang) .bool else expected);
     if (v.ty == .err or v.ty == .noreturn) return v;

@@ -21,7 +21,7 @@
 //! positions (const initializers, defaults, discriminants, array lengths,
 //! value generic arguments) are folded here when they are literals, consts
 //! and operators on them; anything else goes to `Options.comptime_hook`,
-//! the seam for the full comptime evaluator (T060), and stays `.unknown`
+//! the seam for the comptime evaluator (`comptime_ctx.zig`), and stays `.unknown`
 //! without it.
 //!
 //! Every item is checked lazily, at most once, so items may refer to each
@@ -44,6 +44,7 @@ const prelude = @import("../resolve/prelude.zig");
 const attr_table = @import("../attr_table.zig");
 const type_kinds = @import("kinds.zig");
 const layout_soa = @import("layout_soa.zig");
+const tir = @import("../tir/tir.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -68,10 +69,15 @@ pub const Value = union(enum) {
     scalar: Types.Value,
     /// A type (`const ELEM: type = u32;`).
     type: TypeId,
+    /// Any other value of type `type` computed by the comptime evaluator
+    /// (an array, struct, `str`...): entry `id` of its value table
+    /// (`comptime_ctx.zig`).
+    computed: struct { type: TypeId, id: tir.ComptimeId },
 };
 
 /// Evaluates comptime expressions this file does not fold (calls, literals
-/// of aggregates, strings...). Installed by the comptime driver (T060).
+/// of aggregates, strings...). Installed by the comptime driver
+/// (`comptime_ctx.zig`).
 pub const ComptimeHook = struct {
     ctx: ?*anyopaque = null,
     /// The value of expression `node` of module `m`, where a value of
@@ -796,8 +802,12 @@ pub const Items = struct {
         const gop = try it.mods[m].consts.getOrPut(it.alloc(), n);
         if (gop.found_existing) return switch (gop.value_ptr.state) {
             .done => gop.value_ptr.c,
-            // shortcut: const cycles are reported by the comptime driver (T060).
-            else => .{ .node = n, .name = "", .is_pub = false, .type = .err, .value = .unknown },
+            else => {
+                // The const's value depends on itself (§7.7, §8.1); no A.3 code covers it.
+                const tok = it.ast(m).mainToken(n) + 1;
+                try it.report(m, tok, null, &.{"a `const` cannot depend on its own value, directly or through other consts and calls"}, "cycle in the value of `{s}`", .{identText(it.ast(m), tok)});
+                return .{ .node = n, .name = "", .is_pub = false, .type = .err, .value = .unknown };
+            },
         };
         gop.value_ptr.state = .active;
         const a = it.ast(m);
@@ -1239,6 +1249,7 @@ pub const Items = struct {
                 else => {},
             },
             .type => if (to == .type) return v,
+            .computed => |c| if (c.type == to) return v,
         }
         try it.report(m, tok, .E0310, &.{}, "mismatched types: expected `{s}`, found `{s}`", .{ try it.tyName(to), try it.tyName(from) });
         return .unknown;
@@ -1571,6 +1582,7 @@ fn valueType(v: Value) TypeId {
         .untyped => |c| c.typeOf(),
         .scalar => |s| s.type,
         .type => .type,
+        .computed => |c| c.type,
     };
 }
 

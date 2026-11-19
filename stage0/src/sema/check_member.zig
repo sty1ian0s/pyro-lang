@@ -283,7 +283,7 @@ fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]
             const a = args orelse return check_call.fnOf(c, fa, callee.m, callee.f);
             return check_call.callFn(c, at, callee.m, callee.f, null, a);
         }
-    }
+    } else if (beforeProtos(c, fa)) return failed(c, args);
     try c.reportAt(c.ast.mainToken(fa), null, &.{}, "no member `{s}` in `{s}`", .{ name, try c.tyName(ty) });
     return failed(c, args);
 }
@@ -379,7 +379,7 @@ fn resolve(c: *Checker, fa: Node.Index, ty: TypeId) Error!?Callee {
             return null;
         }
         if (found.len == 1) return asMethod(c, fa, ty, try fromImpl(c, fa, found[0]) orelse return null);
-    }
+    } else if (beforeProtos(c, fa)) return null;
     // 2. UFCS: a free function visible by name whose first parameter accepts `ty`.
     // shortcut: locals do not shadow it here; a local function pointer is not a free function.
     if (c.items.im.lookup(c.m, name)) |t| if (t == .item) switch ((try c.items.info(t.item)).*) {
@@ -418,6 +418,16 @@ fn asMethod(c: *Checker, fa: Node.Index, ty: TypeId, callee: Callee) Error!?Call
     const name = c.ast.tokenSlice(c.ast.mainToken(fa));
     try c.reportAt(c.ast.mainToken(fa), null, &.{try std.fmt.allocPrint(c.arena, "call it on the type: `{s}.{s}(...)`", .{ try c.tyName(ty), name })}, "`{s}` is an associated function of `{s}`, not a method", .{ name, try c.tyName(ty) });
     return null;
+}
+
+/// Whether bodies are checked before protocols (comptime calls during item
+/// checking), where member `fa` may come from an impl not known yet: then
+/// the body stops as unsupported and is checked again later.
+fn beforeProtos(c: *Checker, fa: Node.Index) bool {
+    if (!c.bodies.before_protos) return false;
+    _ = c.unsupported(fa, "impl methods called from comptime code in item positions");
+    if (c.bodies.ids.get(.{ c.m, c.sig.node })) |id| c.bodies.fns.items[id.int()].retry = true;
+    return true;
 }
 
 fn unsupported(c: *Checker, n: Node.Index, what: []const u8) ?Callee {

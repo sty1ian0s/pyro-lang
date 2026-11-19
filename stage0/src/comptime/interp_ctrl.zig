@@ -56,8 +56,12 @@ pub const Error = Allocator.Error || error{
     OverBudget,
 };
 
+/// `Machine.unsupported` after a call to a function whose body has no TIR:
+/// it failed to check, is unsupported, or is still being checked.
+pub const unchecked_callee = "calls to functions whose bodies did not check";
+
 /// Extension points for the budget and E0805 diagnostics (T059) and for
-/// globals and other comptime constants (T060).
+/// globals and other comptime constants (`sema/comptime_ctx.zig`).
 pub const Hooks = struct {
     ctx: *anyopaque,
     /// The value of `.global` or `.@"comptime"` instruction `r` of `func`;
@@ -203,7 +207,7 @@ pub const Machine = struct {
                     m.pop();
                     if (m.frames.items.len == base) return switch (res) {
                         .value => |v| v,
-                        else => m.fail("views returned by a comptime evaluation (T060)"),
+                        else => m.fail("views returned by a comptime evaluation"),
                     };
                     const caller = m.frames.getLast();
                     caller.regs[caller.at().int()] = res;
@@ -249,7 +253,7 @@ pub const Machine = struct {
     // Frames
 
     fn push(m: *Machine, id: tir.FnId, args: []const Reg) (Allocator.Error || error{Unsupported})!void {
-        const func = if (m.bodies.fns.items[id.int()].func) |*fx| fx else return m.fail("calls to functions without checked bodies (T060)");
+        const func = if (m.bodies.fns.items[id.int()].func) |*fx| fx else return m.fail(unchecked_callee);
         const f = try m.gpa.create(Frame);
         errdefer m.gpa.destroy(f);
         const regs = try m.gpa.alloc(Reg, func.insts.len);
@@ -283,7 +287,7 @@ pub const Machine = struct {
     /// The function a `fn_ref` value names.
     fn fnOf(m: *Machine, v: Value) error{Unsupported}!tir.FnId {
         const r = v.data.fn_ref;
-        return m.bodies.ids.get(.{ r.module, r.node }) orelse m.fail("calls to functions without checked bodies (T060)");
+        return m.bodies.ids.get(.{ r.module, r.node }) orelse m.fail("calls through function values to functions never checked");
     }
 
     // -----------------------------------------------------------------------
@@ -523,9 +527,9 @@ pub const Machine = struct {
             },
             .ret => |x| return .{ .ret = if (x.value) |a| f.regs[a.int()] else .{ .value = .{ .ty = .void, .data = .void } } },
 
-            .@"comptime" => if (m.hooks) |h| try h.resolve(h.ctx, m, func, r) else return m.fail("globals and comptime constants in comptime code (T060)"),
+            .@"comptime" => if (m.hooks) |h| try h.resolve(h.ctx, m, func, r) else return m.fail("globals and comptime constants without comptime hooks"),
             .global => {
-                const h = m.hooks orelse return m.fail("globals and comptime constants in comptime code (T060)");
+                const h = m.hooks orelse return m.fail("globals and comptime constants without comptime hooks");
                 const root = try in.arena.create(Reg);
                 root.* = .{ .value = try m.own(try h.resolve(h.ctx, m, func, r)) };
                 out.* = .{ .place = .{ .root = root } };
@@ -950,7 +954,7 @@ test "unsupported operations stop the evaluation without a diagnostic" {
     defer x.deinit();
     x.f.bodies.fns.items[x.id("g").int()].func = null;
     try testing.expectError(error.Unsupported, x.run("h", &.{}));
-    try testing.expectEqualStrings("calls to functions without checked bodies (T060)", x.m.unsupported.?);
+    try testing.expectEqualStrings(unchecked_callee, x.m.unsupported.?);
     try testing.expectEqual(0, x.m.frames.items.len);
     try testing.expect(!x.sink.hasErrors());
 }

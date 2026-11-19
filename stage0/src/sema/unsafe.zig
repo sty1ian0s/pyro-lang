@@ -239,7 +239,7 @@ test "comptime code cannot use `unsafe` (E0805, §8.6)" {
         \\fn f() -> i32 { abs(2) + unsafe { abs(1) } }
     );
     defer f.deinit();
-    // Re-check `f`'s body as comptime code, as T060 does for comptime contexts.
+    // Re-check `f`'s body as comptime code, as `comptime_ctx.zig` does for comptime contexts.
     const sig = (try f.items.info(.{ .module = 0, .item = 1 })).@"fn";
     const arena = f.bodies.arena.allocator();
     var c: Checker = .{

@@ -42,6 +42,7 @@ const check_stmt = @import("check_stmt.zig");
 const kinds_mod = @import("kinds.zig");
 const layout_mod = @import("layout.zig");
 const protocols_mod = @import("protocols.zig");
+const comptime_ctx = @import("comptime_ctx.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -108,12 +109,23 @@ pub const Unsupported = struct {
 /// One checked function body; its index is its `tir.FnId`.
 pub const Body = struct {
     module: ModuleId,
-    /// The `fn_decl` node.
+    /// The `fn_decl` node, or for a thunk the comptime expression.
     node: Node.Index,
     name: []const u8,
     /// Null if the body has an error, is unsupported, or was not checked
     /// (a function only called).
     func: ?tir.Func = null,
+    /// The body was checked (successfully or not), possibly early because
+    /// comptime code calls it (`comptime_ctx.zig`).
+    checked: bool = false,
+    /// A comptime *thunk*, named "comptime": a comptime expression checked
+    /// as a parameterless function to run on the interpreter, not a
+    /// function of the program. Lowering to P-IR and lookups by name must
+    /// skip it.
+    thunk: bool = false,
+    /// Checked before protocols (`Bodies.before_protos`) and stopped at a
+    /// method call an impl may provide; `checkBodies` checks it again.
+    retry: bool = false,
 };
 
 /// The checked bodies of one package.
@@ -128,6 +140,17 @@ pub const Bodies = struct {
     /// The package's protocols and impls, for method resolution (§6.3.3);
     /// null when bodies are checked without them.
     protos: ?*protocols_mod.Protocols = null,
+    /// Bodies are checked for comptime calls during item checking, before
+    /// protocols exist: a method lookup that finds nothing is unsupported,
+    /// not an error, and the body is marked `retry`.
+    before_protos: bool = false,
+
+    /// No bodies yet; memory from `gpa`.
+    pub fn init(gpa: Allocator) Error!Bodies {
+        const arena = try gpa.create(std.heap.ArenaAllocator);
+        arena.* = .init(gpa);
+        return .{ .arena = arena };
+    }
 
     pub fn deinit(bs: *Bodies) void {
         const gpa = bs.arena.child_allocator;
@@ -149,7 +172,7 @@ pub const Bodies = struct {
 
     /// The body of function `name` of module `m`, if it was checked.
     pub fn find(bs: *const Bodies, m: ModuleId, name: []const u8) ?*const Body {
-        for (bs.fns.items) |*b| if (b.module == m and std.mem.eql(u8, b.name, name)) return b;
+        for (bs.fns.items) |*b| if (!b.thunk and b.module == m and std.mem.eql(u8, b.name, name)) return b;
         return null;
     }
 };
@@ -175,7 +198,7 @@ pub const Checker = struct {
     loops: std.ArrayList(Loop) = .empty,
     /// Inside an `unsafe` block (§12.1).
     in_unsafe: bool = false,
-    /// Checking comptime code (§8.6); set by comptime evaluation (T060).
+    /// Checking comptime code (§8.6); set by comptime evaluation (`comptime_ctx.zig`).
     in_comptime: bool = false,
     /// An error was reported or a construct is unsupported: nothing more is
     /// emitted and the body gets no TIR.
@@ -475,10 +498,23 @@ fn closingBrace(ast: *const Ast, open: Ast.TokenIndex) Ast.TokenIndex {
 /// `protos`, if given, supplies the `impl` blocks whose methods are checked;
 /// without it they are recorded as unsupported.
 pub fn checkBodies(gpa: Allocator, it: *Items, protos: ?*protocols_mod.Protocols) Error!Bodies {
-    const arena = try gpa.create(std.heap.ArenaAllocator);
-    arena.* = .init(gpa);
-    var bs: Bodies = .{ .arena = arena, .protos = protos };
+    // Bodies already checked for comptime calls are kept, and comptime
+    // evaluation during this pass checks into `bs` (§8.1).
+    const cx = comptime_ctx.of(it);
+    var bs: Bodies = if (cx) |x| try x.takeBodies() else try .init(gpa);
     errdefer bs.deinit();
+    bs.protos = protos;
+    if (bs.before_protos) {
+        bs.before_protos = false;
+        // shortcut: an error the first check reported before stopping is reported again.
+        for (bs.fns.items) |*b| if (b.retry) {
+            b.* = .{ .module = b.module, .node = b.node, .name = b.name };
+        };
+    }
+    if (cx) |x| x.shared = &bs;
+    defer if (cx) |x| {
+        x.shared = null;
+    };
     for (it.im.graph.modules, 0..) |cm, mi| {
         const m: ModuleId = @intCast(mi);
         for (cm.items, 0..) |item, i| switch ((try it.info(.{ .module = m, .item = @intCast(i) })).*) {
@@ -501,8 +537,11 @@ pub fn checkBodies(gpa: Allocator, it: *Items, protos: ?*protocols_mod.Protocols
             const inner = if (cm.ast.kind(n) == .attributed) cm.ast.data(n).attributed.inner else n;
             switch (cm.ast.kind(inner)) {
                 .impl_decl => if (protos == null) try unsupportedBodies(&bs, cm.ast, m, inner, "`impl` methods (T044)"),
-                .comptime_block => if (bs.unsupported == null) {
-                    bs.unsupported = .{ .module = m, .node = inner, .what = "comptime blocks (T060)" };
+                // Evaluated for its effects (§8.5); failures are reported by the evaluator.
+                .comptime_block => if (cx == null) {
+                    if (bs.unsupported == null) bs.unsupported = .{ .module = m, .node = inner, .what = "comptime blocks without an evaluator" };
+                } else {
+                    _ = try it.evalConst(m, inner, .none);
                 },
                 else => {},
             }
@@ -528,17 +567,19 @@ pub fn checkBodies(gpa: Allocator, it: *Items, protos: ?*protocols_mod.Protocols
 /// item checking left to the comptime evaluator as unsupported.
 fn comptimeValue(bs: *Bodies, m: ModuleId, node: Node.Index, v: items_mod.Value, ty: TypeId) void {
     if (v == .unknown and ty != .err and bs.unsupported == null)
-        bs.unsupported = .{ .module = m, .node = node, .what = "values computed at comptime (T060)" };
+        bs.unsupported = .{ .module = m, .node = node, .what = "values the comptime evaluator could not compute" };
 }
 
-/// Checks function `f` if it has a body. Generic bodies are checked per
-/// instantiation (T070).
-fn checkDecl(bs: *Bodies, it: *Items, m: ModuleId, f: items_mod.Fn, self_ty: TypeId, type_generics: []const TypeId) Error!void {
+/// Checks function `f` if it has a body, unless it was checked already.
+/// Generic bodies are checked per instantiation (T070).
+pub fn checkDecl(bs: *Bodies, it: *Items, m: ModuleId, f: items_mod.Fn, self_ty: TypeId, type_generics: []const TypeId) Error!void {
+    if (bs.ids.get(.{ m, f.node })) |id| if (bs.fns.items[id.int()].checked) return;
     try @import("check_call.zig").checkSignature(it, m, f);
     for (f.params) |p| if (p.default) |v| comptimeValue(bs, m, p.node, v, p.type);
     const ast = it.im.graph.modules[m].ast;
     if (ast.data(f.node).fn_decl.body == null) return;
     const id = try bs.fnId(m, f.node, f.name);
+    bs.fns.items[id.int()].checked = true;
     if (f.generics.len > 0 or type_generics.len > 0) {
         if (bs.unsupported == null) bs.unsupported = .{ .module = m, .node = f.node, .what = "generic function bodies (T070)" };
         return;
@@ -588,7 +629,9 @@ pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
         var types: Types = try .init(comp.gpa, comp.io, &comp.interner);
         defer types.deinit();
         const pkg: Types.Package = .{ .name = try comp.interner.intern(name), .line = .{ .major = 0 } };
-        var it = try items_mod.check(comp.gpa, &comp.sink, &types, &im, &names, .{ .package = pkg });
+        var cx: comptime_ctx.Ctx = .init(comp.gpa);
+        defer cx.deinit();
+        var it = try items_mod.check(comp.gpa, &comp.sink, &types, &im, &names, .{ .package = pkg, .comptime_hook = cx.hook() });
         defer it.deinit();
         try kinds_mod.check(&it);
         var lay: layout_mod.Engine = .init(comp.gpa, &it);
