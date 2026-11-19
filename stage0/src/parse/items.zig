@@ -9,7 +9,8 @@
 //!
 //! These checks report and parsing continues, so they never cause a
 //! recovery. Grammar errors inside an item body propagate to the item loop,
-//! whose recovery skips the whole item (one error per broken item).
+//! whose recovery skips the whole item (one error per broken item); inside
+//! a block they are recovered per statement (`stmt.zig`).
 
 const std = @import("std");
 const Parser = @import("Parser.zig");
@@ -69,7 +70,7 @@ pub fn docsThenEnd(p: *Parser, end: TokenKind) std.mem.Allocator.Error!bool {
 /// Consumes doc comments and returns the first of the trailing `///` run,
 /// which documents what follows. A `//!` here is past the module-doc
 /// position (§2.8, §3.2), so it and the `///` before it get W0101.
-fn eatDocs(p: *Parser) std.mem.Allocator.Error!?TokenIndex {
+pub fn eatDocs(p: *Parser) std.mem.Allocator.Error!?TokenIndex {
     var run: ?TokenIndex = null;
     while (p.eat(.doc_comment)) |t| {
         if (run == null) run = t;
@@ -82,7 +83,7 @@ fn eatDocs(p: *Parser) std.mem.Allocator.Error!?TokenIndex {
 }
 
 /// W0101 over doc comment tokens `[first, last]`.
-fn reportNothing(p: *Parser, first: TokenIndex, last: TokenIndex, help: []const u8) std.mem.Allocator.Error!void {
+pub fn reportNothing(p: *Parser, first: TokenIndex, last: TokenIndex, help: []const u8) std.mem.Allocator.Error!void {
     try report(p, .W0101, .{
         .file = p.file,
         .start = p.tokenSpan(first).start,
@@ -249,7 +250,7 @@ fn parsePath(p: *Parser) Error!Node.Index {
 // Attributes
 
 /// Parses `attribute*`, pushing the `attribute` nodes onto `scratch`.
-fn parseAttrs(p: *Parser) Error!void {
+pub fn parseAttrs(p: *Parser) Error!void {
     while (p.eat(.builtin)) |t| {
         const top = p.scratch.items.len; // callers shrink on error
         const has_args = p.eat(.l_paren) != null;
@@ -275,7 +276,7 @@ fn parseAttrArg(p: *Parser) Error!Node.Index {
 
 /// Wraps `inner` in `attributed` if attributes were pushed onto `scratch`
 /// above `top`, and pops them.
-fn wrap(p: *Parser, top: usize, inner: Node.Index) Error!Node.Index {
+pub fn wrap(p: *Parser, top: usize, inner: Node.Index) Error!Node.Index {
     defer p.scratch.shrinkRetainingCapacity(top);
     const attrs = p.scratch.items[top..];
     if (attrs.len == 0) return inner;
@@ -613,8 +614,6 @@ fn expectDiags(src: []const u8, expected: []const Expected) !void {
     try testing.expectEqualSlices(Expected, expected, got.items);
 }
 
-// Goldens print blocks as the T025 stub leaves them: empty.
-
 test "golden: use" {
     try expectDump(
         \\use std.math;
@@ -734,7 +733,7 @@ test "golden: fn with attributes, generics, modes and defaults" {
         \\      last=T)
         \\    body=(block {
         \\      stmts=[]
-        \\      tail=_)))
+        \\      tail=(ident a))))
         \\(fn_decl fn g
         \\  generics=_
         \\  params=[]
@@ -793,7 +792,8 @@ test "golden: struct" {
         \\        last=T)
         \\      body=(block {
         \\        stmts=[]
-        \\        tail=_))
+        \\        tail=(field_access x
+        \\          lhs=(self_value self))))
         \\    (attributed @inline
         \\      attrs=[
         \\        (attribute @inline
@@ -871,7 +871,7 @@ test "golden: enum" {
         \\        last=T)
         \\      body=(block {
         \\        stmts=[]
-        \\        tail=_))])
+        \\        tail=(int_lit 0)))])
         \\(enum_decl enum Dir
         \\  generics=_
         \\  backing=_
@@ -922,7 +922,7 @@ test "golden: protocol and impl" {
         \\        last=String)
         \\      body=(block {
         \\        stmts=[]
-        \\        tail=_))
+        \\        tail=(string_lit "")))
         \\    (const_decl const K
         \\      ty=(path u32
         \\        last=u32)
@@ -952,7 +952,7 @@ test "golden: protocol and impl" {
         \\        last=String)
         \\      body=(block {
         \\        stmts=[]
-        \\        tail=_))])
+        \\        tail=(string_lit "")))])
         \\
     );
 }
@@ -995,7 +995,13 @@ test "golden: extern and comptime" {
         \\        body=_))])
         \\(comptime_block comptime
         \\  body=(block {
-        \\    stmts=[]
+        \\    stmts=[
+        \\      (call (
+        \\        callee=(ident assert)
+        \\        args=[
+        \\          (binary >
+        \\            lhs=(ident N)
+        \\            rhs=(int_lit 0))])]
         \\    tail=_))
         \\
     );

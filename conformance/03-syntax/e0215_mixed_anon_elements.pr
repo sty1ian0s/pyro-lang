@@ -1,4 +1,3 @@
-//@ expected-fail: T023
 // §3.8: a `.{…}` literal is all named or all positional.
 fn f(x: i32) {
     let a = .{ x: 1, 2 }; //~ E0215

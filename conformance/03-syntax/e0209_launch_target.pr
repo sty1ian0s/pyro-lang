@@ -1,4 +1,3 @@
-//@ expected-fail: T025
 // §3.5: the identifier after `launch` must be `gpu` or `cpu`.
 fn kernel(mut xs: []f32) {}
 
