@@ -27,6 +27,7 @@ const convert = @import("convert.zig");
 const items_mod = @import("items.zig");
 const kinds = @import("kinds.zig");
 const emit_tir = @import("emit_tir.zig");
+const attrs_mod = @import("attrs.zig");
 const check_expr = @import("check_expr.zig");
 const check_stmt = @import("check_stmt.zig");
 const check_call = @import("check_call.zig");
@@ -264,10 +265,12 @@ fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]
     const outside = ref.module != c.m;
     if (args == null) for (consts) |k| if (std.mem.eql(u8, k.name, name)) {
         if (outside and !k.is_pub) return private(c, fa, "constant", name, ty, null);
+        try warnDeprecated(c, fa, ref.module, c.items.attrsOf(ref.module, k.node));
         return check_expr.constValue(c, fa, k);
     };
     for (methods) |f| if (std.mem.eql(u8, f.name, name)) {
         if (outside and !f.is_pub) return private(c, fa, "function", name, ty, args);
+        try warnDeprecated(c, fa, ref.module, f.attrs);
         const a = args orelse return check_call.fnOf(c, fa, ref.module, f);
         return check_call.callFn(c, at, ref.module, f, null, a);
     };
@@ -280,12 +283,22 @@ fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]
         }
         if (found.len == 1) {
             const callee = try fromImpl(c, fa, found[0]) orelse return failed(c, args);
+            try warnDeprecated(c, fa, callee.m, callee.f.attrs);
             const a = args orelse return check_call.fnOf(c, fa, callee.m, callee.f);
             return check_call.callFn(c, at, callee.m, callee.f, null, a);
         }
     } else if (beforeProtos(c, fa)) return failed(c, args);
     try c.reportAt(c.ast.mainToken(fa), null, &.{}, "no member `{s}` in `{s}`", .{ name, try c.tyName(ty) });
     return failed(c, args);
+}
+
+/// W0802 at member `fa` if `attrs`, its declaration's attributes in module
+/// `m`, mark it `@deprecated` (§8.8).
+fn warnDeprecated(c: *Checker, fa: Node.Index, m: ModuleId, attrs: []const Node.Index) Error!void {
+    const da = c.items.im.graph.modules[m].ast;
+    const at = attrs_mod.deprecated(da, attrs) orelse return;
+    const help: []const []const u8 = if (attrs_mod.deprecationNote(da, at)) |note| &.{note} else &.{};
+    try c.reportAt(c.ast.mainToken(fa), .W0802, help, "`{s}` is deprecated", .{c.ast.tokenSlice(c.ast.mainToken(fa))});
 }
 
 fn private(c: *Checker, fa: Node.Index, what: []const u8, name: []const u8, ty: TypeId, args: ?[]const Node.Index) Error!Typed {
@@ -311,6 +324,7 @@ fn protocolCall(c: *Checker, fa: Node.Index, at: Node.Index, proto: TypeId, args
     for (try protos.findMethods(c.m, r.ty, name)) |mr| if (mr.protocol == proto) {
         const impl = try fromImpl(c, fa, mr) orelse return failed(c, args[1..]);
         const callee = try asMethod(c, fa, r.ty, impl) orelse return failed(c, args[1..]);
+        try warnDeprecated(c, fa, callee.m, callee.f.attrs);
         return methodCall(c, at, callee, r, args[1..]);
     };
     try c.reportAt(c.ast.mainToken(fa), null, &.{}, "`{s}` has no method `{s}` from `{s}`", .{ try c.tyName(r.ty), name, try c.tyName(proto) });
@@ -329,6 +343,7 @@ pub fn call(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     const r = try receiver(c, lhs);
     if (r.ty == .err or r.ty == .noreturn) return failedAfter(c, r, d.args);
     const callee = try resolve(c, d.callee, r.ty) orelse return failed(c, d.args);
+    try warnDeprecated(c, d.callee, callee.m, callee.f.attrs);
     return methodCall(c, n, callee, r, d.args);
 }
 

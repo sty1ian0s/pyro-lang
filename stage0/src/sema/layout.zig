@@ -304,11 +304,7 @@ pub const Engine = struct {
 
     /// The argument of `@align(n)` among `attrs`, if written.
     fn alignArg(e: *Engine, m: ModuleId, attrs: []const Node.Index) ?Node.Index {
-        const a = e.ast(m);
-        const n = e.attr(m, attrs, .@"align") orelse return null;
-        const args = a.data(n).attribute.args orelse return null;
-        if (args.len == 0) return null;
-        return if (a.kind(args[0]) == .named_arg) a.data(args[0]).named_arg.value else args[0];
+        return attrs_mod.arg(e.ast(m), e.attr(m, attrs, .@"align") orelse return null, "n");
     }
 
     /// `@align(n)` among `attrs`, or 0 if absent or invalid.
