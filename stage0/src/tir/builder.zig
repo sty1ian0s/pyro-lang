@@ -74,6 +74,8 @@ pub const Builder = struct {
     }
 
     fn append(b: *Builder, blk: Block, ty: TypeId, d: tir.Data) Allocator.Error!Ref {
+        // Untyped constants are folded by checking (see `tir.Data.int`).
+        std.debug.assert(!((d == .int or d == .float) and (ty == .untyped_int or ty == .untyped_float)));
         const s = try tir.encode(b.arena, &b.extra, d);
         try b.insts.append(b.arena, .{ .op = std.meta.activeTag(d), .ty = ty, .node = b.node, .a = s.a, .b = s.b });
         const r: Ref = .from(b.insts.len - 1);

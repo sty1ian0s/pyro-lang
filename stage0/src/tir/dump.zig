@@ -20,7 +20,8 @@
 //!   later markers refer to them. Operands follow `Data` field order: `%N`
 //!   (or `_` when absent), `bN`, `lN`, `@N` function, `gN` global, `#N`
 //!   builtin, `$N` comptime value, a type, a quoted string, a number, `[...]`
-//!   for a list. `int` prints signed or unsigned by its type, `float` as f64.
+//!   for a list. `int` prints signed or unsigned by its type (a distinct type
+//!   by its underlying type; untyped constants never reach TIR), `float` as f64.
 //!
 //! The output depends only on the function and the type table's spellings.
 
@@ -109,10 +110,13 @@ fn inst(f: *const Func, types: *Types, r: Ref, w: *Writer) Writer.Error!void {
     try w.writeByte('\n');
 }
 
+/// Whether `int` constants of `ty` print signed; distinct types (§4.7) use
+/// their underlying type.
 fn isSigned(types: *Types, ty: tir.TypeId) bool {
     return switch (types.get(ty)) {
         .int => |i| i.signedness == .signed,
-        .simple => |s| s == .isize or s == .untyped_int,
+        .simple => |s| s == .isize,
+        .nominal => |n| n.kind == .distinct and isSigned(types, n.underlying),
         else => false,
     };
 }
@@ -163,12 +167,19 @@ const Ctx = struct {
     vec2: TypeId,
     mut_vec2: TypeId,
     shape: TypeId,
+    /// `type Meters = distinct i32;`
+    meters: TypeId,
+    /// `fn(i32)`
+    fn_i32: TypeId,
+    /// `fn(Meters) -> Meters`
+    fn_meters: TypeId,
     a: StrId,
     b: StrId,
     n: StrId,
     s: StrId,
     i: StrId,
     v: StrId,
+    fp: StrId,
 };
 
 const Fixture = struct {
@@ -181,6 +192,7 @@ const Fixture = struct {
         fx.types = try .init(testing.allocator, testing.io, &fx.strings);
         const pkg: Types.Package = .{ .name = try fx.strings.intern("app"), .line = .{ .major = 1 } };
         const vec2 = try fx.types.intern(.{ .nominal = .{ .decl = .{ .package = pkg, .index = 0 }, .kind = .@"struct", .name = try fx.strings.intern("Vec2") } });
+        const meters = try fx.types.intern(.{ .nominal = .{ .decl = .{ .package = pkg, .index = 2 }, .kind = .distinct, .name = try fx.strings.intern("Meters"), .underlying = i32_ } });
         fx.ctx = .{
             .vec2 = vec2,
             .mut_vec2 = try fx.types.intern(.{ .mut_view = .{ .elem = vec2 } }),
@@ -191,6 +203,10 @@ const Fixture = struct {
             .s = try fx.strings.intern("s"),
             .i = try fx.strings.intern("i"),
             .v = try fx.strings.intern("v"),
+            .fp = try fx.strings.intern("fp"),
+            .meters = meters,
+            .fn_i32 = try fx.types.intern(.{ .fn_ptr = .{ .params = &.{.{ .type = i32_ }}, .ret = .void } }),
+            .fn_meters = try fx.types.intern(.{ .fn_ptr = .{ .params = &.{.{ .type = meters }}, .ret = meters } }),
         };
     }
 
@@ -470,6 +486,85 @@ const area_golden =
     \\
 ;
 
+/// ```
+/// fn crew(n: i32, fp: fn(i32)) {
+///     nursery { defer log(n); spawn work(n); spawn fp(n); }
+/// }
+/// ```
+/// with `work` = @1 and `log` = @2. The join comes before the body's defers.
+fn buildCrew(arena: Allocator, c: Ctx) !Func {
+    var b: Builder = .init(arena, .void);
+    const n = try b.addParam(c.n, i32_, .param);
+    const fp = try b.addParam(c.fp, c.fn_i32, .param);
+    const entry = try b.addBlock();
+    const defer_body = try b.addBlock();
+
+    b.setBlock(entry);
+    const scope = try b.add(.void, .{ .scope_begin = .{} });
+    const nursery = try b.add(.void, .{ .nursery_begin = .{} });
+    _ = try b.add(.void, .{ .@"defer" = .{ .scope = scope, .body = defer_body } });
+    _ = try b.add(.void, .{ .spawn = .{ .nursery = nursery, .callee = .from(1), .args = &.{try loadLocal(&b, n, i32_)} } });
+    const f = try loadLocal(&b, fp, c.fn_i32);
+    _ = try b.add(.void, .{ .spawn_indirect = .{ .nursery = nursery, .callee = f, .args = &.{try loadLocal(&b, n, i32_)} } });
+    _ = try b.add(.void, .{ .nursery_end = .{ .nursery = nursery } });
+    _ = try b.add(.void, .{ .scope_end = .{ .scope = scope } });
+    _ = try b.add(.void, .{ .ret = .{ .value = null } });
+
+    b.setBlock(defer_body);
+    _ = try b.add(.void, .{ .call = .{ .callee = .from(2), .args = &.{try loadLocal(&b, n, i32_)} } });
+    _ = try b.add(.void, .{ .defer_end = .{} });
+    return b.finish();
+}
+
+const crew_golden =
+    \\fn crew(l0 n: i32, l1 fp: fn(i32)) -> void {
+    \\b0:
+    \\  %0 = scope_begin
+    \\  %1 = nursery_begin
+    \\  defer %0, b1
+    \\  %3: i32 = local l0
+    \\  %4: i32 = load %3
+    \\  spawn %1, @1, [%4]
+    \\  %6: fn(i32) = local l1
+    \\  %7: fn(i32) = load %6
+    \\  %8: i32 = local l0
+    \\  %9: i32 = load %8
+    \\  spawn_indirect %1, %7, [%9]
+    \\  nursery_end %1
+    \\  scope_end %0
+    \\  ret _
+    \\b1:
+    \\  %14: i32 = local l0
+    \\  %15: i32 = load %14
+    \\  call @2, [%15]
+    \\  defer_end
+    \\}
+    \\
+;
+
+/// `fn relay(fp: fn(Meters) -> Meters) -> Meters { return tail fp(-1); }`
+/// (the untyped `-1` folded to `Meters`, a distinct `i32`).
+fn buildRelay(arena: Allocator, c: Ctx) !Func {
+    var b: Builder = .init(arena, c.meters);
+    const fp = try b.addParam(c.fp, c.fn_meters, .param);
+    b.setBlock(try b.addBlock());
+    const f = try loadLocal(&b, fp, c.fn_meters);
+    const k = try b.add(c.meters, .{ .int = .{ .value = @bitCast(@as(i64, -1)) } });
+    _ = try b.add(.void, .{ .ret_tail_indirect = .{ .callee = f, .args = &.{k} } });
+    return b.finish();
+}
+
+const relay_golden =
+    \\fn relay(l0 fp: fn(Meters) -> Meters) -> Meters {
+    \\b0:
+    \\  %0: fn(Meters) -> Meters = local l0
+    \\  %1: fn(Meters) -> Meters = load %0
+    \\  %2: Meters = int -1
+    \\  ret_tail_indirect %1, [%2]
+    \\}
+    \\
+;
+
 const Golden = struct {
     name: []const u8,
     build: *const fn (Allocator, Ctx) anyerror!Func,
@@ -482,6 +577,8 @@ const goldens = [_]Golden{
     .{ .name = "sum", .build = buildSum, .text = sum_golden },
     .{ .name = "nudge", .build = buildNudge, .text = nudge_golden },
     .{ .name = "area", .build = buildArea, .text = area_golden },
+    .{ .name = "crew", .build = buildCrew, .text = crew_golden },
+    .{ .name = "relay", .build = buildRelay, .text = relay_golden },
 };
 
 fn dumpAlloc(gpa: Allocator, f: *const Func, types: *Types, name: []const u8) ![]u8 {
@@ -491,7 +588,7 @@ fn dumpAlloc(gpa: Allocator, f: *const Func, types: *Types, name: []const u8) ![
     return out.toOwnedSlice();
 }
 
-test "hand-built TIR golden dumps: arith, if, loop, call+field+defer, enum match" {
+test "hand-built TIR golden dumps: arith, if, loop, call+field+defer, enum match, nursery, indirect tail call" {
     var fx: Fixture = undefined;
     try fx.init();
     defer fx.deinit();

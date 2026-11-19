@@ -30,6 +30,16 @@
 //!   and before each `return`, `break`, `continue` and `?` that leaves it,
 //!   innermost first). Defer expansion (T078) clones the registered bodies at
 //!   each `scope_end` in LIFO order.
+//! - A `nursery` body is a scope too. On every route out of it, its
+//!   `nursery_end` (the join) comes *before* the `scope_end` of the body's
+//!   scope, so spawned tasks finish before the body's defers run (§10.2
+//!   item 3).
+//! - Untyped constants (§4.8) never appear as `int`/`float`: they have
+//!   arbitrary precision (integers) or are exact rationals (floats), which
+//!   64 bits cannot hold. Checking (T043) folds them where they meet a typed
+//!   context (deciding E0306 on the exact value) and emits a typed `int` or
+//!   `float`; a constant that stays untyped (a `const` initializer, §7) is a
+//!   `comptime` value.
 //!
 //! The payload of each opcode is declared once, as the matching field of
 //! `Data`, and encoded generically like the AST (B.3):
@@ -189,6 +199,7 @@ pub const Op = enum(u8) {
 
     nursery_begin,
     spawn,
+    spawn_indirect,
     nursery_end,
     pfor_begin,
     pfor_end,
@@ -204,6 +215,7 @@ pub const Op = enum(u8) {
     switch_br,
     ret,
     ret_tail,
+    ret_tail_indirect,
     @"unreachable",
     defer_end,
 
@@ -233,11 +245,14 @@ const Cases = []const Case;
 pub const Data = union(Op) {
     // Constants and values.
 
-    /// Integer, `bool` (0/1) or payload-free enum discriminant; bits are
-    /// two's complement. ty: the integer, `bool`, enum or `untyped_int` type.
+    /// Integer, `bool` (0/1) or payload-free enum discriminant, truncated
+    /// to the width of ty and stored zero- or sign-extended to 64 bits as ty
+    /// is unsigned or signed; signedness of a distinct type is its
+    /// underlying type's. ty: a typed integer, `bool`, enum, or distinct
+    /// type over one; never `untyped_int` (see the file doc).
     int: struct { value: u64 },
     /// Float constant as `f64` bits (an `f32` constant is exact in `f64`).
-    /// ty: `f32`, `f64` or `untyped_float`.
+    /// ty: `f32`, `f64` or a distinct type over one; never `untyped_float`.
     float: struct { bits: u64 },
     /// String literal (§5.4: origin `static`). ty: `str`.
     str: struct { string: StrId },
@@ -370,8 +385,12 @@ pub const Data = union(Op) {
     nursery_begin: struct {},
     /// `spawn callee(args)` inside `nursery`. ty: `void`.
     spawn: struct { nursery: R, callee: FnId, args: L },
+    /// `spawn` through a function-pointer value `callee` (§10.2 item 1
+    /// evaluates `f`). ty: `void`.
+    spawn_indirect: struct { nursery: R, callee: R, args: L },
     /// End of the nursery body: joins every task spawned in it. Emitted on
-    /// every route out of the body, like `scope_end`.
+    /// every route out of the body, like `scope_end`, and always before the
+    /// `scope_end` of the body's own scope (§10.2 item 3: join, then defers).
     nursery_end: struct { nursery: R },
     /// Starts a `parallel_for` body over indices `lo..hi`; yields the
     /// iteration index. The body runs from here to `pfor_end`.
@@ -407,6 +426,8 @@ pub const Data = union(Op) {
     ret: struct { value: OR },
     /// `return tail callee(args)` (§6.9): the frame is reused.
     ret_tail: struct { callee: FnId, args: L },
+    /// `return tail` through a function-pointer value `callee` (§6.9).
+    ret_tail_indirect: struct { callee: R, args: L },
     /// Control never reaches here (after `noreturn` calls and traps).
     @"unreachable": struct {},
     /// End of a `defer`/`errdefer` body region.
@@ -579,6 +600,7 @@ test "instruction rows are small and pointer-free" {
         try testing.expect(comptime slotCount(P) <= 4);
     }
     try testing.expect(Op.ret.isTerminator() and Op.defer_end.isTerminator() and !Op.@"defer".isTerminator());
+    try testing.expect(Op.ret_tail_indirect.isTerminator() and !Op.spawn_indirect.isTerminator());
     try testing.expect(Op.local.isPlace() and Op.variant_field.isPlace() and !Op.load.isPlace());
 }
 
