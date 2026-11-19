@@ -28,6 +28,7 @@ const kinds = @import("kinds.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_literals = @import("check_literals.zig");
+const check_index = @import("check_index.zig");
 const builtins = @import("builtins.zig");
 const tir = @import("../tir/tir.zig");
 const module_graph = @import("../resolve/module_graph.zig");
@@ -210,15 +211,14 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
             _ = try check_expr.check(c, value, .none);
             return .err;
         }
-        const l = try mutPlace(c, a, value) orelse return .err;
-        const ty = c.b.locals.items(.ty)[l.int()];
-        if (ty != p.type and ty != .err and p.type != .err) {
-            try c.mismatch(value, p.type, ty);
+        const place = try mutPlace(c, a, value) orelse return .err;
+        if (place.ty == .noreturn) return .never;
+        if (place.ty != p.type and p.type != .err) {
+            try c.mismatch(value, p.type, place.ty);
             return .err;
         }
-        const place = try c.emit(ty, .{ .local = .{ .local = l } });
-        const view = try c.types.intern(.{ .mut_view = .{ .elem = ty } });
-        return .{ .ty = view, .ref = try c.emit(view, .{ .view_mut = .{ .place = place } }) };
+        const view = try c.types.intern(.{ .mut_view = .{ .elem = place.ty } });
+        return .{ .ty = view, .ref = try c.emit(view, .{ .view_mut = .{ .place = place.ref } }) };
     }
     if (marked) try c.reportAt(ast.mainToken(a), .E0335, &.{"remove `mut`: the parameter is read-only"}, "`mut` given for read-only parameter{s}", .{try paramName(c, p)});
     if (p.mode == .@"comptime") if (c.items.runtimeRef(c.m, value)) |r| {
@@ -258,7 +258,7 @@ fn paramName(c: *Checker, p: Param) Error![]const u8 {
 
 /// The local that place expression `n` names (a binding, a parameter or
 /// `self`, possibly parenthesized), or null.
-fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
+pub fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
     switch (c.ast.kind(n)) {
         .paren => return localOf(c, c.ast.data(n).paren.inner),
         .self_value => return c.self_local.unwrap(),
@@ -277,14 +277,15 @@ fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
 }
 
 /// The mutable place `value` of `mut` argument `a` names (§5.5.2): a
-/// `let mut` binding, a `mut` parameter or `mut self`; E0336 otherwise.
-fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?tir.Local {
+/// `let mut` binding, a `mut` parameter or `mut self`, or an element or
+/// slice of one (§6.5.4); E0336 otherwise.
+fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?check_index.Place {
     const ast = c.ast;
     var v = value;
     while (ast.kind(v) == .paren) v = ast.data(v).paren.inner;
     switch (ast.kind(v)) {
-        .field_access, .index => {
-            _ = c.unsupported(v, "`mut` arguments of fields and elements (T050, T051)");
+        .field_access => {
+            _ = c.unsupported(v, "`mut` arguments of fields (T050)");
             return null;
         },
         // `*p` names a place through a raw pointer; other prefix forms are values.
@@ -299,18 +300,22 @@ fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?tir.Local {
         else => {},
     }
     const help: []const []const u8 = &.{"pass a `let mut` binding, a `mut` parameter, or a field or element of one"};
-    const l = localOf(c, v) orelse {
+    if (ast.kind(v) != .index and localOf(c, v) == null) {
         try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
         return null;
-    };
-    const info = c.b.locals.get(l.int());
-    switch (info.kind) {
-        .let_mut, .param_mut, .temp => return l,
-        .let, .param, .param_move => {
+    }
+    const p = try check_index.place(c, v);
+    if (p.ty == .err) return null;
+    if (p.mutable or p.ty == .noreturn) return p;
+    if (p.root != .none) {
+        const info = c.b.locals.get(p.root.int());
+        if (info.kind == .let or info.kind == .param or info.kind == .param_move) {
             try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place: `{s}` is not mutable", .{c.types.strings.get(info.name)});
             return null;
-        },
+        }
     }
+    try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
+    return null;
 }
 
 /// Default value `v` of a parameter of type `ty` at call `n` (§7.2.3).
@@ -662,7 +667,7 @@ test "`move` arguments are unsupported until T080" {
 
 test "`mut` arguments: parenthesized fields are unsupported, values are E0336" {
     for ([_]struct { []const u8, ?diag.DiagCode, ?[]const u8 }{
-        .{ "heal(mut (p.health), 1);", null, "`mut` arguments of fields and elements (T050, T051)" },
+        .{ "heal(mut (p.health), 1);", null, "`mut` arguments of fields (T050)" },
         .{ "heal(mut ((q)), 1);", null, null },
         .{ "heal(mut -q, 1);", .E0336, null },
         .{ "heal(mut (1), 1);", .E0336, null },
