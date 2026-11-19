@@ -650,7 +650,8 @@ test "golden: const and type" {
         \\pub type Id = distinct u64;
     ,
         \\(const_decl pub const N
-        \\  ty=(invalid u32)
+        \\  ty=(path u32
+        \\    last=u32)
         \\  value=(invalid 4))
         \\(const_decl const M
         \\  ty=_
@@ -661,12 +662,20 @@ test "golden: const and type" {
         \\      bounds=[])
         \\    (generic_param B
         \\      bounds=[
-        \\        (invalid Eq)
-        \\        (invalid Show)])]
-        \\  ty=(invalid ())
+        \\        (path Eq
+        \\          last=Eq)
+        \\        (path Show
+        \\          last=Show)])]
+        \\  ty=(tuple (
+        \\    elems=[
+        \\      (path A
+        \\        last=A)
+        \\      (path B
+        \\        last=B)]))
         \\(type_distinct pub type Id
         \\  generics=_
-        \\  ty=(invalid u64))
+        \\  ty=(path u64
+        \\    last=u64))
         \\
     );
 }
@@ -695,22 +704,35 @@ test "golden: fn with attributes, generics, modes and defaults" {
         \\    generics=[
         \\      (generic_param T
         \\        bounds=[
-        \\          (invalid A)])]
+        \\          (generic_inst <
+        \\            base=(path A
+        \\              last=A)
+        \\            args=[
+        \\              (generic_inst <
+        \\                base=(path B
+        \\                  last=B)
+        \\                args=[
+        \\                  (path C
+        \\                    last=C)])])])]
         \\    params=[
         \\      (param comptime n
-        \\        ty=(invalid u32)
+        \\        ty=(path u32
+        \\          last=u32)
         \\        default=_)
         \\      (attributed @unused
         \\        attrs=[
         \\          (attribute @unused
         \\            args=_)]
         \\        inner=(param mut a
-        \\          ty=(invalid T)
+        \\          ty=(path T
+        \\            last=T)
         \\          default=_))
         \\      (param move b
-        \\        ty=(invalid T)
+        \\        ty=(path T
+        \\          last=T)
         \\        default=(invalid d))]
-        \\    ret=(invalid T)
+        \\    ret=(path T
+        \\      last=T)
         \\    body=(block {
         \\      stmts=[]
         \\      tail=_)))
@@ -745,10 +767,12 @@ test "golden: struct" {
         \\      bounds=[])]
         \\  fields=[
         \\    (field_decl pub mut x
-        \\      ty=(invalid T)
+        \\      ty=(path T
+        \\        last=T)
         \\      default=(invalid 0))
         \\    (field_decl pub y
-        \\      ty=(invalid T)
+        \\      ty=(path T
+        \\        last=T)
         \\      default=_)
         \\    (attributed @align
         \\      attrs=[
@@ -756,7 +780,8 @@ test "golden: struct" {
         \\          args=[
         \\            (invalid 4)])]
         \\      inner=(field_decl z
-        \\        ty=(invalid u8)
+        \\        ty=(path u8
+        \\          last=u8)
         \\        default=_))]
         \\  members=[
         \\    (fn_decl pub fn get
@@ -765,7 +790,8 @@ test "golden: struct" {
         \\        (param self
         \\          ty=_
         \\          default=_)]
-        \\      ret=(invalid T)
+        \\      ret=(path T
+        \\        last=T)
         \\      body=(block {
         \\        stmts=[]
         \\        tail=_))
@@ -780,14 +806,16 @@ test "golden: struct" {
         \\            ty=_
         \\            default=_)
         \\          (param v
-        \\            ty=(invalid T)
+        \\            ty=(path T
+        \\              last=T)
         \\            default=_)]
         \\        ret=_
         \\        body=(block {
         \\          stmts=[]
         \\          tail=_)))
         \\    (const_decl pub const K
-        \\      ty=(invalid u32)
+        \\      ty=(path u32
+        \\        last=u32)
         \\      value=(invalid 1))])
         \\(struct_decl struct E
         \\  generics=_
@@ -811,16 +839,20 @@ test "golden: enum" {
         \\  generics=[
         \\    (generic_param T
         \\      bounds=[])]
-        \\  backing=(invalid u8)
+        \\  backing=(path u8
+        \\    last=u8)
         \\  variants=[
         \\    (variant_decl Circle
         \\      payload=[
-        \\        (invalid T)]
+        \\        (path T
+        \\          last=T)]
         \\      value=_)
         \\    (variant_decl Rect
         \\      payload=[
-        \\        (invalid T)
-        \\        (invalid T)]
+        \\        (path T
+        \\          last=T)
+        \\        (path T
+        \\          last=T)]
         \\      value=(invalid 2))
         \\    (attributed @deprecated
         \\      attrs=[
@@ -836,7 +868,8 @@ test "golden: enum" {
         \\        (param self
         \\          ty=_
         \\          default=_)]
-        \\      ret=(invalid T)
+        \\      ret=(path T
+        \\        last=T)
         \\      body=(block {
         \\        stmts=[]
         \\        tail=_))])
@@ -877,7 +910,8 @@ test "golden: protocol and impl" {
         \\        (param self
         \\          ty=_
         \\          default=_)]
-        \\      ret=(invalid String)
+        \\      ret=(path String
+        \\        last=String)
         \\      body=_)
         \\    (fn_decl fn name
         \\      generics=_
@@ -885,20 +919,29 @@ test "golden: protocol and impl" {
         \\        (param self
         \\          ty=_
         \\          default=_)]
-        \\      ret=(invalid String)
+        \\      ret=(path String
+        \\        last=String)
         \\      body=(block {
         \\        stmts=[]
         \\        tail=_))
         \\    (const_decl const K
-        \\      ty=(invalid u32)
+        \\      ty=(path u32
+        \\        last=u32)
         \\      value=(invalid 1))])
         \\(impl_decl impl
         \\  generics=[
         \\    (generic_param T
         \\      bounds=[
-        \\        (invalid Show)])]
-        \\  protocol=(invalid Show)
-        \\  target=(invalid P)
+        \\        (path Show
+        \\          last=Show)])]
+        \\  protocol=(path Show
+        \\    last=Show)
+        \\  target=(generic_inst <
+        \\    base=(path P
+        \\      last=P)
+        \\    args=[
+        \\      (path T
+        \\        last=T)])
         \\  members=[
         \\    (fn_decl pub fn show
         \\      generics=_
@@ -906,7 +949,8 @@ test "golden: protocol and impl" {
         \\        (param self
         \\          ty=_
         \\          default=_)]
-        \\      ret=(invalid String)
+        \\      ret=(path String
+        \\        last=String)
         \\      body=(block {
         \\        stmts=[]
         \\        tail=_))])
@@ -928,9 +972,12 @@ test "golden: extern and comptime" {
         \\      generics=_
         \\      params=[
         \\        (param s
-        \\          ty=(invalid *)
+        \\          ty=(ptr_const_type *
+        \\            elem=(path u8
+        \\              last=u8))
         \\          default=_)]
-        \\      ret=(invalid i32)
+        \\      ret=(path i32
+        \\        last=i32)
         \\      body=_)
         \\    (attributed @link_name
         \\      attrs=[
@@ -941,9 +988,11 @@ test "golden: extern and comptime" {
         \\        generics=_
         \\        params=[
         \\          (param x
-        \\            ty=(invalid c_int)
+        \\            ty=(path c_int
+        \\              last=c_int)
         \\            default=_)]
-        \\        ret=(invalid c_int)
+        \\        ret=(path c_int
+        \\          last=c_int)
         \\        body=_))])
         \\(comptime_block comptime
         \\  body=(block {

@@ -658,15 +658,19 @@ test "stubbed parse yields item skeletons" {
         \\    generics=[
         \\      (generic_param T
         \\        bounds=[
-        \\          (invalid Num)])]
+        \\          (path Num
+        \\            last=Num)])]
         \\    params=[
         \\      (param a
-        \\        ty=(invalid T)
+        \\        ty=(path T
+        \\          last=T)
         \\        default=_)
         \\      (param b
-        \\        ty=(invalid T)
+        \\        ty=(path T
+        \\          last=T)
         \\        default=(invalid 0))]
-        \\    ret=(invalid T)
+        \\    ret=(path T
+        \\      last=T)
         \\    body=(block {
         \\      stmts=[]
         \\      tail=_)))
