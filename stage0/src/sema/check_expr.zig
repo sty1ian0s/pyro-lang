@@ -28,6 +28,7 @@ const builtins = @import("builtins.zig");
 const patterns = @import("patterns.zig");
 const unsafe = @import("unsafe.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
+const comptime_flow = @import("comptime_flow.zig");
 const tir = @import("../tir/tir.zig");
 const interp_expr = @import("../comptime/interp_expr.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
@@ -76,6 +77,8 @@ const handlers = blk: {
         .{ .match, patterns.matchExpr },
         .{ .unsafe_block, unsafe.block },
         .{ .comptime_block, comptime_ctx.expr },
+        .{ .comptime_if, comptime_flow.comptimeIf },
+        .{ .for_inline, comptime_flow.inlineFor },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -83,9 +86,8 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .comptime_if => "`comptime if` (T061)",
         .lambda => "lambdas (T074)",
-        .@"for", .for_inline => "`for` loops (T076)",
+        .@"for" => "`for` loops (T076)",
         .try_op, .array_comp => "`?` and comprehensions (T077)",
         .ml_string => "multi-line strings (T112)",
         else => "this expression (a later task)",
@@ -168,6 +170,12 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     switch (e.res) {
         .local => |l| switch (c.ast.kind(l)) {
             .pat_bind, .pat_bind_mut, .field_pat, .field_pat_mut, .param => return c.load(c.locals.get(l) orelse {
+                // An `inline for` element is a comptime value in its copy (§6.7.3).
+                if (c.items.mods[c.m].bound_values.get(l)) |v| return switch (v) {
+                    .scalar => |s| c.constant(s),
+                    .computed => |cv| comptime_ctx.use(c, n, cv),
+                    else => unreachable, // `comptime_flow.bind` stores typed values
+                };
                 // Comptime code sees no runtime local of the enclosing function (§8.1).
                 if (c.in_comptime) {
                     try c.report(n, .E0801, "`{s}` is a runtime value and cannot be used at comptime", .{c.ast.tokenSlice(c.ast.mainToken(n))});

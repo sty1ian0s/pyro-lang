@@ -23,7 +23,9 @@
 //! data (`addRodata`).
 //!
 //! - Results are cached per expression node: each context is evaluated
-//!   once, and a failed one is not reported twice.
+//!   once, and a failed one is not reported twice. Inside a copy of an
+//!   `inline for` body the key includes the copy (`Ctx.copy`), since each
+//!   copy is checked separately (§6.7.3).
 //! - A context that is reached again while it is being evaluated is a
 //!   cycle and reported. Cycles between consts are found earlier, by
 //!   `Items.constValue`.
@@ -52,6 +54,7 @@ const EvalArena = @import("../comptime/arena.zig").EvalArena;
 const embed = @import("../comptime/embed.zig");
 const interp_ctrl = @import("../comptime/interp_ctrl.zig");
 const limits = @import("../comptime/limits.zig");
+const comptime_flow = @import("comptime_flow.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -65,7 +68,8 @@ const Error = Allocator.Error;
 /// A computed value as item checking records it.
 pub const Computed = @FieldType(items_mod.Value, "computed");
 
-const Key = struct { ModuleId, Node.Index };
+/// A context: its module, its node, and the `inline for` copy it is in.
+const Key = struct { ModuleId, Node.Index, u32 };
 
 /// The comptime state of one package. Must not move after `hook`.
 pub const Ctx = struct {
@@ -84,6 +88,13 @@ pub const Ctx = struct {
     own: ?Bodies = null,
     /// The bodies of the running `checkBodies`, which evaluation fills.
     shared: ?*Bodies = null,
+    /// Where `@compile_log` prints when it is evaluated (§8.5); null drops it.
+    log: ?*std.Io.Writer = null,
+    /// The `inline for` copy being checked; 0 outside any. Part of the
+    /// cache key, so each copy evaluates its comptime contexts afresh.
+    copy: u32 = 0,
+    /// Copies numbered so far (`nextCopy`).
+    copies: u32 = 0,
 
     pub fn init(gpa: Allocator) Ctx {
         return .{ .gpa = gpa, .values = .init(gpa), .ev = .init(gpa) };
@@ -97,6 +108,12 @@ pub const Ctx = struct {
         cx.ev.deinit();
         cx.values.deinit();
         cx.* = undefined;
+    }
+
+    /// A fresh number for one `inline for` copy, to set as `copy`.
+    pub fn nextCopy(cx: *Ctx) u32 {
+        cx.copies += 1;
+        return cx.copies;
     }
 
     /// The comptime hook for `items.Options.comptime_hook`.
@@ -129,7 +146,7 @@ pub const Ctx = struct {
     /// `expected` (or of its own type for `.none`); null if it failed or
     /// cannot be evaluated yet (reported, or recorded as unsupported).
     pub fn eval(cx: *Ctx, it: *Items, m: ModuleId, n: Node.Index, expected: TypeId) Error!?items_mod.Value {
-        const key: Key = .{ m, n };
+        const key: Key = .{ m, n, cx.copy };
         if (cx.cache.get(key)) |v| return v;
         if ((try cx.active.getOrPut(cx.gpa, key)).found_existing) {
             const ast = it.im.graph.modules[m].ast;
@@ -159,7 +176,7 @@ pub const Ctx = struct {
             .bodies = bs,
             .sink = it.sink,
             .outer = &outer,
-            .hooks = .{ .ctx = cx, .resolve = resolve, .stop = stop },
+            .hooks = .{ .ctx = cx, .resolve = resolve, .stop = stop, .builtin = comptime_flow.evalBuiltin },
         };
         defer mach.deinit();
         ev.attach(&mach);

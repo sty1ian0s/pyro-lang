@@ -70,6 +70,9 @@ pub const Hooks = struct {
     /// Called when the evaluation stops for `why`, with every call frame
     /// still live (`Machine.trace`), to report the diagnostic.
     stop: *const fn (ctx: *anyopaque, m: *Machine, why: Stop) Allocator.Error!void,
+    /// Runs builtin `b` other than `@set_eval_quota` on argument values
+    /// `args` (`@compile_error`, `@compile_log`: `sema/comptime_flow.zig`).
+    builtin: ?*const fn (ctx: *anyopaque, m: *Machine, b: tir.BuiltinId, args: []const Value) StepError!Value = null,
 };
 
 /// Why `Hooks.stop` is called.
@@ -579,7 +582,13 @@ pub const Machine = struct {
             },
             .addr_of => return m.forbid("raw-pointer operations"),
             .builtin => |x| blk: {
-                if (x.builtin != builtins.Builtin.set_eval_quota.id()) return m.fail("builtin calls at comptime (T060)");
+                if (x.builtin != builtins.Builtin.set_eval_quota.id()) {
+                    const h = m.hooks orelse return m.fail("builtin calls without comptime hooks");
+                    const run = h.builtin orelse return m.fail("builtin calls without comptime hooks");
+                    const args = try in.arena.alloc(Value, x.args.len);
+                    for (args, x.args) |*o, a| o.* = m.valueOrPlace(f, a);
+                    break :blk try run(h.ctx, m, x.builtin, args);
+                }
                 if (m.eval) |e| e.raise(val(f, x.args[0]).data.scalar);
                 break :blk .{ .ty = .void, .data = .void };
             },

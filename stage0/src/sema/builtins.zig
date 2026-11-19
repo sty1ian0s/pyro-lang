@@ -32,6 +32,7 @@ const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const builtins_expr = @import("builtins_expr.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
+const comptime_flow = @import("comptime_flow.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -188,7 +189,8 @@ pub const Rule = enum {
     enum_from_int,
     /// `(I, I) -> Option<I>`; `@shl_checked` is `(I, U) -> Option<I>`, `U` unsigned.
     checked,
-    /// `@compile_error` and `@compile_log` (T061).
+    /// `@compile_error(comptime str) -> noreturn`, `@compile_log(args...) -> void`
+    /// (`comptime_flow.zig`).
     compile_diag,
     /// `(u32) -> void`; evaluated by `comptime/limits.zig`.
     eval_quota,
@@ -548,7 +550,7 @@ fn typeCall(a: *Args, rule: Rule, expected: TypeId) Error!Typed {
         .call, .fn_info => return c.unsupported(a.at, "`@call` and `@fn_info` (T071)"),
         .enum_from_int => return builtins_expr.enumFromInt(a),
         .checked => return builtins_expr.checked(a, expected),
-        .compile_diag => return c.unsupported(a.at, "`@compile_error` and `@compile_log` (T061)"),
+        .compile_diag => return comptime_flow.compileDiag(a),
         .eval_quota => {
             _ = try a.as(0, .int(.unsigned, 32));
             return a.finish(.void);
