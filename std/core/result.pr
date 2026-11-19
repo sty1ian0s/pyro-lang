@@ -1,0 +1,10 @@
+//! `Result<T, E>` (§14.1.2, §9.1). A prelude type.
+//!
+//! Declaration only. T105 adds the methods `is_ok`, `is_err`, `unwrap_or`,
+//! `expect` (traps with kind `.explicit` on `.err`), `map`, `map_err` and `ok`.
+
+/// The outcome of an operation that can fail: `.ok(value)` or `.err(error)`.
+pub enum Result<T, E> {
+    ok(T),
+    err(E),
+}

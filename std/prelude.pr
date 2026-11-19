@@ -1,0 +1,32 @@
+//! The prelude (§14.1, §7.8.4): implicitly imported by every module.
+//!
+//! This file re-exports the prelude items that `std` declares. The rest of
+//! §14.1 is built into the compiler and has no declaration here:
+//!
+//! - types: `bool`, `i1`…`i64`, `u1`…`u64`, `isize`, `usize`, `f32`, `f64`,
+//!   `void`, `noreturn`, `str`, `vec`, `vec2`, `vec3`, `vec4`, `mask`,
+//!   `Handle`, `FieldId` (§4);
+//! - the formatting intrinsics `print`, `eprint` and `format` (§8, §14.6);
+//! - the module `std` itself.
+//!
+//! `assert(cond, msg)` and the constructors `vec2`, `vec3`, `vec4` are
+//! functions of this module; T105 adds them with their bodies.
+//!
+//! `stage0/src/resolve/prelude.zig` holds the same list for the compiler and
+//! checks it against this file and §14.1.
+
+// Core prelude (§14.1.1): also visible in `no_std` packages.
+pub use std.core.option.{Option};
+pub use std.core.result.{Result};
+pub use std.core.range.{Range, RangeInclusive, StepRange, RevRange};
+pub use std.core.protocols.{Order, Ord, From, Hash, Display, Debug, Indexable, IndexableMut};
+pub use std.core.trap.{TrapKind};
+pub use std.core.atomic.{Atomic, MemOrder};
+pub use std.core.channel.{Sender};
+pub use std.bounded.{Bounded};
+
+// Hosted only: not in the core prelude of `no_std` packages (§14.1.1).
+pub use std.list.{List};
+pub use std.pool.{Pool};
+pub use std.mem.{Arena};
+pub use std.core.channel.{Channel};
