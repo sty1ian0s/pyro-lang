@@ -29,6 +29,7 @@ const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_literals = @import("check_literals.zig");
 const builtins = @import("builtins.zig");
+const unsafe = @import("unsafe.zig");
 const tir = @import("../tir/tir.zig");
 const module_graph = @import("../resolve/module_graph.zig");
 const Ref = @import("../resolve/imports.zig").Ref;
@@ -80,6 +81,7 @@ fn direct(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), ref: Ref)
         .@"fn" => |f| f,
         else => return c.unsupported(n, "calls of this form (T046, T065)"),
     };
+    try unsafe.callee(c, d.callee, c.items.im.graph.modules[ref.module].ast, sig, item.kind == .extern_fn);
     if (sig.generics.len > 0) return c.unsupported(n, "generic calls (T068)");
     if (sig.ret == .err) c.failed = true;
     const params = try c.arena.alloc(Param, sig.params.len);
@@ -210,15 +212,14 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
             _ = try check_expr.check(c, value, .none);
             return .err;
         }
-        const l = try mutPlace(c, a, value) orelse return .err;
-        const ty = c.b.locals.items(.ty)[l.int()];
+        const place = try mutPlace(c, a, value) orelse return .err;
+        const ty = place.ty;
         if (ty != p.type and ty != .err and p.type != .err) {
             try c.mismatch(value, p.type, ty);
             return .err;
         }
-        const place = try c.emit(ty, .{ .local = .{ .local = l } });
         const view = try c.types.intern(.{ .mut_view = .{ .elem = ty } });
-        return .{ .ty = view, .ref = try c.emit(view, .{ .view_mut = .{ .place = place } }) };
+        return .{ .ty = view, .ref = try c.emit(view, .{ .view_mut = .{ .place = place.ref } }) };
     }
     if (marked) try c.reportAt(ast.mainToken(a), .E0335, &.{"remove `mut`: the parameter is read-only"}, "`mut` given for read-only parameter{s}", .{try paramName(c, p)});
     if (p.mode == .@"comptime") if (c.items.runtimeRef(c.m, value)) |r| {
@@ -277,8 +278,9 @@ fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
 }
 
 /// The mutable place `value` of `mut` argument `a` names (§5.5.2): a
-/// `let mut` binding, a `mut` parameter or `mut self`; E0336 otherwise.
-fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?tir.Local {
+/// `let mut` binding, a `mut` parameter, `mut self` or `*p` for `p: *T`
+/// (§12.2); E0336 otherwise.
+fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?@import("check_stmt.zig").Place {
     const ast = c.ast;
     var v = value;
     while (ast.kind(v) == .paren) v = ast.data(v).paren.inner;
@@ -288,10 +290,7 @@ fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?tir.Local {
             return null;
         },
         // `*p` names a place through a raw pointer; other prefix forms are values.
-        .prefix => if (ast.tokens.items(.kind)[ast.mainToken(v)] == .star) {
-            _ = c.unsupported(v, "raw pointer operations (T054)");
-            return null;
-        },
+        .prefix => if (ast.tokens.items(.kind)[ast.mainToken(v)] == .star) return unsafe.derefPlace(c, v, true),
         .ident => if (c.items.names.get(c.m, v) == null) {
             _ = try check_expr.check(c, v, .none); // reports the unknown name
             return null;
@@ -305,7 +304,7 @@ fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?tir.Local {
     };
     const info = c.b.locals.get(l.int());
     switch (info.kind) {
-        .let_mut, .param_mut, .temp => return l,
+        .let_mut, .param_mut, .temp => return .{ .ref = try c.emit(info.ty, .{ .local = .{ .local = l } }), .ty = info.ty },
         .let, .param, .param_move => {
             try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place: `{s}` is not mutable", .{c.types.strings.get(info.name)});
             return null;

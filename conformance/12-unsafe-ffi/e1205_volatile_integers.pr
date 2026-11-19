@@ -1,5 +1,4 @@
 //@ covers: E1205
-//@ expected-fail: T096
 // §12.9: volatile reads and writes of integers of storage size 1, 2, 4 and 8.
 
 const UART_DR: usize = 0x3F20_1000;

@@ -170,6 +170,10 @@ pub const Checker = struct {
     self_local: tir.Local = .none,
     /// Enclosing loops, innermost last.
     loops: std.ArrayList(Loop) = .empty,
+    /// Inside an `unsafe` block (§12.1).
+    in_unsafe: bool = false,
+    /// Checking comptime code (§8.6); set by comptime evaluation (T060).
+    in_comptime: bool = false,
     /// An error was reported or a construct is unsupported: nothing more is
     /// emitted and the body gets no TIR.
     failed: bool = false,
@@ -526,7 +530,9 @@ fn checkDecl(bs: *Bodies, it: *Items, m: ModuleId, f: items_mod.Fn, self_ty: Typ
         if (bs.unsupported == null) bs.unsupported = .{ .module = m, .node = f.node, .what = "generic function bodies (T070)" };
         return;
     }
-    bs.fns.items[id.int()].func = try checkFn(bs, it, m, f, self_ty);
+    // Checking the body may grow `bs.fns` (callee ids): index it afterwards.
+    const func = try checkFn(bs, it, m, f, self_ty);
+    bs.fns.items[id.int()].func = func;
 }
 
 /// Records the bodies of the members of `decl` as unsupported.

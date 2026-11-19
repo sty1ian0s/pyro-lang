@@ -114,11 +114,10 @@ fn let(c: *Checker, s: Node.Index) Error!bool {
 }
 
 /// An assignment target: its place instruction and type.
-const Place = struct { ref: tir.Ref, ty: TypeId };
+pub const Place = struct { ref: tir.Ref, ty: TypeId };
 
 /// The storage assignment target `n` names (§3.5, §1.6), or null after a
-/// diagnostic. Field, index and dereference targets are T050's, T051's and
-/// T054's.
+/// diagnostic. Field and index targets are T050's and T051's.
 fn place(c: *Checker, n: Node.Index) Error!?Place {
     switch (c.ast.kind(n)) {
         .ident => {},
@@ -127,8 +126,12 @@ fn place(c: *Checker, n: Node.Index) Error!?Place {
             if (c.self_local == .none) return null;
             return try localPlace(c, n, c.self_local);
         },
+        .prefix => if (c.ast.tokens.items(.kind)[c.ast.mainToken(n)] == .star) return @import("unsafe.zig").derefPlace(c, n, true) else {
+            _ = c.unsupported(n, "assignment to fields and elements (T050, T051)");
+            return null;
+        },
         else => {
-            _ = c.unsupported(n, "assignment to fields, elements and dereferences (T050, T051, T054)");
+            _ = c.unsupported(n, "assignment to fields and elements (T050, T051)");
             return null;
         },
     }
