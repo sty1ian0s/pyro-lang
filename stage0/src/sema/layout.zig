@@ -130,7 +130,7 @@ pub const Engine = struct {
                 .{ .size = a.len *| alignUp(l.size, l.@"align"), .@"align" = l.@"align" }
             else
                 null,
-            .tuple => |t| e.record(t.elems, null, 1),
+            .tuple => |t| e.record(t.elems, null, 1, true),
             .handle => .{ .size = 8, .@"align" = 8 },
             .ptr, .fn_ptr, .mut_view => .{ .size = ptr, .@"align" = ptr },
             .slice => |s| if (soa.isSoa(e, s.elem)) try soa.soaSlice(e, s.elem) else .{ .size = 2 * ptr, .@"align" = ptr },
@@ -174,7 +174,8 @@ pub const Engine = struct {
                 const min_align = try e.alignAttr(m, s.attrs);
                 if (e.attr(m, s.attrs, .@"packed") != null) return soa.ordered(e, tys, aligns, min_align, .@"packed");
                 if (e.attr(m, s.attrs, .c_layout) != null) return soa.ordered(e, tys, aligns, min_align, .c);
-                return e.record(tys, aligns, min_align);
+                // §4.11.3: `@soa` structs never bit-pack.
+                return e.record(tys, aligns, min_align, e.attr(m, s.attrs, .soa) == null);
             },
             .@"enum" => {
                 const en = e.items.enumOf(ty) orelse return null;
@@ -196,7 +197,7 @@ pub const Engine = struct {
     fn tagged(e: *Engine, payloads: []const []const TypeId, tag_ty: TypeId) Error!?Layout {
         var payload: Member = .{ .size = 0, .@"align" = 1 };
         for (payloads) |p| {
-            const l = try e.record(p, null, 1) orelse return null;
+            const l = try e.record(p, null, 1, true) orelse return null;
             payload = .{ .size = @max(payload.size, l.size), .@"align" = @max(payload.@"align", l.@"align") };
         }
         const tag = try e.layoutOf(tag_ty) orelse return null;
@@ -210,8 +211,9 @@ pub const Engine = struct {
 
     /// Pyro layout of fields `tys` in declaration order (§4.11.2). `aligns`
     /// holds each field's `@align(n)` (0 if none); a field with `@align` is
-    /// never packed into a unit.
-    fn record(e: *Engine, tys: []const TypeId, aligns: ?[]const u32, min_align: u32) Error!?Layout {
+    /// never packed into a unit. With `bitfields` false every field is a
+    /// plain member (`@soa` structs, §4.11.3).
+    fn record(e: *Engine, tys: []const TypeId, aligns: ?[]const u32, min_align: u32, bitfields: bool) Error!?Layout {
         const a = e.alloc();
         const places = try a.alloc(Place, tys.len);
         const member_of = try a.alloc(usize, tys.len);
@@ -222,7 +224,7 @@ pub const Engine = struct {
         var units: u32 = 0;
         for (tys, places, member_of, 0..) |t, *p, *mo, i| {
             const forced = if (aligns) |al| al[i] else 0;
-            if (if (forced == 0) e.bitWidth(t) else null) |w| {
+            if (if (forced == 0 and bitfields) e.bitWidth(t) else null) |w| {
                 if (unit == null or bits + w > 64) {
                     if (unit) |u| members.items[u] = unitMember(bits);
                     unit = members.items.len;
@@ -361,7 +363,8 @@ pub const Engine = struct {
             switch (info.*) {
                 .@"struct" => |s| {
                     try e.checkAlign(m, s.attrs);
-                    if (e.attr(m, s.attrs, .c_layout) != null) try soa.checkCFields(e, m, s);
+                    // Generic fields are judged at instantiation.
+                    if (s.generics.len == 0 and e.attr(m, s.attrs, .c_layout) != null) try soa.checkCFields(e, m, s);
                     for (s.fields) |f| {
                         try e.checkAlign(m, f.attrs);
                         try parts.append(e.alloc(), f.type);

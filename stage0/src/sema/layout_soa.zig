@@ -214,6 +214,18 @@ test "§4.11.5 soa []T and []T of an @soa struct: column pointers then length" {
     try testing.expect(!isSoa(&f.e, try f.typeOf("E")));
 }
 
+test "§4.11.3 @soa structs never bit-pack" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\@soa struct S { a: u3, b: bool, c: u32 }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    const s = try f.of("S");
+    for (s.fields) |p| try testing.expectEqual(0, p.width);
+    try expectLayout(8, 4, s);
+}
+
 test "§4.11.3 @packed: declaration order, align 1, bit fields still packed" {
     var f: Fixture = undefined;
     try f.init(
@@ -265,6 +277,15 @@ test "E1201: @c_layout fields must be C-compatible" {
     );
     defer f.deinit();
     try f.expectDiags(&.{ .{ .E1201, "str" }, .{ .E1201, "[" }, .{ .E1201, "Plain" } });
+}
+
+test "E1201: generic @c_layout fields are not checked at the declaration" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\@c_layout struct G<T> { x: T }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
 }
 
 test "E0305: soa of a non-struct type" {
