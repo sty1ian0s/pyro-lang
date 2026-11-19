@@ -92,7 +92,7 @@ pub const Interp = struct {
     }
 
     /// `ty` with `distinct` wrappers removed (§4.7).
-    fn base(in: *const Interp, ty: TypeId) TypeId {
+    pub fn base(in: *const Interp, ty: TypeId) TypeId {
         var t = ty;
         while (true) switch (in.types().get(t)) {
             .nominal => |n| if (n.kind == .distinct) {
