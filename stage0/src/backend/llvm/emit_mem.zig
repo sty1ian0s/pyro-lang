@@ -154,7 +154,7 @@ fn lowMask(n: u32) u64 {
 /// size: LLVM would take the data layout's ABI alignment, which can be
 /// smaller, and lowers an underaligned atomic to an `__atomic_*` libcall.
 fn memFlags(i: ir.Inst, ty: ir.Type, v: c.ValueRef) c.ValueRef {
-    // shortcut: ptr is 8 bytes; use the target's pointer size once T088 sets the data layout.
+    // shortcut: ptr is 8 bytes; use the target's pointer size once T093 threads the Target/Machine data layout into emitModule.
     const size: u32 = if (ty.scalar == .ptr) 8 else bits(ty.scalar) / 8;
     const @"align" = if (i.@"align" == 0 and i.atomic != .none) size else i.@"align";
     if (@"align" != 0) c.LLVMSetAlignment(v, @"align");
@@ -288,7 +288,7 @@ fn trapIf(e: *FnEmitter, fail: c.ValueRef, kind: u32) void {
 /// empty message and location, declaring it `noreturn cold` on first use.
 fn trapCall(e: *FnEmitter, kind: u32) c.ValueRef {
     const i32_ty = c.LLVMIntTypeInContext(e.ctx, 32);
-    // shortcut: `usize` is i64; switch to the target's pointer width once T088 sets the data layout.
+    // shortcut: `usize` is i64; switch to the target's pointer width once T093 threads the Target/Machine data layout into emitModule.
     const usize_ty = c.LLVMIntTypeInContext(e.ctx, 64);
     const ptr_ty = llType(e.ctx, .of(.ptr));
     const params = [_]c.TypeRef{ i32_ty, ptr_ty, usize_ty, ptr_ty, usize_ty, i32_ty };

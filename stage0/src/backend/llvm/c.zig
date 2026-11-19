@@ -182,3 +182,38 @@ pub extern fn LLVMInitializeAArch64TargetInfo() void;
 pub extern fn LLVMInitializeAArch64Target() void;
 pub extern fn LLVMInitializeAArch64TargetMC() void;
 pub extern fn LLVMInitializeAArch64AsmPrinter() void;
+pub extern fn LLVMInitializeRISCVTargetInfo() void;
+pub extern fn LLVMInitializeRISCVTarget() void;
+pub extern fn LLVMInitializeRISCVTargetMC() void;
+pub extern fn LLVMInitializeRISCVAsmPrinter() void;
+pub extern fn LLVMInitializeWebAssemblyTargetInfo() void;
+pub extern fn LLVMInitializeWebAssemblyTarget() void;
+pub extern fn LLVMInitializeWebAssemblyTargetMC() void;
+pub extern fn LLVMInitializeWebAssemblyAsmPrinter() void;
+
+// TargetMachine.h, Target.h: object emission
+pub const TargetRef = *opaque {};
+pub const TargetMachineRef = *opaque {};
+pub const TargetDataRef = *opaque {};
+pub const MemoryBufferRef = *opaque {};
+
+/// `LLVMCodeGenOptLevel` (TargetMachine.h).
+pub const CodeGenOptLevel = enum(c_int) { none, less, default, aggressive };
+/// `LLVMRelocMode` (TargetMachine.h).
+pub const RelocMode = enum(c_int) { default, static, pic, dynamic_no_pic, ropi, rwpi, ropi_rwpi };
+/// `LLVMCodeModel` (TargetMachine.h).
+pub const CodeModel = enum(c_int) { default, jit_default, tiny, small, kernel, medium, large };
+/// `LLVMCodeGenFileType` (TargetMachine.h).
+pub const CodeGenFileType = enum(c_int) { assembly, object };
+
+pub extern fn LLVMGetTargetFromTriple(Triple: [*:0]const u8, T: *TargetRef, ErrorMessage: *?[*:0]u8) Bool;
+pub extern fn LLVMCreateTargetMachine(T: TargetRef, Triple: [*:0]const u8, CPU: [*:0]const u8, Features: [*:0]const u8, Level: CodeGenOptLevel, Reloc: RelocMode, CodeModel: CodeModel) TargetMachineRef;
+pub extern fn LLVMDisposeTargetMachine(T: TargetMachineRef) void;
+pub extern fn LLVMCreateTargetDataLayout(T: TargetMachineRef) TargetDataRef;
+pub extern fn LLVMDisposeTargetData(TD: TargetDataRef) void;
+pub extern fn LLVMSetModuleDataLayout(M: ModuleRef, DL: TargetDataRef) void;
+pub extern fn LLVMSetTarget(M: ModuleRef, Triple: [*:0]const u8) void;
+pub extern fn LLVMTargetMachineEmitToMemoryBuffer(T: TargetMachineRef, M: ModuleRef, codegen: CodeGenFileType, ErrorMessage: *?[*:0]u8, OutMemBuf: *MemoryBufferRef) Bool;
+pub extern fn LLVMGetBufferStart(MemBuf: MemoryBufferRef) [*]const u8;
+pub extern fn LLVMGetBufferSize(MemBuf: MemoryBufferRef) usize;
+pub extern fn LLVMDisposeMemoryBuffer(MemBuf: MemoryBufferRef) void;
