@@ -6,8 +6,11 @@
 //! - `inline for x in E { body }` (`inlineFor`): `E` is a tuple literal
 //!   (of types or values), a range with comptime bounds, or any comptime
 //!   array, slice or tuple; the body is checked once per element with `x`
-//!   bound to it, a type or a constant. `break` leaves the unrolled
-//!   sequence, `continue` goes on with the next copy.
+//!   bound to it, a type or a comptime value (`Mod.bound`,
+//!   `Mod.bound_values`). Each copy evaluates its comptime contexts afresh
+//!   (`Ctx.copy`). `break` leaves the unrolled sequence, `continue` goes on
+//!   with the next copy. A range of more elements than the comptime budget
+//!   (§8.6) is E0808.
 //! - `@compile_error(msg)` (`compileDiag`, `evalBuiltin`): E0804 with
 //!   `msg` when it is evaluated: when the interpreter reaches it in
 //!   comptime code, or when runtime code containing it is compiled (an
@@ -29,6 +32,7 @@ const comptime_ctx = @import("comptime_ctx.zig");
 const prelude = @import("../resolve/prelude.zig");
 const tir = @import("../tir/tir.zig");
 const interp_ctrl = @import("../comptime/interp_ctrl.zig");
+const limits = @import("../comptime/limits.zig");
 const Value = @import("../comptime/value.zig").Value;
 
 const Node = Ast.Node;
@@ -74,14 +78,21 @@ pub fn inlineFor(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
         return .err;
     };
     if (elems.len == 0) return .void_value;
-    const bound = &c.items.mods[c.m].bound;
-    defer _ = bound.remove(d.pattern);
+    const mod = &c.items.mods[c.m];
+    defer for ([_]?Node.Index{ d.pattern, d.pattern2 }) |p| if (p) |q| {
+        _ = mod.bound.remove(q);
+        _ = mod.bound_values.remove(q);
+    };
+    const cx = comptime_ctx.of(c.items).?; // `sequence` needed it
+    const outer = cx.copy;
+    defer cx.copy = outer;
     const exit = try c.addBlock();
     var next = try c.addBlock();
     try c.br(next, .none);
     for (elems, 0..) |e, i| {
         c.setBlock(next);
         next = if (i + 1 < elems.len) try c.addBlock() else exit;
+        cx.copy = cx.nextCopy();
         try bind(c, d.pattern, e);
         if (d.pattern2) |p| try bind(c, p, .{ .value = .{ .scalar = .{ .type = .usize, .bits = i } } });
         try c.loops.append(c.arena, .{ .label = null, .is_loop = false, .head = next, .exit = exit, .expected = .none });
@@ -123,7 +134,12 @@ fn sequence(c: *Checker, n: Node.Index) Error!?[]const Elem {
             const info = convert.intInfo(c.types, ptr_bits, ty) orelse return notSequence(c, n);
             const a = intOf(info, lo.scalar.bits);
             const b = intOf(info, hi.scalar.bits) + @intFromBool(c.ast.tokens.items(.kind)[c.ast.mainToken(n)] == .dot_dot_eq);
-            const out = try c.arena.alloc(Elem, @intCast(@max(b - a, 0)));
+            const len = @max(b - a, 0);
+            if (len > limits.default_quota) {
+                try c.report(n, .E0808, "`inline for` over {d} elements exceeds the comptime budget of {d}", .{ len, limits.default_quota });
+                return null;
+            }
+            const out = try c.arena.alloc(Elem, @intCast(len));
             for (out, 0..) |*o, i| o.* = .{ .value = .{ .scalar = .{ .type = ty, .bits = @truncate(@as(u128, @bitCast(a + @as(i128, @intCast(i))))) } } };
             return out;
         },
@@ -189,27 +205,17 @@ fn isType(c: *Checker, n: Node.Index) bool {
     };
 }
 
-/// Binds `inline for` pattern `pat` to element `e` for one copy of the body.
+/// Binds `inline for` pattern `pat` to element `e` for one copy of the
+/// body: a type, or a comptime value that runtime and comptime code read
+/// (`check_expr.ident`).
 fn bind(c: *Checker, pat: Node.Index, e: Elem) Error!void {
     if (c.ast.kind(pat) == .pat_wildcard) return;
-    const v: Typed = switch (e) {
-        .type => |t| return c.items.mods[c.m].bound.put(c.items.arena.allocator(), pat, t),
-        .value => |v| switch (v) {
-            .scalar => |s| try c.constant(s),
-            .computed => |cv| try comptime_ctx.use(c, pat, cv),
-            else => unreachable, // evaluation gives typed values
-        },
-    };
-    if (v.ty == .err) return;
-    const l = try c.b.addLocal(.{
-        .ty = v.ty,
-        .name = try c.types.strings.intern(c.ast.tokenSlice(c.ast.mainToken(pat))),
-        .kind = .let,
-        .node = pat,
-    });
-    try c.locals.put(c.arena, pat, l);
-    const slot = try c.emit(v.ty, .{ .local = .{ .local = l } });
-    _ = try c.emit(.void, .{ .store = .{ .place = slot, .value = v.ref } });
+    const mod = &c.items.mods[c.m];
+    const a = c.items.arena.allocator();
+    switch (e) {
+        .type => |t| try mod.bound.put(a, pat, t),
+        .value => |v| try mod.bound_values.put(a, pat, v),
+    }
 }
 
 /// `@compile_error(msg)` and `@compile_log(args...)` (§8.5); `a` is the
@@ -249,7 +255,7 @@ pub fn evalBuiltin(ctx: *anyopaque, m: *interp_ctrl.Machine, b: tir.BuiltinId, a
         }
         return .{ .ty = .void, .data = .void };
     }
-    if (b != builtins.Builtin.compile_error.id()) return m.fail("builtin calls at comptime (T060)");
+    if (b != builtins.Builtin.compile_error.id()) return m.fail(unsupportedBuiltin(@fromBackingInt(b.int())));
     const tr = try m.trace();
     defer tr.deinit(m.gpa);
     if (m.eval) |e| e.reported = true;
@@ -261,6 +267,19 @@ pub fn evalBuiltin(ctx: *anyopaque, m: *interp_ctrl.Machine, b: tir.BuiltinId, a
         .trace = tr.frames,
     });
     return m.fail("`@compile_error`");
+}
+
+/// What `Bodies.unsupported` records for builtin `b` reached at comptime,
+/// with the task that makes it evaluable there when one does.
+fn unsupportedBuiltin(b: builtins.Builtin) []const u8 {
+    return switch (b) {
+        inline else => |t| "`@" ++ @tagName(t) ++ "` in comptime code" ++ comptime switch (t) {
+            .size_of, .align_of, .type_info, .type_name, .has_field, .has_method, .implements, .field_type, .field, .call, .fn_info, .variant_count => " (T069)",
+            .embed_file, .env, .env_or, .target => " (T073)",
+            .hash => " (T066)",
+            else => "",
+        },
+    };
 }
 
 /// Prints `v` for `@compile_log`; output errors are ignored.
@@ -456,4 +475,45 @@ test "@compile_log is W0801 wherever it is and prints when evaluated" {
     defer f.deinit();
     try f.expectDiags(&.{ .{ .W0801, "@compile_log" }, .{ .W0801, "@compile_log" }, .{ .W0801, "@compile_log" } });
     try testing.expectEqualStrings("N is, 7, true\nnext\n", f.log.written());
+}
+
+test "each inline for copy evaluates its comptime contexts afresh" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn g() { inline for T in (u32, u8) { let z: T = comptime { 300 }; } }
+    );
+    defer f.deinit();
+    // Only the `u8` copy overflows; it does not reuse the `u32` copy's value.
+    try f.expectDiags(&.{.{ .E0306, "comptime" }});
+}
+
+test "inline for values are comptime values in each copy" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn h() -> u32 {
+        \\    let mut s = 0u32;
+        \\    inline for x in (1u32, 2u32) {
+        \\        comptime if x == 2 { @compile_error("two"); }
+        \\        s += comptime { x * 10 };
+        \\    }
+        \\    s
+        \\}
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{.{ .E0804, "@compile_error" }});
+    try testing.expectEqualStrings("two", f.p.sink.finish()[0].message);
+}
+
+test "an inline for range over the comptime budget is E0808" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn big() { inline for i in 0u64..=0xFFFF_FFFF_FFFF_FFFF { } }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{.{ .E0808, "..=" }});
+}
+
+test "builtins not evaluable at comptime name their owner" {
+    try testing.expectEqualStrings("`@size_of` in comptime code (T069)", unsupportedBuiltin(.size_of));
+    try testing.expectEqualStrings("`@zero` in comptime code", unsupportedBuiltin(.zero));
 }

@@ -170,6 +170,12 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     switch (e.res) {
         .local => |l| switch (c.ast.kind(l)) {
             .pat_bind, .pat_bind_mut, .field_pat, .field_pat_mut, .param => return c.load(c.locals.get(l) orelse {
+                // An `inline for` element is a comptime value in its copy (§6.7.3).
+                if (c.items.mods[c.m].bound_values.get(l)) |v| return switch (v) {
+                    .scalar => |s| c.constant(s),
+                    .computed => |cv| comptime_ctx.use(c, n, cv),
+                    else => unreachable, // `comptime_flow.bind` stores typed values
+                };
                 // Comptime code sees no runtime local of the enclosing function (§8.1).
                 if (c.in_comptime) {
                     try c.report(n, .E0801, "`{s}` is a runtime value and cannot be used at comptime", .{c.ast.tokenSlice(c.ast.mainToken(n))});

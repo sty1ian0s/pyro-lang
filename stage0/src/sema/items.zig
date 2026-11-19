@@ -239,6 +239,9 @@ const Mod = struct {
     /// The type bound to an `inline for` binding while one copy of the
     /// loop body is checked (`comptime_flow.zig`).
     bound: std.AutoHashMapUnmanaged(Node.Index, TypeId) = .empty,
+    /// The comptime value bound to an `inline for` binding while one copy
+    /// of the loop body is checked (`comptime_flow.zig`).
+    bound_values: std.AutoHashMapUnmanaged(Node.Index, Value) = .empty,
 };
 
 /// The checked items of one package. Borrows the `Imports`, `Names` and

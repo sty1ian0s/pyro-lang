@@ -631,6 +631,11 @@ pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
         const pkg: Types.Package = .{ .name = try comp.interner.intern(name), .line = .{ .major = 0 } };
         var cx: comptime_ctx.Ctx = .init(comp.gpa);
         defer cx.deinit();
+        // `@compile_log` prints during compilation (§8.5).
+        var log_buf: [256]u8 = undefined;
+        var log = std.Io.File.stderr().writer(comp.io, &log_buf);
+        cx.log = &log.interface;
+        defer log.interface.flush() catch {};
         var it = try items_mod.check(comp.gpa, &comp.sink, &types, &im, &names, .{ .package = pkg, .comptime_hook = cx.hook() });
         defer it.deinit();
         try kinds_mod.check(&it);

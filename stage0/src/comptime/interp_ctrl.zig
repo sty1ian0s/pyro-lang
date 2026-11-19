@@ -583,8 +583,8 @@ pub const Machine = struct {
             .addr_of => return m.forbid("raw-pointer operations"),
             .builtin => |x| blk: {
                 if (x.builtin != builtins.Builtin.set_eval_quota.id()) {
-                    const h = m.hooks orelse return m.fail("builtin calls at comptime (T060)");
-                    const run = h.builtin orelse return m.fail("builtin calls at comptime (T060)");
+                    const h = m.hooks orelse return m.fail("builtin calls without comptime hooks");
+                    const run = h.builtin orelse return m.fail("builtin calls without comptime hooks");
                     const args = try in.arena.alloc(Value, x.args.len);
                     for (args, x.args) |*o, a| o.* = m.valueOrPlace(f, a);
                     break :blk try run(h.ctx, m, x.builtin, args);
