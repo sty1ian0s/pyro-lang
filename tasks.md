@@ -470,28 +470,28 @@ graph TD
   - Size: M · Parallel: W11
   - Blocked by: T038, T040
   - Blocks: T050, T064, T069, T077, T144, T212
-- [ ] **T045** Layout: @packed, @c_layout, SoA columns
+- [x] **T045** Layout: @packed, @c_layout, SoA columns
   - Spec: §4.4.2, §4.5.2, §4.11.3, §4.11.5, §4.11.6, E0305, E1201
   - Deliverable: `stage0/src/sema/layout_soa.zig`: @packed, @c_layout (target C ABI order, E1201), SoA column bases (64-aligned), `soa []T` repr, @soa decls, @cold metadata.
   - Acceptance: soa [10]{a:u8,b:f32}: base_b 64, size 128; @packed {u8,u32} size 5 align 1; @c_layout {bool,u3,u32} size 8; `soa [4]u32` E0305.
   - Size: M · Parallel: W12
   - Blocked by: T034, T041
   - Blocks: T050, T051, T069, T091, T097
-- [ ] **T046** Literals: struct, anonymous, inferred members, arrays, tuples
+- [x] **T046** Literals: struct, anonymous, inferred members, arrays, tuples
   - Spec: §6.2.1-§6.2.4, §6.2.6, §7.3.3, §4.9.1 rule 8, E0340, E0350-E0353
   - Deliverable: `stage0/src/sema/check_literals.zig`.
   - Acceptance: `Player{health:80, ..}` ok, missing defaulted field w/o `..` E0340; outside-module E0352; `.{x:1}` w/o expected E0350; `state == .playing`; `.init()`; Option wraps `.some`; E0353.
   - Size: M · Parallel: W12
   - Blocked by: T043
   - Blocks: T052, T072, T215
-- [ ] **T047** Calls: binding, named/default args, modes, fn pointers **[GATE]**
+- [x] **T047** Calls: binding, named/default args, modes, fn pointers **[GATE]**
   - Spec: §5.5.2, §6.9, §6.12.7, §7.2.3-§7.2.5, §4.6, §4.5.3, E0326, E0334-E0336, E0338, E0339, E0374, E0801
   - Deliverable: `stage0/src/sema/check_call.zig` (E0801 via const-known predicate; full comptime-known via comptime driver hook).
   - Acceptance: Pass+fail per code; `spawn_actor(position: p, scale: 2.0)` binds; `let f: fn(f32)->f32 = clamp;`; named arg via fn pointer rejected.
   - Size: M · Parallel: W12
   - Blocked by: T043
   - Blocks: T055, T063, T068, T074, T077, T083
-- [ ] **T048** Builtin registry: signatures, context rules, variadic print/format **[GATE]**
+- [x] **T048** Builtin registry: signatures, context rules, variadic print/format **[GATE]**
   - Spec: §8.7, §14.6, §10.6, §11.1.7, §12
   - Deliverable: `stage0/src/sema/builtins.zig`: one table of every §8.7 builtin (arity, typing rule, allowed context: comptime/any/unsafe/@ensures/GPU stage), builtin variables, print/eprint/format intrinsics.
   - Acceptance: Wrong-context use -> right diagnostic; unknown `@name` rejected; SIMD/GPU/unsafe builtin signatures type-check.
@@ -499,7 +499,7 @@ graph TD
   - Blocked by: T043
   - Blocks: T053, T054, T112, T177
   - Conflicts: Single table file: SIMD/GPU/unsafe tasks add lowering only, never rows.
-- [ ] **T049** Result must-use rule
+- [x] **T049** Result must-use rule
   - Spec: §9.1, §9.1.1, E0603
   - Deliverable: `stage0/src/sema/must_use.zig`.
   - Acceptance: Result expression statement E0603; `_ = r` ok; discarding Option ok.
@@ -551,7 +551,7 @@ graph TD
 
 ## M4. Comptime, generics, reflection
 
-- [ ] **T056** Comptime value model, arena, runtime embedding
+- [x] **T056** Comptime value model, arena, runtime embedding
   - Spec: §8.1, §8.3, §8.6, B.4
   - Deliverable: `stage0/src/comptime/{value,arena,embed}.zig`.
   - Acceptance: Round-trip ints/floats/structs/arrays into globals; usize width follows target; embedding type/FnRef/FieldId/non-plain E0802; arena freed per evaluation.
