@@ -128,6 +128,7 @@ pub const Lang = enum(u8) {
     mesh_out,
 };
 
+/// Kind of declaration behind a nominal type (§4.4.4, §4.7, §7).
 pub const NominalKind = enum(u8) { @"struct", @"enum", protocol, distinct };
 
 /// A nominal type. Only `decl` and `args` identify it; the other fields
@@ -211,6 +212,7 @@ pub fn init(gpa: Allocator, io: Io, strings: *Interner) Allocator.Error!Types {
     return t;
 }
 
+/// Frees all keys and slices; invalidates every Key returned by `get`.
 pub fn deinit(t: *Types) void {
     t.map.deinit(t.gpa);
     t.keys.deinit(t.gpa);
@@ -529,12 +531,20 @@ test "nominal: identical decls differ, distinct != underlying, alias == T" {
     try testing.expect(meters != TypeId.f32);
     try testing.expectEqual(TypeId.f32, t.get(meters).nominal.underlying);
 
-    // type Bytes = [4]u8; aliases have no entry, so the alias is [4]u8 itself.
+    // Aliases have no entry: resolving one interns its target's key, which
+    // yields the target's id and adds nothing to the table.
     const before = t.count();
+    // type V = A;
+    try testing.expectEqual(a, try t.intern(.{ .nominal = .{ .decl = .{ .package = app, .index = 0 }, .kind = .@"struct", .name = try f.strings.intern("A") } }));
+    // type Bytes = [4]u8;
     const arr: Key = .{ .array = .{ .len = 4, .elem = .int(.unsigned, 8) } };
     const bytes = try t.intern(arr);
     try testing.expectEqual(bytes, try t.intern(arr));
-    try testing.expectEqual(before + 1, t.count());
+    // type Pair = G<u8>; then type P2 = Pair;
+    const g: Key = .{ .nominal = .{ .decl = .{ .package = app, .index = 3 }, .args = &.{.{ .type = .int(.unsigned, 8) }}, .kind = .@"struct", .name = try f.strings.intern("G") } };
+    const pair = try t.intern(g);
+    try testing.expectEqual(pair, try t.intern(g));
+    try testing.expectEqual(before + 2, t.count());
 }
 
 test "generic instances: G<A> == G<A>, args and package lines distinguish" {
