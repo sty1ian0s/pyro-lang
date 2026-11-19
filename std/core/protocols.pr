@@ -1,0 +1,48 @@
+//! Core protocols and `Order` (§14.2). All of them are in the prelude.
+//!
+//! Required methods only. T106 adds the implementations for primitive types.
+
+/// The result of a three-way comparison.
+pub enum Order {
+    less,
+    equal,
+    greater,
+}
+
+/// Total order.
+pub protocol Ord {
+    fn cmp(self, other: Self) -> Order;
+}
+
+/// Conversion from `E`.
+pub protocol From<E> {
+    fn from(e: E) -> Self;
+}
+
+/// Feeds every part of the value into a hasher.
+pub protocol Hash {
+    fn hash(self, mut h: std.hash.Hasher);
+}
+
+/// User-facing formatting: the `{}` placeholder (§14.6).
+pub protocol Display {
+    fn fmt(self, mut w: std.fmt.Writer);
+}
+
+/// Debug formatting: the `{:?}` placeholder (§14.6).
+pub protocol Debug {
+    fn debug(self, mut w: std.fmt.Writer);
+}
+
+/// Read access by position. A type with `Indexable` and `IndexableMut` is a
+/// mutable iterable (§6.7.2).
+pub protocol Indexable<E> {
+    fn len(self) -> usize;
+    /// Must trap if `i >= len`.
+    fn at(self, i: usize) -> E;
+}
+
+/// Write access by position, for types that are also `Indexable`.
+pub protocol IndexableMut<E> {
+    fn at_mut(mut self, i: usize) -> mut E;
+}

@@ -1,0 +1,11 @@
+//! `Option<T>` (§14.1.2). A prelude type.
+//!
+//! Declaration only. T105 adds the methods `is_some`, `is_none`, `unwrap_or`,
+//! `expect` (traps with kind `.explicit` on `.none`), `map` and `ok_or`.
+
+/// An optional value: `.some(x)` or `.none`. `Option<Handle<T>>` has the
+/// same size as `Handle<T>` (§4.11.4).
+pub enum Option<T> {
+    some(T),
+    none,
+}

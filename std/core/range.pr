@@ -1,0 +1,36 @@
+//! Integer ranges (§14.1.3). All four types are in the prelude.
+//!
+//! Declarations only. T105 adds `len() -> usize`, `contains(x) -> bool`,
+//! `step(n: T) -> StepRange<T>` and `rev() -> RevRange<T>` on `Range` and
+//! `RangeInclusive`, and makes `StepRange` and `RevRange` iterable. The
+//! private fields of `StepRange` and `RevRange` are a starting point T105 may
+//! change.
+
+/// `a..b`: the integers `start <= x < end`.
+pub struct Range<T> {
+    pub start: T,
+    pub end: T,
+}
+
+/// `a..=b`: the integers `start <= x <= end`.
+pub struct RangeInclusive<T> {
+    pub start: T,
+    pub end: T,
+}
+
+/// A range walked from `start` towards `end` with stride `stride > 0`, from
+/// `step(n)`. `inclusive` says whether `end` belongs to the range.
+pub struct StepRange<T> {
+    start: T,
+    end: T,
+    stride: T,
+    inclusive: bool,
+}
+
+/// A range walked from its last element down to `start`, from `rev()`.
+/// `inclusive` says whether `end` belongs to the range.
+pub struct RevRange<T> {
+    start: T,
+    end: T,
+    inclusive: bool,
+}
