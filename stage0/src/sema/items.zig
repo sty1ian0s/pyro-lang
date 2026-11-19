@@ -668,6 +668,12 @@ pub const Items = struct {
         return it.stdInstance(index, name, is_protocol, out);
     }
 
+    /// `Option<payload>` (§14.1): the type the prelude name `Option`
+    /// denotes with argument `payload`.
+    pub fn optionOf(it: *Items, payload: TypeId) Error!TypeId {
+        return it.preludeInstance("Option", &.{.{ .type = payload }});
+    }
+
     fn stdInstance(it: *Items, index: u32, name: []const u8, is_protocol: bool, out: []const Types.Arg) Error!TypeId {
         const langs = std.StaticStringMap(Types.Lang).initComptime(.{
             .{ "Option", .option }, .{ "Result", .result }, .{ "Atomic", .atomic }, .{ "Channel", .channel },
