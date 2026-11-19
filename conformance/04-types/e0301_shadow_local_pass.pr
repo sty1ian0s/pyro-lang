@@ -1,4 +1,3 @@
-//@ expected-fail: T039
 //@ covers: E0301
 // §6.3.1: a local may shadow another local, and names that merely contain a
 // prelude name (`u8_count`, `print_width`) are ordinary identifiers.

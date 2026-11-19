@@ -1,4 +1,3 @@
-//@ expected-fail: T043
 //@ covers: E0310
 // §4.7, §4.9.1, §6.4.1: explicit conversions, implicit widening and scalar
 // broadcast type-check.

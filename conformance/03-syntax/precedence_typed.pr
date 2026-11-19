@@ -1,5 +1,4 @@
 //@ stop-after: check
-//@ expected-fail: T043
 // §3.9: precedence rows whose other grouping would not type-check.
 fn rows(a: u32, b: u32, p: bool, q: bool) {
     // `&` (7) and `|` (5) bind tighter than `==`/`!=` (4): `a & (b == 0)` is a type error.

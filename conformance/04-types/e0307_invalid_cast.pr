@@ -1,4 +1,3 @@
-//@ expected-fail: T033
 // §4.9.2: integer to `bool` is not a cast, payload enums have no discriminant
 // cast, a payload-free enum casts only to its backing type or wider, and
 // `str` is not a cast target.

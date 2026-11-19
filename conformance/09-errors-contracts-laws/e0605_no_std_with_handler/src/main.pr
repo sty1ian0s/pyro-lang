@@ -1,4 +1,3 @@
-//@ expected-fail: T141
 //@ covers: E0605
 // §9.4: a `no_std` package (see ../pyro.toml) with exactly one trap handler.
 

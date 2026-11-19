@@ -1,3 +1,2 @@
 //@ covers: E0905
-//@ expected-fail: T038
 pub use shapes.{area, Square};

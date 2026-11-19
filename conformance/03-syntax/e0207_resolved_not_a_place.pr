@@ -1,5 +1,4 @@
 //@ stop-after: check
-//@ expected-fail: T043
 // §3.5, §1.6: names that resolve to a constant or a function are not places.
 const LIMIT: i32 = 10;
 

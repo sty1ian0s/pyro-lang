@@ -1,4 +1,3 @@
-//@ expected-fail: T033
 //@ covers: E0307
 // §4.9.2: every row of the `as` table.
 

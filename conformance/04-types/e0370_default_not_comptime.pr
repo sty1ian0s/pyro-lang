@@ -1,4 +1,3 @@
-//@ expected-fail: T040
 // §7.2.3: parameter defaults must be comptime constant expressions; another
 // parameter is not one.
 

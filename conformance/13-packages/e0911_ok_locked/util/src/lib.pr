@@ -1,5 +1,4 @@
 //@ covers: E0911
-//@ expected-fail: T163
 
 pub fn answer() -> u32 {
     42

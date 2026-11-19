@@ -1,4 +1,3 @@
-//@ expected-fail: T043
 // §4.2.4: a function declared `-> noreturn` must not return normally.
 
 fn stop(code: u8) -> noreturn {

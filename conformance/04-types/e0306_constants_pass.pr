@@ -1,4 +1,3 @@
-//@ expected-fail: T033
 //@ covers: E0306
 // §4.8: untyped constants have arbitrary precision until they meet a type;
 // boundary values fit; untyped floats round to nearest even into `f32`.

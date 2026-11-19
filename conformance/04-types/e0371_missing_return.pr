@@ -1,4 +1,3 @@
-//@ expected-fail: T043
 // §7.2.1: a non-`void` function must produce a value on every path. A bare
 // `return;` is reported where it is; falling off the end is reported at the
 // closing brace of the body.

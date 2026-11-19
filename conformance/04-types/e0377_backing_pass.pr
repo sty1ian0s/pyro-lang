@@ -1,4 +1,3 @@
-//@ expected-fail: T040
 //@ covers: E0377
 // §7.4, §4.11.4: backing types on payload-free enums; payload enums without one.
 

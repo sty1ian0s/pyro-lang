@@ -1,4 +1,4 @@
-//@ expected-fail: T043
+//@ expected-fail: T163
 //@ covers: E0327
 // §5.3.3, §6.11.1: bind a resource temporary and release it; `_ = e` is fine
 // for non-resource values.

@@ -1,4 +1,3 @@
-//@ expected-fail: T033
 // §4.8: an untyped constant must fit the type it converts to, and an untyped
 // float never converts to an integer type.
 

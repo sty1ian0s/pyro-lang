@@ -1,5 +1,4 @@
 //@ covers: E0903
-//@ expected-fail: T038
 // Renaming with `as` resolves a collision (§7.8.2). Importing one module under
 // two different names is not a collision.
 use std.math;

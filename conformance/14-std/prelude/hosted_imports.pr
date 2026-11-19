@@ -1,4 +1,3 @@
-//@ expected-fail: T116
 //@ covers: E0912
 // §14.1.1: a hosted package (no `no_std`) may import every hosted-only module.
 

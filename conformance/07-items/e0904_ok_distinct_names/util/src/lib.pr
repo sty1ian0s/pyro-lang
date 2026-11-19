@@ -1,4 +1,3 @@
-//@ expected-fail: T038
 
 pub fn answer() -> u32 {
     42
