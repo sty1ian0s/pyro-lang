@@ -316,7 +316,7 @@ fn writeOrFail(c: *Checker, w: *std.Io.Writer, p: Pat) (Error || std.Io.Writer.E
     switch (try spaceOf(c, p.ty)) {
         .int => |i| {
             const r = k.ctor.range;
-            if (i.is_bool and r.lo == r.hi) return w.writeAll(if (r.lo == 1) "true" else "false");
+            if (i.is_bool) return w.writeAll(if (r.lo != r.hi) "_" else if (r.lo == 1) "true" else "false");
             if (r.lo == r.hi) return w.print("{d}", .{r.lo});
             return w.print("{d}..={d}", .{ r.lo, r.hi });
         },

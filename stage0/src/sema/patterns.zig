@@ -43,9 +43,16 @@ const Pat = exhaustive.Pat;
 /// `match e { P1 => a, P2 if g => b, ... }` (§6.6.3): the arms' common type.
 pub fn matchExpr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const d = c.ast.data(n).match;
-    const subj = try subject(c, d.subject, .none);
+    var subj = try subject(c, d.subject, .none);
     // shortcut: arms after a diverging subject are dead and not checked; check them when dead code gets diagnostics.
     if (subj.value.ty == .noreturn) return .never;
+    // `e` is evaluated once (§6.6.3): a guard assigning to a mutable subject
+    // place must not change what later arms test, so they test a copy.
+    if (subj.mutable and subj.mode == .copy and subj.value.ty != .err) for (d.arms) |arm| {
+        if (c.ast.data(arm).match_arm.guard == null) continue;
+        subj = try snapshot(c, subj, d.subject);
+        break;
+    };
 
     var ok = true;
     const pats = try c.arena.alloc(Pat, d.arms.len);
@@ -68,12 +75,18 @@ pub fn matchExpr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     for (d.arms, pats, vals, ends) |arm, p, *v, *end| {
         const a = c.ast.data(arm).match_arm;
         const fail = try c.addBlock();
-        try bindTest(c, subj, p, fail, true);
+        // Payloads move only into the bindings of the arm taken (§6.6.3,
+        // §5.3.3): the guard sees views, and the moves follow its success.
+        var tested = subj;
+        if (a.guard != null and subj.mode == .move) tested.mode = .view;
+        try bindTest(c, tested, p, fail, true);
         if (a.guard) |g| {
             const cond = try check_expr.checkAs(c, g, .bool);
             const body = try c.addBlock();
             _ = try c.emit(.void, .{ .cond_br = .{ .cond = cond.ref, .then = body, .@"else" = fail } });
             c.setBlock(body);
+            // Rebinds the arm's names to new locals that take the moves.
+            if (tested.mode != subj.mode) try bindTest(c, subj, p, fail, true);
         }
         v.* = try check_expr.check(c, a.body, expected);
         end.* = c.b.block;
@@ -225,6 +238,16 @@ fn subject(c: *Checker, e: Node.Index, decl: TypeId) Error!Subject {
     const slot = try c.emit(v.ty, .{ .local = .{ .local = l } });
     _ = try c.emit(.void, .{ .store = .{ .place = slot, .value = v.ref } });
     return .{ .root = l, .value = v, .mode = if (try check_stmt.isResource(c, v.ty)) .move else .copy };
+}
+
+/// `subj` copied into a new `temp` local (for a subject of plain type).
+fn snapshot(c: *Checker, subj: Subject, e: Node.Index) Error!Subject {
+    const ty = subj.value.ty;
+    const v = try c.emit(ty, .{ .load = .{ .place = try place(c, subj, &.{}) } });
+    const l = try c.b.addLocal(.{ .ty = ty, .name = .none, .kind = .temp, .node = e });
+    const slot = try c.emit(ty, .{ .local = .{ .local = l } });
+    _ = try c.emit(.void, .{ .store = .{ .place = slot, .value = v } });
+    return .{ .root = l, .value = subj.value };
 }
 
 /// The TIR local expression `e` names, if it is a local binding or `self`.
@@ -783,6 +806,93 @@ test "`match move` binds a resource payload by move; a place binds by view" {
     try f.expectDiags(&.{});
     try expectOps(&f, "take", &.{ .enum_tag, .variant_field, .move, .enum_tag });
     try expectOps(&f, "peek", &.{ .enum_tag, .variant_field, .view, .enum_tag });
+}
+
+test "a guarded `match move` arm moves only after its guard succeeds" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\@resource
+        \\struct File { fd: i32 }
+        \\enum Slot { empty, full(File) }
+        \\fn pick(move s: Slot, ok: bool) -> u32 {
+        \\    match move s { .full(f) if ok => 1, .full(g) => 2, .empty => 3 }
+        \\}
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    // Arm 1: tag test, view for the guard, guard, retest, move; arm 2: test, move; arm 3: test.
+    try expectOps(&f, "pick", &.{ .cond_br, .view, .cond_br, .cond_br, .move, .cond_br, .move, .cond_br });
+}
+
+test "a guard assigning to the subject does not change what later arms test" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn pick(x: u32) -> u32 {
+        \\    let mut y = x;
+        \\    match y { 0 if { y = 1; false } => 5, 1 => 6, _ => 7 }
+        \\}
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    // The arms test the copy `l2`; the guard assigns `l1`.
+    try f.expectDump("pick",
+        \\fn pick(l0 x: u32) -> u32 {
+        \\  l1 mut y: u32
+        \\  l2 : u32
+        \\b0:
+        \\  %0: u32 = local l0
+        \\  %1: u32 = load %0
+        \\  %2: u32 = local l1
+        \\  store %2, %1
+        \\  %4: u32 = local l1
+        \\  %5: u32 = load %4
+        \\  %6: u32 = local l2
+        \\  store %6, %5
+        \\  %8: u32 = local l2
+        \\  %9: u32 = load %8
+        \\  %10: u32 = int 0
+        \\  %11: bool = eq %9, %10
+        \\  cond_br %11, b2, b1
+        \\b1:
+        \\  %18: u32 = local l2
+        \\  %19: u32 = load %18
+        \\  %20: u32 = int 1
+        \\  %21: bool = eq %19, %20
+        \\  cond_br %21, b5, b4
+        \\b2:
+        \\  %13: u32 = local l1
+        \\  %14: u32 = int 1
+        \\  store %13, %14
+        \\  %16: bool = int 0
+        \\  cond_br %16, b3, b1
+        \\b3:
+        \\  %25: u32 = int 5
+        \\  br b7, [%25]
+        \\b4:
+        \\  %29: u32 = int 7
+        \\  br b7, [%29]
+        \\b5:
+        \\  %27: u32 = int 6
+        \\  br b7, [%27]
+        \\b6:
+        \\  unreachable
+        \\b7(%24: u32):
+        \\  ret %24
+        \\}
+        \\
+    );
+}
+
+test "E0357 witness: a bool column with no literal row prints as `_`" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn pair(b: bool, x: u8) -> u32 { match (b, x) { (_, 0) => 1 } }
+        \\fn none(b: bool) -> u32 { match b { } }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ .E0357, "match" }, .{ .E0357, "match" } });
+    try expectMessage(&f, "`(_, 1..=255)` not covered");
+    try expectMessage(&f, "`_` not covered");
 }
 
 test "E0211 alternative types, E0212 struct pattern fields, destructuring `let`" {
