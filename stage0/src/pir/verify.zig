@@ -420,7 +420,10 @@ const Verifier = struct {
         if (inst.atomic != .none) try v.want(mem, .bad_flag, "atomic only applies to load and store");
         if (op == .load) try v.want(inst.atomic != .release and inst.atomic != .acq_rel, .bad_flag, "invalid order for an atomic load");
         if (op == .store) try v.want(inst.atomic != .acquire and inst.atomic != .acq_rel, .bad_flag, "invalid order for an atomic store");
-        if (fl.signed) try v.want(op == .@"bf.extract", .bad_flag, "signed only applies to bf.extract");
+        if (fl.signed) try v.want(switch (op) {
+            .@"bf.extract", .@"add.trap", .@"sub.trap", .@"mul.trap", .@"reduce.min", .@"reduce.max" => true,
+            else => false,
+        }, .bad_flag, "signed only applies to bf.extract, *.trap and reduce.min/max");
         try v.want(switch (op) {
             .icmp => inst.pred.isInt(),
             .fcmp => inst.pred.isFloat(),
@@ -856,7 +859,7 @@ test "valid modules cover every opcode" {
         \\  %r10: i32 = shl nuw %r9, %b
         \\  %r11: i32 = lshr %r10, %b
         \\  %r12: i32 = ashr %r11, %b
-        \\  %t0: i32 = add.trap %r12, %a
+        \\  %t0: i32 = add.trap signed %r12, %a
         \\  %t1: i32 = sub.trap %t0, %a
         \\  %t2: i32 = mul.trap %t1, %a
         \\  ret %t2
@@ -1120,6 +1123,7 @@ test "operand types" {
         .{ .bad_result, "fn @f(%a: i32) -> i32 {\n^entry:\n  %c: i32 = icmp eq %a, %a\n  ret %c\n}\n" },
         .{ .bad_flag, "fn @f(%a: f32) -> f32 {\n^entry:\n  %r: f32 = fadd nsw %a, %a\n  ret %r\n}\n" },
         .{ .bad_flag, "fn @f(%a: i32) -> i32 {\n^entry:\n  %r: i32 = add fast %a, %a\n  ret %r\n}\n" },
+        .{ .bad_flag, "fn @f(%a: i32) -> i32 {\n^entry:\n  %r: i32 = add signed %a, %a\n  ret %r\n}\n" },
         .{ .bad_operand, "fn @f(%v: vec<4 x f32>) -> f32 {\n^entry:\n  %e: f32 = extract %v, 4\n  ret %e\n}\n" },
         .{ .bad_operand, "fn @f(%u: i8) -> i8 {\n^entry:\n  %e: i8 = bf.extract %u, 4, 5\n  ret %e\n}\n" },
         .{ .bad_symbol, "fn @g(%a: i64) -> void\nfn @f(%a: i32) -> void {\n^entry:\n  call @g(%a)\n  ret\n}\n" },

@@ -1,5 +1,7 @@
-//! P-IR -> LLVM IR (B.6.2): functions, parameter and function attributes,
-//! scalar arithmetic, comparisons, conversions and terminators.
+//! P-IR -> LLVM IR (B.6.2): globals, functions, parameter and function
+//! attributes, scalar arithmetic, comparisons, conversions and terminators.
+//! Memory, calls, checks, atomics and intrinsics are in `emit_mem.zig`,
+//! vector operations in `emit_vec.zig`.
 //!
 //! Block parameters become φ-nodes: each P-IR block gets its φs up front, and
 //! every branch records an edge whose arguments are added as incoming values
@@ -12,10 +14,10 @@
 //! Float operations get fast-math flags only when the P-IR `fast` flag is set
 //! (strict IEEE by default, §6.4.4). `nuw`/`nsw` are copied from P-IR.
 //!
-//! The input must pass the P-IR verifier. Opcodes this stage does not cover
-//! (memory, calls, traps, vectors, atomics: T087) and globals give
-//! `error.Unsupported`. A `@name` operand naming a function is that
-//! function's address.
+//! The input must pass the P-IR verifier. Opcodes the backend does not
+//! cover (`handle.lookup` and the concurrency group, which are lowered to
+//! runtime calls before codegen) give `error.Unsupported`. A `@name` operand
+//! is the address of that function or global.
 //!
 //! Every function here references LLVM symbols, so only call it when
 //! `@import("build_options").llvm` is true.
@@ -23,6 +25,8 @@
 const std = @import("std");
 const c = @import("c.zig");
 const ir = @import("../../pir/ir.zig");
+const emit_mem = @import("emit_mem.zig");
+const emit_vec = @import("emit_vec.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -34,7 +38,6 @@ pub const Error = Allocator.Error || error{
 /// Lowers `m` into a new LLVM module named `name` owned by `ctx`. The caller
 /// owns the result (`c.LLVMDisposeModule`). `gpa` is used for scratch only.
 pub fn emitModule(gpa: Allocator, ctx: c.ContextRef, m: *const ir.Module, name: [:0]const u8) Error!c.ModuleRef {
-    if (m.globals.items.len != 0) return error.Unsupported;
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -44,12 +47,14 @@ pub fn emitModule(gpa: Allocator, ctx: c.ContextRef, m: *const ir.Module, name: 
     const b = c.LLVMCreateBuilderInContext(ctx);
     defer c.LLVMDisposeBuilder(b);
 
-    // Declare every function first so bodies can refer to any of them.
+    // Declare every global and function first so bodies can refer to any of them.
+    const globals = try arena.alloc(c.ValueRef, m.globals.items.len);
+    for (globals, m.globals.items) |*llg, g| llg.* = try emit_mem.declareGlobal(arena, ctx, mod, g);
     const fns = try arena.alloc(c.ValueRef, m.functions.items.len);
     for (fns, m.functions.items) |*llfn, f| llfn.* = try declare(arena, ctx, mod, f);
     for (fns, m.functions.items) |llfn, f| {
         if (f.isDeclaration()) continue;
-        var e: FnEmitter = .{ .arena = arena, .ctx = ctx, .b = b, .m = m, .fns = fns, .f = f, .llfn = llfn };
+        var e: FnEmitter = .{ .arena = arena, .ctx = ctx, .b = b, .m = m, .globals = globals, .fns = fns, .f = f, .llfn = llfn };
         try e.body();
     }
     return mod;
@@ -78,7 +83,7 @@ fn declare(arena: Allocator, ctx: c.ContextRef, mod: c.ModuleRef, f: *const ir.F
     return llfn;
 }
 
-fn addAttr(ctx: c.ContextRef, llfn: c.ValueRef, idx: c_uint, comptime name: []const u8, val: u64) void {
+pub fn addAttr(ctx: c.ContextRef, llfn: c.ValueRef, idx: c_uint, comptime name: []const u8, val: u64) void {
     const kind = c.LLVMGetEnumAttributeKindForName(name.ptr, name.len);
     std.debug.assert(kind != 0);
     c.LLVMAddAttributeAtIndex(llfn, idx, c.LLVMCreateEnumAttribute(ctx, kind, val));
@@ -111,11 +116,14 @@ const Edge = struct {
     target: ir.Target,
 };
 
-const FnEmitter = struct {
+/// Per-function emission state, shared with `emit_mem.zig` and `emit_vec.zig`.
+pub const FnEmitter = struct {
     arena: Allocator,
     ctx: c.ContextRef,
     b: c.BuilderRef,
     m: *const ir.Module,
+    /// LLVM global per entry of `m.globals`.
+    globals: []const c.ValueRef,
     /// LLVM function per entry of `m.functions`.
     fns: []const c.ValueRef,
     f: *const ir.Function,
@@ -148,7 +156,7 @@ const FnEmitter = struct {
         }
         for (order) |bi| {
             c.LLVMPositionBuilderAtEnd(e.b, e.blocks[bi].?);
-            for (f.blocks.items[bi].insts.items) |inst| try e.emitInst(inst, bi);
+            for (f.blocks.items[bi].insts.items) |inst| try e.emitInst(inst);
         }
         for (e.edges.items) |edge| {
             const params = f.blocks.items[edge.target.block.index()].params.items;
@@ -160,7 +168,7 @@ const FnEmitter = struct {
     }
 
     /// The LLVM value of an operand; literals take type `ty`.
-    fn operand(e: *FnEmitter, o: ir.Operand, ty: ir.Type) Error!c.ValueRef {
+    pub fn operand(e: *FnEmitter, o: ir.Operand, ty: ir.Type) Error!c.ValueRef {
         return switch (o) {
             .value => |v| e.values[v.index()].?, // verified P-IR: defined in a dominating block
             .int => |i| if (ty.scalar.isInt() and !ty.isVector())
@@ -171,20 +179,22 @@ const FnEmitter = struct {
                 c.LLVMConstReal(llType(e.ctx, ty), x)
             else
                 error.Unsupported,
-            // Globals arrive with T087; verified P-IR names no other symbol.
+            // Verified P-IR names no other symbol.
             .symbol => |name| for (e.m.functions.items, e.fns) |f, llfn| {
                 if (std.mem.eql(u8, f.name, name)) break llfn;
+            } else for (e.m.globals.items, e.globals) |g, llg| {
+                if (std.mem.eql(u8, g.name, name)) break llg;
             } else error.Unsupported,
             .type, .order => error.Unsupported,
         };
     }
 
     /// The LLVM value of value operand `n` of `i` (a `%value` or `@symbol`).
-    fn val(e: *FnEmitter, i: ir.Inst, n: usize) Error!c.ValueRef {
+    pub fn val(e: *FnEmitter, i: ir.Inst, n: usize) Error!c.ValueRef {
         return e.operand(i.operands[n], .void);
     }
 
-    fn emitInst(e: *FnEmitter, i: ir.Inst, bi: u32) Error!void {
+    fn emitInst(e: *FnEmitter, i: ir.Inst) Error!void {
         const ty = if (i.results.len == 1) e.f.typeOf(i.result()) else ir.Type.void;
         const v: c.ValueRef = switch (i.op) {
             .@"const" => try e.operand(i.operands[0], ty),
@@ -204,18 +214,21 @@ const FnEmitter = struct {
             .fcmp => fastMath(i, c.LLVMBuildFCmp(e.b, realPred(i.pred), try e.val(i, 0), try e.val(i, 1), "")),
             .trunc, .zext, .sext, .fptrunc, .fpext, .uitofp, .sitofp, .bitcast, .ptrtoint, .inttoptr => c.LLVMBuildCast(e.b, castOpcode(i.op), try e.val(i, 0), llType(e.ctx, ty), ""),
             .br => blk: {
-                const from = e.blocks[bi].?;
+                // Checks (`bounds`, `*.trap`) may have split the P-IR block.
+                const from = c.LLVMGetInsertBlock(e.b);
                 break :blk c.LLVMBuildBr(e.b, try e.edgeTo(from, i.targets, 0));
             },
             .cond_br => blk: {
-                const from = e.blocks[bi].?;
+                // Checks (`bounds`, `*.trap`) may have split the P-IR block.
+                const from = c.LLVMGetInsertBlock(e.b);
                 const t = try e.edgeTo(from, i.targets, 0);
                 const f = try e.edgeTo(from, i.targets, 1);
                 c.LLVMPositionBuilderAtEnd(e.b, from);
                 break :blk c.LLVMBuildCondBr(e.b, try e.val(i, 0), t, f);
             },
             .@"switch" => blk: {
-                const from = e.blocks[bi].?;
+                // Checks (`bounds`, `*.trap`) may have split the P-IR block.
+                const from = c.LLVMGetInsertBlock(e.b);
                 const dests = try e.arena.alloc(c.BasicBlockRef, i.targets.len);
                 for (dests, 0..) |*d, n| d.* = try e.edgeTo(from, i.targets, n);
                 c.LLVMPositionBuilderAtEnd(e.b, from);
@@ -226,7 +239,8 @@ const FnEmitter = struct {
             },
             .ret => if (i.operands.len == 0) c.LLVMBuildRetVoid(e.b) else c.LLVMBuildRet(e.b, try e.val(i, 0)),
             .@"unreachable" => c.LLVMBuildUnreachable(e.b),
-            else => return error.Unsupported,
+            .splat, .extract, .insert, .shuffle, .select, .@"reduce.add", .@"reduce.mul", .@"reduce.min", .@"reduce.max", .@"reduce.and", .@"reduce.or", .@"load.masked", .@"store.masked" => try emit_vec.emitInst(e, i, ty),
+            else => try emit_mem.emitInst(e, i, ty),
         };
         if (i.results.len == 1) {
             e.values[i.result().index()] = v;
@@ -257,7 +271,7 @@ const FnEmitter = struct {
 };
 
 /// Sets every fast-math flag on `v` iff the P-IR instruction has `fast`.
-fn fastMath(i: ir.Inst, v: c.ValueRef) c.ValueRef {
+pub fn fastMath(i: ir.Inst, v: c.ValueRef) c.ValueRef {
     if (i.flags.fast and c.LLVMCanValueUseFastMathFlags(v) != 0) c.LLVMSetFastMathFlags(v, c.fast_math_all);
     return v;
 }
@@ -327,7 +341,7 @@ const testing = std.testing;
 const build_options = @import("build_options");
 const text = @import("../../pir/text.zig");
 
-fn parseText(src: []const u8) !ir.Module {
+pub fn parseText(src: []const u8) !ir.Module {
     var diag: text.Diag = .{};
     return text.parse(testing.allocator, src, &diag) catch |err| {
         std.debug.print("P-IR parse error {d}:{d}: {s}\n", .{ diag.line, diag.col, diag.msg });
@@ -359,13 +373,13 @@ test "reverse postorder puts dominators first and drops unreachable blocks" {
 }
 
 /// Emitted and verified LLVM IR of a P-IR module, for FileCheck-style tests.
-const Emitted = struct {
+pub const Emitted = struct {
     ctx: c.ContextRef,
     /// Null once `jit` hands the module to an execution engine.
     mod: ?c.ModuleRef,
     ir_text: []const u8,
 
-    fn init(src: []const u8) !Emitted {
+    pub fn init(src: []const u8) !Emitted {
         var m = try parseText(src);
         defer m.deinit();
         const ctx = c.LLVMContextCreate();
@@ -388,7 +402,7 @@ const Emitted = struct {
         return .{ .ctx = ctx, .mod = mod, .ir_text = ir_text };
     }
 
-    fn deinit(x: *Emitted) void {
+    pub fn deinit(x: *Emitted) void {
         testing.allocator.free(x.ir_text);
         if (x.mod) |m| c.LLVMDisposeModule(m);
         c.LLVMContextDispose(x.ctx);
@@ -396,7 +410,7 @@ const Emitted = struct {
 
     /// FileCheck-style: each `checks` line occurs, in order; no `nots`
     /// substring occurs anywhere.
-    fn expect(x: Emitted, checks: []const []const u8, nots: []const []const u8) !void {
+    pub fn expect(x: Emitted, checks: []const []const u8, nots: []const []const u8) !void {
         var pos: usize = 0;
         for (checks) |want| {
             const at = std.mem.indexOfPos(u8, x.ir_text, pos, want) orelse {
@@ -413,7 +427,7 @@ const Emitted = struct {
 
     /// JIT-compiles the module (consuming it) and returns the address of
     /// function `name`, valid until `ee` is disposed.
-    fn jit(x: *Emitted, name: [:0]const u8, ee: *c.ExecutionEngineRef) !usize {
+    pub fn jit(x: *Emitted, name: [:0]const u8, ee: *c.ExecutionEngineRef) !usize {
         switch (@import("builtin").cpu.arch) {
             .x86_64 => {
                 c.LLVMInitializeX86TargetInfo();
@@ -445,7 +459,7 @@ const Emitted = struct {
 
 /// Runs `body` only in `-Dllvm=true` builds; the other branch is never
 /// analysed, so the default build references no LLVM symbol.
-fn llvmTest(comptime body: fn () anyerror!void) !void {
+pub fn llvmTest(comptime body: fn () anyerror!void) !void {
     if (build_options.llvm) return body() else return error.SkipZigTest;
 }
 
@@ -700,17 +714,21 @@ test "function symbols are values" {
     }.run);
 }
 
-test "unsupported opcodes and globals are reported" {
+test "unsupported opcodes are reported" {
     try llvmTest(struct {
         fn run() !void {
             const cases = [_][]const u8{
-                \\fn @f(%p: ptr) -> i32 {
+                \\fn @f(%p: ptr, %h: i64) -> i32 {
                 \\^entry:
-                \\  %v: i32 = load %p
-                \\  ret %v
+                \\  %i: i32, %ok: i1 = handle.lookup %p, %h
+                \\  ret %i
                 \\}
                 ,
-                "global @g: i64 = 0",
+                \\fn @f() -> void {
+                \\^entry:
+                \\  pfor.end
+                \\  ret
+                \\}
             };
             for (cases) |src| {
                 var m = try parseText(src);

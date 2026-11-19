@@ -63,6 +63,15 @@ pub const fast_math_all: c_uint = 0x7f;
 pub const attribute_return_index: c_uint = 0;
 pub const attribute_function_index: c_uint = ~@as(c_uint, 0);
 
+/// `LLVMAtomicOrdering` (Core.h).
+pub const AtomicOrdering = enum(c_int) { not_atomic = 0, unordered = 1, monotonic = 2, acquire = 4, release = 5, acq_rel = 6, seq_cst = 7 };
+
+/// `LLVMAtomicRMWBinOp` (Core.h); only the integer and exchange operations.
+pub const AtomicRMWBinOp = enum(c_int) { xchg, add, sub, @"and", nand, @"or", xor, max, min, umax, umin, _ };
+
+/// `LLVMTailCallKind` (Core.h).
+pub const TailCallKind = enum(c_int) { none, tail, must_tail, no_tail };
+
 /// `LLVMVerifierFailureAction` (Analysis.h).
 pub const VerifierFailureAction = enum(c_int) { abort_process, print_message, return_status };
 
@@ -79,6 +88,7 @@ pub extern fn LLVMDoubleTypeInContext(C: ContextRef) TypeRef;
 pub extern fn LLVMVoidTypeInContext(C: ContextRef) TypeRef;
 pub extern fn LLVMPointerTypeInContext(C: ContextRef, AddressSpace: c_uint) TypeRef;
 pub extern fn LLVMVectorType(ElementType: TypeRef, ElementCount: c_uint) TypeRef;
+pub extern fn LLVMArrayType2(ElementType: TypeRef, ElementCount: u64) TypeRef;
 pub extern fn LLVMFunctionType(ReturnType: TypeRef, ParamTypes: [*]const TypeRef, ParamCount: c_uint, IsVarArg: Bool) TypeRef;
 
 // Core.h: values, functions, attributes, blocks
@@ -88,10 +98,25 @@ pub extern fn LLVMSetValueName2(Val: ValueRef, Name: [*]const u8, NameLen: usize
 pub extern fn LLVMIsAInstruction(Val: ValueRef) ?ValueRef;
 pub extern fn LLVMConstInt(IntTy: TypeRef, N: c_ulonglong, SignExtend: Bool) ValueRef;
 pub extern fn LLVMConstReal(RealTy: TypeRef, N: f64) ValueRef;
+pub extern fn LLVMConstNull(Ty: TypeRef) ValueRef;
+pub extern fn LLVMGetPoison(Ty: TypeRef) ValueRef;
+pub extern fn LLVMConstVector(ScalarConstantVals: [*]const ValueRef, Size: c_uint) ValueRef;
+pub extern fn LLVMConstStringInContext2(C: ContextRef, Str: [*]const u8, Length: usize, DontNullTerminate: Bool) ValueRef;
+pub extern fn LLVMAddGlobal(M: ModuleRef, Ty: TypeRef, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMSetInitializer(GlobalVar: ValueRef, ConstantVal: ValueRef) void;
+pub extern fn LLVMSetGlobalConstant(GlobalVar: ValueRef, IsConstant: Bool) void;
+pub extern fn LLVMSetAlignment(V: ValueRef, Bytes: c_uint) void;
+pub extern fn LLVMGetGlobalParent(Global: ValueRef) ModuleRef;
+pub extern fn LLVMGlobalGetValueType(Global: ValueRef) TypeRef;
+pub extern fn LLVMGetNamedFunction(M: ModuleRef, Name: [*:0]const u8) ?ValueRef;
+pub extern fn LLVMLookupIntrinsicID(Name: [*]const u8, NameLen: usize) c_uint;
+pub extern fn LLVMGetIntrinsicDeclaration(Mod: ModuleRef, ID: c_uint, ParamTypes: [*]const TypeRef, ParamCount: usize) ValueRef;
+pub extern fn LLVMIntrinsicGetType(Ctx: ContextRef, ID: c_uint, ParamTypes: [*]const TypeRef, ParamCount: usize) TypeRef;
 pub extern fn LLVMGetEnumAttributeKindForName(Name: [*]const u8, SLen: usize) c_uint;
 pub extern fn LLVMCreateEnumAttribute(C: ContextRef, KindID: c_uint, Val: u64) AttributeRef;
 pub extern fn LLVMAddAttributeAtIndex(F: ValueRef, Idx: c_uint, A: AttributeRef) void;
 pub extern fn LLVMAppendBasicBlockInContext(C: ContextRef, Fn: ValueRef, Name: [*:0]const u8) BasicBlockRef;
+pub extern fn LLVMMoveBasicBlockAfter(BB: BasicBlockRef, MovePos: BasicBlockRef) void;
 pub extern fn LLVMAddIncoming(PhiNode: ValueRef, IncomingValues: [*]const ValueRef, IncomingBlocks: [*]const BasicBlockRef, Count: c_uint) void;
 pub extern fn LLVMAddCase(Switch: ValueRef, OnVal: ValueRef, Dest: BasicBlockRef) void;
 pub extern fn LLVMSetNUW(ArithInst: ValueRef, HasNUW: Bool) void;
@@ -103,6 +128,7 @@ pub extern fn LLVMSetFastMathFlags(FPMathInst: ValueRef, FMF: c_uint) void;
 pub extern fn LLVMCreateBuilderInContext(C: ContextRef) BuilderRef;
 pub extern fn LLVMDisposeBuilder(Builder: BuilderRef) void;
 pub extern fn LLVMPositionBuilderAtEnd(Builder: BuilderRef, Block: BasicBlockRef) void;
+pub extern fn LLVMGetInsertBlock(Builder: BuilderRef) BasicBlockRef;
 pub extern fn LLVMBuildBinOp(B: BuilderRef, Op: Opcode, LHS: ValueRef, RHS: ValueRef, Name: [*:0]const u8) ValueRef;
 pub extern fn LLVMBuildFNeg(B: BuilderRef, V: ValueRef, Name: [*:0]const u8) ValueRef;
 pub extern fn LLVMBuildICmp(B: BuilderRef, Op: IntPredicate, LHS: ValueRef, RHS: ValueRef, Name: [*:0]const u8) ValueRef;
@@ -115,6 +141,24 @@ pub extern fn LLVMBuildSwitch(B: BuilderRef, V: ValueRef, Else: BasicBlockRef, N
 pub extern fn LLVMBuildRet(B: BuilderRef, V: ValueRef) ValueRef;
 pub extern fn LLVMBuildRetVoid(B: BuilderRef) ValueRef;
 pub extern fn LLVMBuildUnreachable(B: BuilderRef) ValueRef;
+pub extern fn LLVMBuildAlloca(B: BuilderRef, Ty: TypeRef, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMBuildLoad2(B: BuilderRef, Ty: TypeRef, PointerVal: ValueRef, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMBuildStore(B: BuilderRef, Val: ValueRef, Ptr: ValueRef) ValueRef;
+pub extern fn LLVMBuildGEP2(B: BuilderRef, Ty: TypeRef, Pointer: ValueRef, Indices: [*]const ValueRef, NumIndices: c_uint, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMBuildMemSet(B: BuilderRef, Ptr: ValueRef, Val: ValueRef, Len: ValueRef, Align: c_uint) ValueRef;
+pub extern fn LLVMBuildMemCpy(B: BuilderRef, Dst: ValueRef, DstAlign: c_uint, Src: ValueRef, SrcAlign: c_uint, Size: ValueRef) ValueRef;
+pub extern fn LLVMSetVolatile(MemoryAccessInst: ValueRef, IsVolatile: Bool) void;
+pub extern fn LLVMSetOrdering(MemoryAccessInst: ValueRef, Ordering: AtomicOrdering) void;
+pub extern fn LLVMBuildAtomicRMW(B: BuilderRef, op: AtomicRMWBinOp, PTR: ValueRef, Val: ValueRef, ordering: AtomicOrdering, singleThread: Bool) ValueRef;
+pub extern fn LLVMBuildAtomicCmpXchg(B: BuilderRef, Ptr: ValueRef, Cmp: ValueRef, New: ValueRef, SuccessOrdering: AtomicOrdering, FailureOrdering: AtomicOrdering, SingleThread: Bool) ValueRef;
+pub extern fn LLVMBuildFence(B: BuilderRef, ordering: AtomicOrdering, singleThread: Bool, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMBuildCall2(B: BuilderRef, Ty: TypeRef, Fn: ValueRef, Args: [*]const ValueRef, NumArgs: c_uint, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMSetTailCallKind(CallInst: ValueRef, kind: TailCallKind) void;
+pub extern fn LLVMBuildExtractValue(B: BuilderRef, AggVal: ValueRef, Index: c_uint, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMBuildExtractElement(B: BuilderRef, VecVal: ValueRef, Index: ValueRef, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMBuildInsertElement(B: BuilderRef, VecVal: ValueRef, EltVal: ValueRef, Index: ValueRef, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMBuildShuffleVector(B: BuilderRef, V1: ValueRef, V2: ValueRef, Mask: ValueRef, Name: [*:0]const u8) ValueRef;
+pub extern fn LLVMBuildSelect(B: BuilderRef, If: ValueRef, Then: ValueRef, Else: ValueRef, Name: [*:0]const u8) ValueRef;
 
 // Analysis.h
 pub extern fn LLVMVerifyModule(M: ModuleRef, Action: VerifierFailureAction, OutMessage: *?[*:0]u8) Bool;
@@ -124,6 +168,9 @@ pub extern fn LLVMLinkInMCJIT() void;
 pub extern fn LLVMCreateExecutionEngineForModule(OutEE: *ExecutionEngineRef, M: ModuleRef, OutError: *?[*:0]u8) Bool;
 pub extern fn LLVMDisposeExecutionEngine(EE: ExecutionEngineRef) void;
 pub extern fn LLVMGetFunctionAddress(EE: ExecutionEngineRef, Name: [*:0]const u8) u64;
+
+// Support.h
+pub extern fn LLVMAddSymbol(symbolName: [*:0]const u8, symbolValue: *const anyopaque) void;
 
 // Target.h: per-target initialisation (`LLVMInitializeNativeTarget` is a
 // header-only inline, so callers pick the host's functions themselves).
