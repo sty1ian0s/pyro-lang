@@ -16,14 +16,17 @@
 //! | `codegen`   | 6. codegen & link          | build                     |
 //!
 //! `expand`, `lower` and `codegen` run only if no error was reported so
-//! far: no output is produced from a program with errors. Within a stage,
+//! far, counting warnings promoted by `@deny` (`Sink.hasErrors`): no output
+//! is produced from a program with errors. Within a stage,
 //! hooks run in registration order. A hook does its own parallelism on
 //! `pool` and reports through `sink`, whose `finish` order does not depend
 //! on thread timing, so diagnostics are identical for every `--jobs`.
 //!
-//! A file whose loading reported an error (E0101, E0102, E0103) is
+//! A file whose text is unusable (E0101 invalid UTF-8, E0103 too large) is
 //! poisoned: stages 1-2 skip it, its `ast` stays empty, and later stages
-//! must skip it too (A.1: no cascading errors).
+//! must skip it too (A.1: no cascading errors). A stray CR (E0102) does not
+//! poison: the lexer treats it as whitespace, so the file's other errors are
+//! still reported (A.1).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -81,7 +84,7 @@ pub const Options = struct {
 /// One input file.
 pub const File = struct {
     id: diag.FileId,
-    /// Loading reported an error; see the file comment.
+    /// Loading found the text unusable; see the file comment.
     poisoned: bool,
     /// After stage 1, the file's tokens; after stage 2, also its tree.
     /// `ast.source` is the file's text from the source map.
@@ -128,7 +131,7 @@ pub fn deinit(comp: *Compilation) void {
 }
 
 /// Memory-maps `sub_path` (relative to `dir`) as an input file. Loading
-/// errors are reported and poison the file; only I/O failures return an error.
+/// errors are reported and may poison the file; only I/O failures return an error.
 pub fn addFile(comp: *Compilation, dir: Io.Dir, sub_path: []const u8) !diag.FileId {
     var local: diag.Sink = .init(comp.gpa, comp.io);
     defer local.deinit();
@@ -142,15 +145,20 @@ pub fn addSource(comp: *Compilation, path: []const u8, bytes: []const u8) !diag.
     return comp.addLoaded(try comp.sources.addBytes(path, bytes, &local), &local);
 }
 
-/// Records file `id`, poisoned if loading it reported anything into `local`.
+/// Records file `id`, poisoned if loading it reported anything but E0102
+/// into `local`.
 fn addLoaded(comp: *Compilation, id: diag.FileId, local: *diag.Sink) !diag.FileId {
     const ds = local.finish();
-    for (ds) |d| try comp.sink.emit(d);
+    var poisoned = false;
+    for (ds) |d| {
+        try comp.sink.emit(d);
+        if (d.code != .E0102) poisoned = true;
+    }
     // Node 0 is a file's root: cascades about the file as a whole are dropped.
-    if (ds.len != 0) try comp.sink.poison(.{ .file = id, .node = 0 });
+    if (poisoned) try comp.sink.poison(.{ .file = id, .node = 0 });
     try comp.files.append(comp.gpa, .{
         .id = id,
-        .poisoned = ds.len != 0,
+        .poisoned = poisoned,
         .ast = .{ .source = comp.sources.get(id).text },
     });
     return id;
@@ -285,17 +293,32 @@ test "poisoned input is skipped; others are lexed and parsed" {
     try comp.init(testing.allocator, testing.io, .{ .jobs = 2, .stop_after = .parse });
     defer comp.deinit();
     _ = try comp.addSource("ok.pr", "fn a() {}\n");
-    _ = try comp.addSource("cr.pr", "fn a() {}\rfn b() {}\n");
+    _ = try comp.addSource("bad.pr", "fn a() {}\xFF\nconst = 1;\n");
     try comp.run();
     const ok = comp.files.items[0];
-    const cr = comp.files.items[1];
-    try testing.expect(!ok.poisoned and cr.poisoned);
+    const bad = comp.files.items[1];
+    try testing.expect(!ok.poisoned and bad.poisoned);
     try testing.expect(ok.ast.nodes.len > 1);
-    try testing.expectEqual(0, cr.ast.tokens.len);
-    try testing.expectEqual(0, cr.ast.nodes.len);
+    try testing.expectEqual(0, bad.ast.tokens.len);
+    try testing.expectEqual(0, bad.ast.nodes.len);
     const ds = comp.sink.finish();
     try testing.expectEqual(1, ds.len);
+    try testing.expectEqual(.E0101, ds[0].code.?);
+}
+
+test "stray CR is reported but does not hide the file's other errors" {
+    var comp: Compilation = undefined;
+    try comp.init(testing.allocator, testing.io, .{ .jobs = 2, .stop_after = .parse });
+    defer comp.deinit();
+    _ = try comp.addSource("cr.pr", "fn a() {}\rfn b() {}\nconst = 1;\n");
+    try comp.run();
+    const cr = comp.files.items[0];
+    try testing.expect(!cr.poisoned);
+    try testing.expect(cr.ast.nodes.len > 1);
+    const ds = comp.sink.finish();
+    try testing.expect(ds.len >= 2);
     try testing.expectEqual(.E0102, ds[0].code.?);
+    for (ds[1..]) |d| try testing.expect(d.code != .E0102 and d.severity == .@"error");
 }
 
 /// Records which hooks ran, in order.
@@ -352,6 +375,28 @@ test "stop_after selects the stages that run; stop after parse skips stage-3 hoo
         try hooksRun(c[0], c[1], &rec);
         try testing.expectEqualStrings(c[2], rec.ran());
     }
+}
+
+test "a warning promoted by @deny stops lower and codegen" {
+    const Deny = struct {
+        fn levelAt(_: *const anyopaque, _: diag.DiagCode, _: diag.Span) diag.Sink.WarningLevel {
+            return .deny;
+        }
+        fn warn(_: ?*anyopaque, c: *Compilation) anyerror!void {
+            try c.sink.emitAt(.W0201, .{ .file = c.files.items[0].id, .start = 0, .end = 2 }, "denied");
+        }
+    };
+    var rec: Recorder = .{};
+    var comp: Compilation = undefined;
+    try comp.init(testing.allocator, testing.io, .{ .jobs = 2 });
+    defer comp.deinit();
+    comp.sink.warning_policy = .{ .ctx = undefined, .levelAt = Deny.levelAt };
+    _ = try comp.addSource("m.pr", "fn a() {}");
+    try comp.addHook(.check, .{ .run = Deny.warn });
+    try comp.addHook(.lower, rec.hook('l'));
+    try comp.addHook(.codegen, rec.hook('g'));
+    try comp.run();
+    try testing.expectEqualStrings("", rec.ran());
 }
 
 test "lex-only run keeps tokens; hook arenas are per stage and worker" {
