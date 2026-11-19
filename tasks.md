@@ -434,7 +434,7 @@ graph TD
 
 ## M3. Type checker core
 
-- [ ] **T040** Item declaration checking: structs, enums, aliases, consts, main **[CRITICAL]** **[GATE]**
+- [x] **T040** Item declaration checking: structs, enums, aliases, consts, main **[CRITICAL]** **[GATE]**
   - Spec: §7.2.1, §7.2.2, §7.2.6, §7.3.1, §7.4, §7.7, §4.7, §5.9, §4.12, E0309, E0311, E0341, E0370, E0376, E0377
   - Deliverable: `stage0/src/sema/items.zig`: signatures, struct field defaults (const-folded; full comptime via hook), associated consts, enum variants/discriminants, alias/distinct, module consts, recursive containment, count limits, main signature.
   - Acceptance: Pass+fail per listed code; `enum Opcode: u8 { nop = 0, load, halt = 0xFF }` = 0,1,255; untyped `const PI`; main -> Result requires Display; main -> u8 accepted.
