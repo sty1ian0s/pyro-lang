@@ -1,4 +1,4 @@
-//@ expected-fail: T060
+//@ expected-fail: T072
 //@ covers: E0802
 // §8.1, §8.6: comptime-only values used in comptime contexts, and plain values,
 // `str` and arrays computed at comptime and embedded in the program.

@@ -184,6 +184,7 @@ fn defaultValue(c: *Checker, at: Node.Index, f: items_mod.Field) Error!Typed {
     return switch (f.default.?) {
         .untyped => |k| c.constTo(k, f.type, at),
         .scalar => |v| c.coerce(try c.constant(v), f.type, at),
+        .computed => |cv| c.coerce(try @import("comptime_ctx.zig").use(c, at, cv), f.type, at),
         .unknown, .type => c.unsupported(at, "field defaults computed at comptime (T060)"),
     };
 }

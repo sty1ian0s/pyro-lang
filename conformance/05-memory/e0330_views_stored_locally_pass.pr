@@ -1,4 +1,4 @@
-//@ expected-fail: T060
+//@ expected-fail: T110
 //@ covers: E0330
 // §5.4.1, §6.10: views live in locals, parameters, results, view structs,
 // tuples and payloads; non-capturing lambdas convert to function pointers and

@@ -311,6 +311,7 @@ fn defaultArg(c: *Checker, n: Node.Index, v: items_mod.Value, ty: TypeId) Error!
         .untyped => |k| c.constTo(k, ty, n),
         .scalar => |s| c.constant(s),
         .type => c.unsupported(n, "types as values (T065)"),
+        .computed => |cv| @import("comptime_ctx.zig").use(c, n, cv),
         .unknown => if (ty == .err) blk: {
             c.failed = true; // reported with the default
             break :blk .err;
