@@ -541,7 +541,7 @@ graph TD
   - Size: S · Parallel: W13
   - Blocked by: T043, T048
   - Blocks: T082, T094, T097, T130
-- [ ] **T055** Mutability and addressability
+- [x] **T055** Mutability and addressability
   - Spec: §5.5.1, §5.5.3, §5.5.4, §4.5.3, §4.11.2, §4.11.3, E0308, E0337
   - Deliverable: `stage0/src/sema/mutability.zig`.
   - Acceptance: `let x; x.f = 1` E0337; `heal(mut s.health_bits)` E0308; bit-field `s.flag = true` ok; `-> mut Self` chaining; `let p: mut Particle = particles[i]` writes through.
@@ -565,7 +565,7 @@ graph TD
   - Size: L · Parallel: W13
   - Blocked by: T035, T043, T056
   - Blocks: T058
-- [ ] **T058** Comptime interpreter B: control flow, calls, recursion, defer **[CRITICAL]** **[GATE]**
+- [x] **T058** Comptime interpreter B: control flow, calls, recursion, defer **[CRITICAL]** **[GATE]**
   - Spec: §8.1, §8.6
   - Deliverable: `stage0/src/comptime/interp_ctrl.zig`: register machine over TIR CFG, calls/recursion, match, defer, comptime stack traces.
   - Acceptance: fib/factorial/sort/array-building consts evaluate; bounds/div-zero become compile errors with trace (no new code invented; spec gap noted).
