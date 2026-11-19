@@ -95,8 +95,8 @@ fn structDecl(c: *Checker, ty: TypeId) Error!?*const items_mod.Struct {
     };
 }
 
-/// The struct value of type `ty` from `inits` (`field_init` or `named_arg`
-/// nodes, optionally ending in `rest`); diagnostics about the whole literal
+/// The struct value of type `ty` from `inits` (`field_init`, `named_arg` or
+/// shorthand `ident` nodes, optionally ending in `rest`); diagnostics about the whole literal
 /// go to `at`.
 fn construct(c: *Checker, at: Node.Index, ty: TypeId, inits: []const Node.Index) Error!Typed {
     const s = (try structDecl(c, ty)) orelse {
@@ -118,7 +118,7 @@ fn construct(c: *Checker, at: Node.Index, ty: TypeId, inits: []const Node.Index)
     @memset(seen, false);
     for (inits[0 .. inits.len - @intFromBool(has_rest)]) |g| {
         const kind = c.ast.kind(g);
-        if (kind != .field_init and kind != .named_arg) {
+        if (kind != .field_init and kind != .named_arg and kind != .ident) {
             try c.report(g, null, "expected a field `name: value`", .{});
             _ = try check_expr.check(c, g, .none);
             e.ok = false;
@@ -162,12 +162,13 @@ fn construct(c: *Checker, at: Node.Index, ty: TypeId, inits: []const Node.Index)
     return e.finish(c, ty, .{ .aggregate = .{ .elems = e.refs } });
 }
 
-/// The value of `field_init` or `named_arg` `g` converted to `to`
+/// The value of `field_init`, `named_arg` or `ident` `g` converted to `to`
 /// (`.none`: unchecked type). The shorthand `x` reads the name `x`.
 fn fieldValue(c: *Checker, g: Node.Index, to: TypeId) Error!Typed {
-    const value = switch (c.ast.data(g)) {
+    const value: ?Node.Index = switch (c.ast.data(g)) {
         .field_init => |fi| fi.value,
         .named_arg => |na| na.value,
+        .ident => null,
         else => unreachable,
     };
     if (value) |v| return check_expr.checkAs(c, v, to);
@@ -204,8 +205,16 @@ fn checkAlone(c: *Checker, inits: []const Node.Index) Error!Typed {
 /// `.{ f: e, .. }` builds the expected struct; `.{ a, b }` a tuple or `vec`.
 pub fn anonLit(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const elems = c.ast.data(n).anon_lit.elems;
-    const named = for (elems) |e| {
-        if (c.ast.kind(e) == .named_arg or c.ast.kind(e) == .rest) break true;
+    const target = unwrapOption(c, expected);
+    // A bare `x` is shorthand for `x: x` unless a tuple or `vec` is expected (§3).
+    const shorthand = target != .none and target != .err and switch (c.types.get(target)) {
+        .tuple, .vec => false,
+        else => true,
+    };
+    const named = for (elems) |e| switch (c.ast.kind(e)) {
+        .named_arg, .rest => break true,
+        .ident => if (shorthand) break true,
+        else => {},
     } else false;
     if (!named) return positional(c, n, elems, expected, true);
     if (expected == .err) return checkAlone(c, elems);
@@ -213,7 +222,6 @@ pub fn anonLit(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
         try c.reportAt(c.ast.mainToken(n), .E0350, &.{"name the type: `Point { x: 1, y: 2 }`"}, "anonymous struct literal without an expected type", .{});
         return checkAlone(c, elems);
     }
-    const target = unwrapOption(c, expected);
     const v = try construct(c, n, target, elems);
     return if (target == expected) v else wrapSome(c, v, expected, n);
 }
@@ -377,7 +385,9 @@ fn lookup(c: *Checker, at: Node.Index, name: []const u8, args: ?[]const Node.Ind
         },
         else => return null,
     };
-    if (args == null) for (consts) |k| if (k.type == ty and std.mem.eql(u8, k.name, name)) {
+    // Members are visible subject to their own `pub` (§7.9, §7.1).
+    const outside = ref.module != c.m;
+    if (args == null) for (consts) |k| if (k.type == ty and (k.is_pub or !outside) and std.mem.eql(u8, k.name, name)) {
         return switch (k.value) {
             .scalar => |s| try c.constant(s),
             else => c.unsupported(at, "`const` members computed at comptime (T060)"),
@@ -385,7 +395,7 @@ fn lookup(c: *Checker, at: Node.Index, name: []const u8, args: ?[]const Node.Ind
     };
     if (args) |a| for (methods) |f| {
         const has_self = f.params.len > 0 and f.params[0].is_self;
-        if (!has_self and returnsSelf(c, f.ret, ty) and std.mem.eql(u8, f.name, name))
+        if (!has_self and (f.is_pub or !outside) and returnsSelf(c, f.ret, ty) and std.mem.eql(u8, f.name, name))
             return try callMember(c, at, ref.module, f, a);
     };
     return null;
@@ -405,13 +415,15 @@ fn returnsSelf(c: *Checker, ret: TypeId, ty: TypeId) bool {
 /// `args` (null without parentheses).
 fn variant(c: *Checker, at: Node.Index, name: []const u8, ty: TypeId, index: u32, payload: []const TypeId, args: ?[]const Node.Index) Error!Typed {
     const given = args orelse &.{};
-    if (given.len != payload.len or (args != null and payload.len == 0)) {
+    // A `void` payload is written `.ok()` (§4.2.4); a void value has no operand.
+    const void_payload = args != null and given.len == 0 and payload.len == 1 and payload[0] == .void;
+    if (!void_payload and (given.len != payload.len or (args != null and payload.len == 0))) {
         try c.report(at, .E0310, "variant `.{s}` of `{s}` takes {d} value(s), found {d}", .{ name, try c.tyName(ty), payload.len, given.len });
         for (given) |a| _ = try check_expr.check(c, a, .none);
         return .err;
     }
     var e: Elems = try .init(c, given.len);
-    for (given, payload, 0..) |a, p, i| e.set(i, try argument(c, at, a, p));
+    for (given, payload[0..given.len], 0..) |a, p, i| e.set(i, try argument(c, at, a, p));
     return e.finish(c, ty, .{ .variant = .{ .variant = index, .payload = e.refs } });
 }
 
@@ -487,6 +499,32 @@ test "struct literals: all fields, shorthand, `..` defaults, nested anonymous li
     try expectOps(&f, "make", &.{ .aggregate, .aggregate, .aggregate, .aggregate, .aggregate, .aggregate });
 }
 
+test "anonymous literals: a bare name is a shorthand field unless a tuple or `vec` is expected" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\struct P { x: i32, y: i32 }
+        \\fn both(x: i32, y: i32) -> P { .{ x, y } }
+        \\fn mixed(x: i32) -> P { .{ x, y: 1 } }
+        \\fn pair(x: i32, y: i32) -> (i32, i32) { .{ x, y } }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    try expectOps(&f, "both", &.{.aggregate});
+    try expectOps(&f, "mixed", &.{.aggregate});
+    try expectOps(&f, "pair", &.{.aggregate});
+}
+
+test "a call or literal left of an operator, typed by the right, is unsupported" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\struct P { n: u32, pub fn init() -> P { P { n: 0 } } }
+        \\fn eq(p: P) -> bool { .init() == p }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    try testing.expectEqualStrings("a call or literal typed by the right operand (a later task)", f.bodies.unsupported.?.what);
+}
+
 test "struct literal errors: E0340, E0351, unknown field, E0350, E0310" {
     var f: Fixture = undefined;
     try f.init(
@@ -524,25 +562,27 @@ test "E0352: construction outside the defining module" {
             \\    let e = Endpoint { host_id: 1, .. };
             \\    let r = Endpoint { host_id: 1, retries: 2, .. };
             \\    let o: Open = .{ x: 1 };
+            \\    let u: Port = .unchecked(5);
             \\}
         },
         .{
             "geo",
-            \\pub struct Port { pub value: u16 }
+            \\pub struct Port { pub value: u16, fn unchecked(v: u16) -> Port { Port { value: v } } }
             \\pub struct Endpoint { pub mut host_id: u32, pub mut port: u16 = 80, retries: u8 = 3 }
             \\pub struct Open { pub mut x: u32 }
-            \\pub fn inside() -> Port { Port { value: 1 } }
+            \\pub fn inside() -> Port { .unchecked(1) }
         },
     });
     defer f.deinit();
-    try f.expectDiags(&.{ .{ .E0352, "Port" }, .{ .E0352, "retries" } });
+    // A private constructor is not a visible member outside its module (§7.9).
+    try f.expectDiags(&.{ .{ .E0352, "Port" }, .{ .E0352, "retries" }, .{ .E0353, "unchecked" } });
 }
 
 test "inferred members: variants, consts, constructors, binary operands, Option" {
     var f: Fixture = undefined;
     try f.init(
         \\enum GameState { idle, playing }
-        \\enum Shape { dot, circle(f32) }
+        \\enum Shape { dot, circle(f32), blank(void) }
         \\struct Pool {
         \\    n: u32,
         \\    pub fn init() -> Pool { Pool { n: 0 } }
@@ -556,7 +596,8 @@ test "inferred members: variants, consts, constructors, binary operands, Option"
         \\    let c: Shape = .circle(1.0);
         \\    let p: Pool = .init();
         \\    let q: Option<Pool> = .try_make(2);
-        \\    state == .playing && s == .idle
+        \\    let b: Shape = .blank();
+        \\    .playing == state && s == .idle
         \\}
         \\fn options() -> Option<GameState> {
         \\    let none: Option<u32> = .none;
@@ -567,12 +608,14 @@ test "inferred members: variants, consts, constructors, binary operands, Option"
         \\    .idle
         \\}
         \\fn results() -> Result<u32, GameState> { .err(.idle) }
+        \\fn done() -> Result<void, u32> { .ok() }
     );
     defer f.deinit();
     try f.expectDiags(&.{});
-    try expectOps(&f, "states", &.{ .variant, .variant, .call, .call, .variant, .eq, .variant, .eq });
+    try expectOps(&f, "states", &.{ .variant, .variant, .call, .call, .variant, .variant, .eq, .variant, .eq });
     try expectOps(&f, "options", &.{ .variant, .variant, .variant, .call, .variant, .aggregate, .variant, .variant, .variant });
     try expectOps(&f, "results", &.{ .variant, .variant });
+    try expectOps(&f, "done", &.{.variant});
     // The `const` of struct type is left to the comptime evaluator.
     var g: Fixture = undefined;
     try g.init(

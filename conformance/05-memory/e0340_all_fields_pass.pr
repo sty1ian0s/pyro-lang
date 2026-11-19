@@ -1,4 +1,4 @@
-//@ expected-fail: T046
+//@ expected-fail: T050
 //@ covers: E0340
 // §6.2.1: every field listed, or `..` filling only defaulted fields.
 

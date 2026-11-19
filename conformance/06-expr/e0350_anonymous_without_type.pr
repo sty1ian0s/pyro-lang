@@ -1,4 +1,4 @@
-//@ expected-fail: T046
+//@ expected-fail: T048
 // §6.2.2: a named anonymous literal takes its type from the expected type;
 // without one it is an error.
 

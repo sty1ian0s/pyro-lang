@@ -1,4 +1,4 @@
-//@ expected-fail: T046
+//@ expected-fail: T050
 //@ covers: E0350
 // §6.2.2: expected types from an annotation, a parameter, a return type and a
 // field; a positional literal without one forms a tuple.

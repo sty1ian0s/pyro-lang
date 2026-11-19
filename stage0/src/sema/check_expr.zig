@@ -263,9 +263,29 @@ fn binary(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     if (op == .amp_amp or op == .pipe_pipe) return check_stmt.logical(c, n, op == .amp_amp);
     const class = classOf(op) orelse return c.unsupported(n, "this operator (a later task)");
     // The other operand is the expected type of each (§6.2.3).
-    const l = try check(c, d.lhs, if (class == .arith or class == .bitwise or class == .shift) expected else .none);
+    const l_expected: TypeId = if (class == .arith or class == .bitwise or class == .shift) expected else .none;
+    if (class != .shift and l_expected == .none and needsExpected(c.ast, d.lhs)) {
+        // Checking the right first emits it first; only a bare `.name` (a
+        // variant or `const`, no side effects) may be evaluated after it.
+        if (c.ast.kind(d.lhs) != .inferred_member)
+            return c.unsupported(d.lhs, "a call or literal typed by the right operand (a later task)");
+        const r = try check(c, d.rhs, .none);
+        const l = try check(c, d.lhs, if (r.isUntyped() or r.ty == .noreturn) .none else r.ty);
+        return operate(c, n, op, l, r, expected);
+    }
+    const l = try check(c, d.lhs, l_expected);
     const r = try check(c, d.rhs, if (class == .shift) .none else if (l.isUntyped()) .none else l.ty);
     return operate(c, n, op, l, r, expected);
+}
+
+/// `n` takes its type only from the expected type: `.name`, `.name(args)`
+/// or `.{ ... }` (§6.2.2, §6.2.3).
+fn needsExpected(ast: *const Ast, n: Node.Index) bool {
+    return switch (ast.kind(n)) {
+        .inferred_member, .anon_lit => true,
+        .call => ast.kind(ast.data(n).call.callee) == .inferred_member,
+        else => false,
+    };
 }
 
 /// `l op r` for checked operands (also used by compound assignment).

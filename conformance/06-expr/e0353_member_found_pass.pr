@@ -1,4 +1,4 @@
-//@ expected-fail: T046
+//@ expected-fail: T163
 //@ covers: E0353
 // §6.2.3: variants, `const` members of type `T`, constructor functions, the
 // other operand of a binary operator, and `Option<U>` lookup in `U`.
