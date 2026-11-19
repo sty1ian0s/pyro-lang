@@ -1,4 +1,3 @@
-//@ expected-fail: T052
 // §6.6.3: an arm after a catch-all, or for an already covered value, is
 // unreachable.
 

@@ -1,4 +1,4 @@
-//@ expected-fail: T052
+//@ expected-fail: T076
 //@ covers: E0356
 // §6.6.2: `return`, `continue`, `break` and a trap all diverge.
 

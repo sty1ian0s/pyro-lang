@@ -19,6 +19,7 @@ const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_member = @import("check_member.zig");
 const must_use = @import("must_use.zig");
+const patterns = @import("patterns.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -69,7 +70,7 @@ fn stmt(c: *Checker, s: Node.Index) Error!bool {
             return false;
         },
         .@"defer", .@"errdefer", .return_tail => _ = c.unsupported(s, "`defer`, `errdefer` and `return tail` (T078)"),
-        .guard_let => _ = c.unsupported(s, "`guard let` (T052)"),
+        .guard_let => return patterns.guardLet(c, s),
         .spawn, .nursery => _ = c.unsupported(s, "`nursery` and `spawn` (T125)"),
         .launch => _ = c.unsupported(s, "`launch` (T187)"),
         .attributed => _ = c.unsupported(s, "attributes on statements (T062)"),
@@ -82,14 +83,12 @@ fn stmt(c: *Checker, s: Node.Index) Error!bool {
     return false;
 }
 
-/// `let p (: T)? = e;` (§3.5). Patterns other than a name or `_` are T052's.
+/// `let p (: T)? = e;` (§3.5). Other patterns than a name or `_` destructure
+/// (`patterns.letPattern`).
 fn let(c: *Checker, s: Node.Index) Error!bool {
     const d = c.ast.data(s).let;
     const pk = c.ast.kind(d.pattern);
-    if (pk != .pat_bind and pk != .pat_bind_mut and pk != .pat_wildcard) {
-        _ = c.unsupported(d.pattern, "destructuring `let` (T052)");
-        return false;
-    }
+    if (pk != .pat_bind and pk != .pat_bind_mut and pk != .pat_wildcard) return patterns.letPattern(c, s);
     const decl: TypeId = if (d.ty) |t| try c.resolveType(t) else .none;
     if (decl != .none and decl != .err and c.types.get(decl) == .mut_view) {
         _ = c.unsupported(s, "`mut T` locals (T055)");
@@ -174,16 +173,16 @@ fn place(c: *Checker, n: Node.Index) Error!?Place {
     };
     const what: []const u8 = switch (e.res) {
         .local => |l| switch (c.ast.kind(l)) {
-            .pat_bind, .pat_bind_mut, .param => {
+            .pat_bind, .pat_bind_mut, .field_pat, .field_pat_mut, .param => {
                 const local = c.locals.get(l) orelse {
-                    _ = c.unsupported(n, "bindings of this kind (T052)");
+                    _ = c.unsupported(n, "bindings of `for` loops and lambdas (T074, T076)");
                     return null;
                 };
                 return try localPlace(c, n, local);
             },
             .const_decl => "constant",
             else => {
-                _ = c.unsupported(n, "assignment to pattern bindings (T052)");
+                _ = c.unsupported(n, "assignment to `result` in contracts (T135)");
                 return null;
             },
         },
@@ -373,11 +372,19 @@ fn @"continue"(c: *Checker, s: Node.Index) Error!bool {
 /// branches have a common type, without it the then-block is `void`.
 pub fn ifExpr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const d = c.ast.data(n).@"if";
-    if (c.ast.kind(d.cond) == .let_cond) return c.unsupported(d.cond, "`if let` (T052)");
-    const cond = try check_expr.checkAs(c, d.cond, .bool);
-    const then_blk = try c.addBlock();
-    const else_blk = try c.addBlock();
-    _ = try c.emit(.void, .{ .cond_br = .{ .cond = cond.ref, .then = then_blk, .@"else" = else_blk } });
+    var then_blk: tir.Block = undefined;
+    var else_blk: tir.Block = undefined;
+    var cond: Typed = undefined;
+    if (c.ast.kind(d.cond) == .let_cond) {
+        then_blk = try c.addBlock();
+        else_blk = try c.addBlock();
+        cond = try patterns.letCond(c, d.cond, then_blk, else_blk);
+    } else {
+        cond = try check_expr.checkAs(c, d.cond, .bool);
+        then_blk = try c.addBlock();
+        else_blk = try c.addBlock();
+        _ = try c.emit(.void, .{ .cond_br = .{ .cond = cond.ref, .then = then_blk, .@"else" = else_blk } });
+    }
 
     c.setBlock(then_blk);
     const tv = try check_expr.check(c, d.then, if (d.@"else" == null) .void else expected);
@@ -422,7 +429,8 @@ fn common(c: *Checker, d: @FieldType(Ast.Data, "if"), a: Typed, b: Typed, hint: 
     return null;
 }
 
-fn widens(c: *Checker, from: TypeId, to: TypeId) bool {
+/// `from` widens implicitly to `to` (§4.9.1).
+pub fn widens(c: *Checker, from: TypeId, to: TypeId) bool {
     return switch (conv.coerce(c.types, from, to, .{})) {
         .int_widen, .float_widen => true,
         else => false,
@@ -434,7 +442,7 @@ fn widens(c: *Checker, from: TypeId, to: TypeId) bool {
 /// else the default type, `f64` if one is a float. A `vec` hint gives its
 /// element type, as a scalar operand of a `vec` is broadcast (§6.4.1), and
 /// `Option<T>` gives `T` (§4.9.1).
-fn untypedType(c: *Checker, hint: TypeId, vs: []const Typed) Error!TypeId {
+pub fn untypedType(c: *Checker, hint: TypeId, vs: []const Typed) Error!TypeId {
     if (hint != .none and hint != .err) {
         const h = switch (c.types.get(hint)) {
             .vec => |x| x.elem,
@@ -484,14 +492,17 @@ pub fn whileExpr(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
 
 fn whileLabeled(c: *Checker, n: Node.Index, label: ?[]const u8) Error!Typed {
     const d = c.ast.data(n).@"while";
-    if (c.ast.kind(d.cond) == .let_cond) return c.unsupported(d.cond, "`while let` (T052)");
     const head = try c.addBlock();
     const body_blk = try c.addBlock();
     const exit = try c.addBlock();
     try c.br(head, .none);
     c.setBlock(head);
-    const cond = try check_expr.checkAs(c, d.cond, .bool);
-    _ = try c.emit(.void, .{ .cond_br = .{ .cond = cond.ref, .then = body_blk, .@"else" = exit } });
+    if (c.ast.kind(d.cond) == .let_cond) {
+        _ = try patterns.letCond(c, d.cond, body_blk, exit);
+    } else {
+        const cond = try check_expr.checkAs(c, d.cond, .bool);
+        _ = try c.emit(.void, .{ .cond_br = .{ .cond = cond.ref, .then = body_blk, .@"else" = exit } });
+    }
     c.setBlock(body_blk);
     try c.loops.append(c.arena, .{ .label = label, .is_loop = false, .head = head, .exit = exit, .expected = .none });
     const body = try check_expr.check(c, d.body, .void);

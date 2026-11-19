@@ -25,6 +25,7 @@ const check_call = @import("check_call.zig");
 const check_member = @import("check_member.zig");
 const check_index = @import("check_index.zig");
 const builtins = @import("builtins.zig");
+const patterns = @import("patterns.zig");
 const tir = @import("../tir/tir.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
@@ -69,6 +70,7 @@ const handlers = blk: {
         .{ .loop, check_stmt.loopExpr },
         .{ .@"while", check_stmt.whileExpr },
         .{ .labeled, check_stmt.labeled },
+        .{ .match, patterns.matchExpr },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -76,7 +78,6 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .match, .let_cond => "`match` (T052)",
         .unsafe_block => "`unsafe` blocks (T054)",
         .comptime_block, .comptime_if => "comptime evaluation (T060)",
         .lambda => "lambdas (T074)",
@@ -160,10 +161,10 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     };
     switch (e.res) {
         .local => |l| switch (c.ast.kind(l)) {
-            .pat_bind, .pat_bind_mut, .param => return c.load(c.locals.get(l) orelse return c.unsupported(n, "bindings of this kind (T052)")),
+            .pat_bind, .pat_bind_mut, .field_pat, .field_pat_mut, .param => return c.load(c.locals.get(l) orelse return c.unsupported(n, "bindings of `for` loops and lambdas (T074, T076)")),
             .const_decl => return constValue(c, n, try c.items.constValue(c.m, l, c.self_ty)),
             .generic_param => return c.unsupported(n, "generic value parameters (T064)"),
-            else => return c.unsupported(n, "pattern bindings (T052)"),
+            else => return c.unsupported(n, "`result` in contracts (T135)"),
         },
         .global => |t| switch (t) {
             .item => |ref| {

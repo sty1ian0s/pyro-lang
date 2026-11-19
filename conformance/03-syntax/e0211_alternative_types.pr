@@ -1,5 +1,4 @@
 //@ stop-after: check
-//@ expected-fail: T052
 // §3.7: alternatives bind the same names with the same types.
 enum Value { int(i32), flag(bool), other(i32) }
 
