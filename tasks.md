@@ -262,14 +262,14 @@ graph TD
   - Size: M · Parallel: W02
   - Blocked by: T004
   - Blocks: T223
-- [ ] **T017** Diagnostic renderers: human and JSON
+- [x] **T017** Diagnostic renderers: human and JSON
   - Spec: A.1, A.2, §13.8, §2.9
   - Deliverable: `stage0/src/diag/render_human.zig` (gutter, `^^^`/`---`, `help:`, `--color`), `render_json.zig` (one object per line: code, severity, message, spans, help, fixes, trace).
   - Acceptance: Golden test reproduces A.2 example byte-for-byte; JSON schema test; scalar-based columns on non-ASCII lines.
   - Size: M · Parallel: W03
   - Blocked by: T003, T011
   - Blocks: T022
-- [ ] **T018** Parallel lexing driver **[CRITICAL]**
+- [x] **T018** Parallel lexing driver **[CRITICAL]**
   - Spec: §2.1.1, §2.9, B.2
   - Deliverable: `stage0/src/lex/parallel.zig`: split at line starts, lex pieces on pool, concat by prefix sums, EOF; sequential fallback below threshold.
   - Acceptance: Fuzz: W in 1..16 gives tokens and diagnostics identical to sequential; tuple-field rule needs no boundary state (test).
@@ -358,21 +358,21 @@ graph TD
   - Size: M · Parallel: W02
   - Blocked by: T003, T007, T008
   - Blocks: T030, T031, T116, T158, T162, T183
-- [ ] **T030** Build environments: merge, typing, environment hash **[GATE]**
+- [x] **T030** Build environments: merge, typing, environment hash **[GATE]**
   - Spec: §13.3, §9.2, §9.5, §6.4, §8.6.1
   - Deliverable: `stage0/src/pkg/env.zig`: dev/test/prod defaults + `[env.<name>]` + `--set`; reserved-key typing (opt_level, debug_assertions, contracts, allow_todo_err, debug_info, sanitize, lto, hash_names); user keys str/bool/int/float; stable env hash.
   - Acceptance: Defaults match §13.3 table exactly; `--set` overrides `[env.prod]`; wrong reserved type rejected; any key change changes hash.
   - Size: M · Parallel: W03
   - Blocked by: T029
   - Blocks: T073, T092, T093, T098, T140, T167
-- [ ] **T031** Package layout and workspace discovery
+- [x] **T031** Package layout and workspace discovery
   - Spec: §13.1, §7.8, §13.6
   - Deliverable: `stage0/src/pkg/layout.zig`: find package/workspace root; exe (`src/main.pr`) vs lib (`src/lib.pr`), both/neither E0908; `src/**` -> module paths; `tests/`, `assets/`; workspace members share lock and cache.
   - Acceptance: Fixtures: E0908 both/neither; `src/physics/rigid_body.pr` -> `physics.rigid_body`; workspace resolves one lock path.
   - Size: S · Parallel: W03
   - Blocked by: T029
   - Blocks: T036, T093
-- [ ] **T032** Type table: TypeId interning and equality **[GATE]**
+- [x] **T032** Type table: TypeId interning and equality **[GATE]**
   - Spec: §4.1-§4.7, §4.10, B.4, §13.4
   - Deliverable: `stage0/src/sema/types.zig`: TypeId u32 table for all primitive/structural/nominal types; structural hash-consing; nominal keyed by (package version, decl, instantiation args); alias vs distinct; pretty-printer.
   - Acceptance: [4]u8 == [4]u8; two identical struct decls differ; distinct T != T; alias == T; G<A> == G<A>; usize != u64; same decl from two package majors differ; printer matches spec spellings.
@@ -776,7 +776,7 @@ graph TD
   - Size: L · Parallel: W02
   - Blocked by: T010
   - Blocks: T107, T108, T110, T213
-- [ ] **T087** LLVM backend: memory, calls, traps, vectors, atomics
+- [x] **T087** LLVM backend: memory, calls, traps, vectors, atomics
   - Spec: B.6.2, B.5.2
   - Deliverable: `stage0/src/backend/llvm/emit_mem.zig` etc.: volatile/atomic loads/stores, gep, mem*, soa.*/bf.*, calls, musttail, *.trap, bounds, sat converts, vector ops, reductions, masked ops, atomics, fma.
   - Acceptance: IR test per opcode; executed overflow trap, musttail recursion w/o stack growth, masked tail store.
@@ -1024,14 +1024,14 @@ graph TD
   - Size: S · Parallel: W02
   - Blocked by: T004
   - Blocks: T223
-- [ ] **T121** Runtime: parallel_for chunked scheduler
+- [x] **T121** Runtime: parallel_for chunked scheduler
   - Spec: §10.3, B.5.2
   - Deliverable: `runtime/sched/pfor.zig`.
   - Acceptance: Each index once for len 0,1,63,64,65,1e6; chunks contiguous >= 64; 1 and N threads.
   - Size: S · Parallel: W03
   - Blocked by: T119
   - Blocks: T127
-- [ ] **T122** Runtime: park/unpark and all-blocked deadlock detection
+- [x] **T122** Runtime: park/unpark and all-blocked deadlock detection
   - Spec: §10.4, §10.4.1
   - Deliverable: `runtime/sched/{park,deadlock}.zig`.
   - Acceptance: Mutual empty-recv traps `deadlock` listing both tasks; 10k-iteration pipeline no false positive.
@@ -1206,7 +1206,7 @@ graph TD
 
 ## M10. Optimizer (P-IR passes)
 
-- [ ] **T146** Pass manager and opt_level pipelines
+- [x] **T146** Pass manager and opt_level pipelines
   - Spec: B.5.3, §13.9, §13.3
   - Deliverable: `stage0/src/opt/pipeline.zig`: O0/O1/O2/O3/Oz lists, verify-after-pass, per-function parallel.
   - Acceptance: Pipelines run on hand-written P-IR; verifier invoked between passes.
@@ -1293,7 +1293,7 @@ graph TD
   - Size: S · Parallel: W02
   - Blocked by: T004
   - Blocks: T223
-- [ ] **T158** Dependency resolver
+- [x] **T158** Dependency resolver
   - Spec: §13.4, E0906, E0910
   - Deliverable: `stage0/src/pkg/resolve.zig` over an abstract index.
   - Acceptance: Diamond -> one node; 1.x and 2.x coexist; cycle E0906; conflict E0910 lists both chains; deterministic.
