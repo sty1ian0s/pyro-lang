@@ -334,14 +334,14 @@ graph TD
   - Blocked by: T020, T021, T023, T025
   - Blocks: T027, T028, T060, T210
   - Conflicts: Owns `attr_table.zig`; GPU/concurrency/layout areas add semantics elsewhere, never rows.
-- [ ] **T027** Warning level control: @allow / @deny
+- [x] **T027** Warning level control: @allow / @deny
   - Spec: A.2, §8.8
   - Deliverable: `stage0/src/diag/levels.zig`: per-item effective warning levels (inherit), sink lookup by span; `@deny` promotes; E-codes never suppressible.
   - Acceptance: W0201 in `@allow(W0201) fn` suppressed; `@deny(W0201)` fails build; `@allow(E0214)` has no effect.
   - Size: S · Parallel: W09
   - Blocked by: T003, T026
   - Blocks: T062
-- [ ] **T028** Front-end fuzzing and throughput bench
+- [x] **T028** Front-end fuzzing and throughput bench
   - Spec: §1.4, §1.5, B.2, B.3
   - Deliverable: `tools/fuzz/` lexer+parser targets (no crash/hang, every error has code+span, parallel == sequential); `bench/frontend` lines/sec/core.
   - Acceptance: 10-min nightly fuzz clean; bench result tracked (not a merge gate).
@@ -424,7 +424,7 @@ graph TD
   - Size: M · Parallel: W08
   - Blocked by: T036, T037
   - Blocks: T039, T044, T116, T163
-- [ ] **T039** Body name resolution and shadowing **[CRITICAL]**
+- [x] **T039** Body name resolution and shadowing **[CRITICAL]**
   - Spec: §6.3.1, §7.10, §4.1, E0301, W0301
   - Deliverable: `stage0/src/resolve/names.zig`: scope stack; locals -> module items/imports -> prelude; module member paths; E0301 (prelude types/intrinsics incl. print/eprint/format), W0301.
   - Acceptance: `let u8 = 1` E0301; shadowing `print` E0301; local shadowing module fn W0301; `math.sqrt` via `use std.math`; no types.zig import (test).
@@ -1670,7 +1670,7 @@ graph TD
 
 ## M14. Developer tooling (expand, fmt, doc, LSP, debug, profile)
 
-- [ ] **T210** pyro fmt canonical formatter
+- [x] **T210** pyro fmt canonical formatter
   - Spec: §13.8, §2, §3
   - Deliverable: `stage0/src/fmt/` + `docs/style.md` (style decision, matches spec examples).
   - Acceptance: Idempotent over conformance corpus; token stream unchanged; `--check` exits 1 on diff.
