@@ -4,8 +4,10 @@
 //! line (`semver.CompatLine`): the highest version satisfying every requirement
 //! on that line. A requirement belongs to the line of the highest release it
 //! matches, so `^1.0` and `^2.0` of one package coexist as two nodes while
-//! diamonds share one node. Requirements that no version satisfies are E0910,
-//! listing every requirement chain on the line; cycles are E0906.
+//! diamonds share one node. When the requirements on a line conflict, those
+//! that also match an older line move there. Requirements that no version
+//! satisfies are E0910, listing every requirement chain on the line; cycles
+//! are E0906.
 //!
 //! The result depends only on the root and the index contents: it never depends
 //! on hash order or timing, and packages come out sorted by (name, version).
@@ -19,13 +21,15 @@ const diag = @import("../diag/diag.zig");
 pub const Dep = struct {
     /// Package name.
     name: []const u8,
-    /// The empty requirement matches every non-prerelease version (git and path sources).
     requirement: semver.Requirement = .{},
+    /// Matches every version, prereleases included, ignoring `requirement`
+    /// (git and path sources).
+    pinned: bool = false,
     /// Manifest entry, used to locate diagnostics when this is a root dependency.
     span: ?diag.Span = null,
 
     /// A root dependency from the manifest registered as `file`. Git and path
-    /// sources carry no requirement: their single release is the version.
+    /// sources are pinned: their single release is the version.
     pub fn fromManifest(d: manifest.Dependency, file: diag.FileId) Dep {
         return .{
             .name = d.name,
@@ -33,8 +37,14 @@ pub const Dep = struct {
                 .registry => |r| r.requirement,
                 .git, .path => .{},
             },
+            .pinned = d.source != .registry,
             .span = .{ .file = file, .start = d.span.start, .end = d.span.end },
         };
+    }
+
+    /// Whether version `v` satisfies this dependency.
+    pub fn accepts(d: *const Dep, v: semver.Version) bool {
+        return d.pinned or d.requirement.matches(v);
     }
 };
 
@@ -91,28 +101,37 @@ pub fn resolve(gpa: std.mem.Allocator, index: Index, root_name: []const u8, root
     var r: Resolver = .{ .a = arena.allocator(), .index = index, .root_name = root_name, .root = root };
 
     // Re-expand from the root until the chosen versions stop changing, so a
-    // version's dependencies count only while that version is chosen.
-    // shortcut: no backtracking (a conflict is reported, not routed around by an
-    // older parent version); upgrade to PubGrub if real registries need it.
+    // version's dependencies count only while that version is chosen; then move
+    // requirements off conflicting lines and repeat. Each move excludes one
+    // (requirement, line) pair for good, so this terminates.
+    // shortcut: greedy, no backtracking (a conflict is reported, not routed
+    // around by an older parent version, and an oscillation is reported after
+    // `max_passes`); upgrade to PubGrub if real registries need it.
     const max_passes = 64;
     var prev: []const Slot = &.{};
-    var passes: usize = 0;
-    while (true) : (passes += 1) {
-        try r.pass(prev);
-        var changed = false;
-        for (r.slots.items) |*s| {
-            const f = r.best(s.name, s.line, s.reqs.items) orelse continue;
-            if (f != s.release) {
-                s.release = f;
-                changed = true;
+    while (true) {
+        var passes: usize = 0;
+        while (true) : (passes += 1) {
+            try r.pass(prev);
+            const Change = struct { slot: u32, to: *const Release };
+            var changes: std.ArrayList(Change) = .empty;
+            for (r.slots.items, 0..) |s, i| {
+                const f = r.best(s.name, s.line, s.reqs.items) orelse continue;
+                if (f != s.release) try changes.append(r.a, .{ .slot = @intCast(i), .to = f });
             }
+            if (changes.items.len == 0) break;
+            if (passes == max_passes) {
+                for (changes.items) |c| {
+                    const s = r.slots.items[c.slot];
+                    const msg = try std.fmt.allocPrint(r.a, "dependency resolution did not converge: `{s}` {f} keeps changing between versions", .{ s.name, lineFmt(s.line) });
+                    try r.emit(sink, .E0910, msg, s.reqs.items);
+                }
+                return error.Unresolvable;
+            }
+            for (changes.items) |c| r.slots.items[c.slot].release = c.to;
+            prev = r.slots.items;
         }
-        prev = r.slots.items;
-        if (!changed) break;
-        if (passes == max_passes) {
-            try sink.emit(.{ .code = .E0910, .severity = .of(.E0910), .message = "dependency resolution did not converge" });
-            return error.Unresolvable;
-        }
+        if (!try r.demote()) break;
     }
 
     var failed = try r.reportMissing(sink);
@@ -155,6 +174,8 @@ const Resolver = struct {
     slots: std.ArrayList(Slot) = .empty,
     /// Requirements no release matches at all.
     missing: std.ArrayList(Req) = .empty,
+    /// Lines a requirement was moved off by `demote`; kept across passes.
+    excluded: std.ArrayList(struct { dep: *const Dep, line: semver.CompatLine }) = .empty,
     root_index: u32 = 0,
 
     fn candidates(r: *Resolver, name: []const u8) []const Release {
@@ -166,10 +187,44 @@ const Resolver = struct {
         var top: ?*const Release = null;
         next: for (r.candidates(name)) |*c| {
             if (!std.meta.eql(c.version.compatLine(), line)) continue;
-            for (reqs) |q| if (!q.dep.requirement.matches(c.version)) continue :next;
+            for (reqs) |q| if (!q.dep.accepts(c.version)) continue :next;
             if (top == null or c.version.order(top.?.version) == .gt) top = c;
         }
         return top;
+    }
+
+    /// Highest release `dep` accepts outside the lines it was moved off and `skip`.
+    fn highest(r: *Resolver, dep: *const Dep, skip: ?semver.CompatLine) ?*const Release {
+        var t: ?*const Release = null;
+        next: for (r.candidates(dep.name)) |*c| {
+            if (!dep.accepts(c.version)) continue;
+            const line = c.version.compatLine();
+            if (skip != null and std.meta.eql(line, skip.?)) continue;
+            for (r.excluded.items) |e| if (e.dep == dep and std.meta.eql(e.line, line)) continue :next;
+            if (t == null or c.version.order(t.?.version) == .gt) t = c;
+        }
+        return t;
+    }
+
+    /// On every line no version satisfies, keeps the requirements that match no
+    /// other line (or else the first) and moves each other requirement the best
+    /// version for those rejects to its next line. Returns whether any moved.
+    fn demote(r: *Resolver) !bool {
+        var moved = false;
+        for (r.slots.items) |s| {
+            if (r.best(s.name, s.line, s.reqs.items) != null) continue;
+            var fixed: std.ArrayList(Req) = .empty;
+            for (s.reqs.items) |q| if (r.highest(q.dep, s.line) == null) try fixed.append(r.a, q);
+            if (fixed.items.len == 0) try fixed.append(r.a, s.reqs.items[0]);
+            // Fixed requirements conflicting among themselves are a real E0910.
+            const keep = r.best(s.name, s.line, fixed.items) orelse continue;
+            for (s.reqs.items) |q| {
+                if (q.dep.accepts(keep.version)) continue;
+                try r.excluded.append(r.a, .{ .dep = q.dep, .line = s.line });
+                moved = true;
+            }
+        }
+        return moved;
     }
 
     // shortcut: linear lookup; fine for hundreds of packages, use a hash map beyond.
@@ -190,11 +245,7 @@ const Resolver = struct {
         while (i < r.slots.items.len) : (i += 1) {
             for (r.slots.items[i].release.deps) |*dep| {
                 const q: Req = .{ .dep = dep, .from = i };
-                var top: ?*const Release = null;
-                for (r.candidates(dep.name)) |*c| {
-                    if (dep.requirement.matches(c.version) and (top == null or c.version.order(top.?.version) == .gt)) top = c;
-                }
-                const t = top orelse {
+                const t = r.highest(dep, null) orelse {
                     try r.missing.append(r.a, q);
                     continue;
                 };
@@ -202,7 +253,7 @@ const Resolver = struct {
                 const j = find(r.slots.items, dep.name, line) orelse blk: {
                     var pick = t;
                     if (find(prev, dep.name, line)) |p| {
-                        if (dep.requirement.matches(prev[p].release.version)) pick = prev[p].release;
+                        if (dep.accepts(prev[p].release.version)) pick = prev[p].release;
                     }
                     try r.slots.append(r.a, .{ .name = dep.name, .line = line, .release = pick, .via = q });
                     break :blk @as(u32, @intCast(r.slots.items.len - 1));
@@ -289,11 +340,8 @@ const Resolver = struct {
         for (r.slots.items) |s| {
             if (r.best(s.name, s.line, s.reqs.items) != null) continue;
             failed = true;
-            var msg: std.ArrayList(u8) = .empty;
-            try msg.print(r.a, "no version of `{s}` {d}.", .{ s.name, s.line.major });
-            if (s.line.major == 0) try msg.print(r.a, "{d}.", .{s.line.minor});
-            try msg.appendSlice(r.a, "x satisfies every requirement on it");
-            try r.emit(sink, .E0910, msg.items, s.reqs.items);
+            const msg = try std.fmt.allocPrint(r.a, "no version of `{s}` {f} satisfies every requirement on it", .{ s.name, lineFmt(s.line) });
+            try r.emit(sink, .E0910, msg, s.reqs.items);
         }
         return failed;
     }
@@ -375,6 +423,17 @@ const Resolver = struct {
         return out;
     }
 };
+
+/// Formats a compatibility line as `2.x` or `0.3.x`.
+fn lineFmt(l: semver.CompatLine) std.fmt.Alt(semver.CompatLine, writeLine) {
+    return .{ .data = l };
+}
+
+fn writeLine(l: semver.CompatLine, w: *std.Io.Writer) std.Io.Writer.Error!void {
+    try w.print("{d}.", .{l.major});
+    if (l.major == 0) try w.print("{d}.", .{l.minor});
+    try w.writeAll("x");
+}
 
 fn writeVersion(a: std.mem.Allocator, out: *std.ArrayList(u8), v: semver.Version) !void {
     try out.print(a, "{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
@@ -588,6 +647,58 @@ test "manifest dependencies become root requirements" {
     defer m.deinit();
     const deps = [_]Dep{ .fromManifest(m.dependencies[0], @fromBackingInt(@intCast(0))), .fromManifest(m.dependencies[1], @fromBackingInt(@intCast(0))) };
     try testing.expect(deps[0].requirement.matches(ver("1.9.0")) and !deps[0].requirement.matches(ver("1.1.0")));
-    try testing.expect(deps[1].requirement.matches(ver("7.0.0")));
+    try testing.expect(deps[1].accepts(ver("7.0.0")) and deps[1].accepts(ver("0.1.0-dev")));
     try testing.expect(deps[0].span.?.end > deps[0].span.?.start);
+}
+
+test "a pinned path dependency resolves to its prerelease" {
+    const ix: TestIndex = .{ .entries = &.{.{ "local", &.{.{ .version = ver("0.1.0-dev") }} }} };
+    const root: Release = .{ .version = ver("1.0.0"), .deps = &.{.{ .name = "local", .pinned = true }} };
+    var sink: diag.Sink = .init(testing.allocator, testing.io);
+    defer sink.deinit();
+    var res = try resolve(testing.allocator, ix.index(), "app", &root, &sink);
+    defer res.deinit();
+    try expectPackages(res, &.{ "app 1.0.0", "local 0.1.0" });
+    try testing.expectEqualStrings("dev", res.packages[1].version.pre);
+}
+
+test "a requirement moves to an older line when the newest one conflicts" {
+    const ix: TestIndex = .{ .entries = &.{
+        .{ "a", &.{.{ .version = ver("1.0.0"), .deps = &.{dependsOn("json", ">=1.0, <2.1")} }} },
+        .{ "json", &.{ .{ .version = ver("1.0.0") }, .{ .version = ver("2.0.0") }, .{ .version = ver("2.1.0") } } },
+    } };
+    const root: Release = .{ .version = ver("1.0.0"), .deps = &.{ dependsOn("a", "1"), dependsOn("json", "^2.1") } };
+    var sink: diag.Sink = .init(testing.allocator, testing.io);
+    defer sink.deinit();
+    var res = try resolve(testing.allocator, ix.index(), "app", &root, &sink);
+    defer res.deinit();
+    try expectPackages(res, &.{ "a 1.0.0", "app 1.0.0", "json 1.0.0", "json 2.1.0" });
+    try testing.expectEqualSlices(u32, &.{2}, res.packages[0].deps);
+    try testing.expectEqualSlices(u32, &.{ 0, 3 }, res.packages[1].deps);
+}
+
+test "an oscillating choice is E0910 with the chains of the unsettled slots" {
+    // shortcut: no backtracking, so x 1.4.0 with z 1.2.0 is not found (known limitation).
+    const f: diag.FileId = @fromBackingInt(@intCast(4));
+    const ix: TestIndex = .{ .entries = &.{
+        .{ "x", &.{ .{ .version = ver("1.4.0") }, .{ .version = ver("1.5.0"), .deps = &.{dependsOn("p", "1")} } } },
+        .{ "p", &.{.{ .version = ver("1.0.0"), .deps = &.{dependsOn("z", "=1.0")} }} },
+        .{ "z", &.{ .{ .version = ver("1.0.0"), .deps = &.{dependsOn("x", "<1.5")} }, .{ .version = ver("1.2.0") } } },
+    } };
+    var x = dependsOn("x", "^1");
+    x.span = .{ .file = f, .start = 10, .end = 11 };
+    var z = dependsOn("z", "^1");
+    z.span = .{ .file = f, .start = 20, .end = 21 };
+    const root: Release = .{ .version = ver("1.0.0"), .deps = &.{ x, z } };
+    var sink: diag.Sink = .init(testing.allocator, testing.io);
+    defer sink.deinit();
+    try testing.expectError(error.Unresolvable, resolve(testing.allocator, ix.index(), "app", &root, &sink));
+    const ds = sink.finish();
+    try testing.expect(ds.len != 0);
+    for (ds) |d| {
+        try testing.expectEqual(.E0910, d.code.?);
+        try testing.expect(std.mem.startsWith(u8, d.message, "dependency resolution did not converge: `"));
+        try testing.expect(d.help.len != 0);
+        try testing.expect(d.primarySpan() != null);
+    }
 }
