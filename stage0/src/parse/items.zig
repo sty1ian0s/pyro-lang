@@ -22,6 +22,7 @@ const stmt = @import("stmt.zig");
 const Node = Ast.Node;
 const TokenIndex = Ast.TokenIndex;
 const TokenKind = @import("../lex/token.zig").TokenKind;
+const max_ident_len = @import("../lex/lexer.zig").max_ident_len;
 const Error = Parser.Error;
 
 /// Where a function is declared; decides whether `;` instead of a body
@@ -43,7 +44,7 @@ const Elems = enum { none, fields, variants };
 /// Parses one `item` (§3.2), wrapped in `attributed` if it has attributes.
 /// Leading doc comments are consumed and stay in the token stream.
 pub fn parseItem(p: *Parser) Error!Node.Index {
-    while (p.eat(.doc_comment)) |_| {}
+    _ = try eatDocs(p);
     const top = p.scratch.items.len;
     defer p.scratch.shrinkRetainingCapacity(top);
     try parseAttrs(p);
@@ -59,16 +60,34 @@ pub fn parseItem(p: *Parser) Error!Node.Index {
 /// the doc comments document nothing and get W0101. List loops call this
 /// before each element, the item loop with `end` = `eof`.
 pub fn docsThenEnd(p: *Parser, end: TokenKind) std.mem.Allocator.Error!bool {
-    const first = p.tok_i;
-    var last: ?TokenIndex = null;
-    while (p.eat(.doc_comment)) |t| last = t;
+    const first = try eatDocs(p);
     if (p.peek(0) != end) return false;
-    if (last) |l| try report(p, .W0101, .{
+    if (first) |f| try reportNothing(p, f, p.tok_i - 1, "put it directly before an item, field, variant or parameter, or use `//` for an ordinary comment");
+    return true;
+}
+
+/// Consumes doc comments and returns the first of the trailing `///` run,
+/// which documents what follows. A `//!` here is past the module-doc
+/// position (§2.8, §3.2), so it and the `///` before it get W0101.
+fn eatDocs(p: *Parser) std.mem.Allocator.Error!?TokenIndex {
+    var run: ?TokenIndex = null;
+    while (p.eat(.doc_comment)) |t| {
+        if (run == null) run = t;
+        if (std.mem.startsWith(u8, p.ast.tokenSlice(t), "//!")) {
+            try reportNothing(p, run.?, t, "module docs `//!` go only at the start of the file; use `///` or `//` here");
+            run = null;
+        }
+    }
+    return run;
+}
+
+/// W0101 over doc comment tokens `[first, last]`.
+fn reportNothing(p: *Parser, first: TokenIndex, last: TokenIndex, help: []const u8) std.mem.Allocator.Error!void {
+    try report(p, .W0101, .{
         .file = p.file,
         .start = p.tokenSpan(first).start,
-        .end = p.tokenSpan(l).end,
-    }, "this doc comment documents nothing", "put it directly before an item, field, variant or parameter, or use `//` for an ordinary comment", &.{});
-    return true;
+        .end = p.tokenSpan(last).end,
+    }, "this doc comment documents nothing", help, &.{});
 }
 
 /// Token range `[start, end)` of the `///` doc comments of declaration `n`
@@ -418,7 +437,7 @@ fn parseFn(p: *Parser, ctx: FnCtx) Error!Node.Index {
             _ = p.next();
             if (ctx == .free or ctx == .member) {
                 var buf: [320]u8 = undefined;
-                try report(p, .E0204, p.tokenSpan(name), bufPrint(&buf, "function `{s}` has no body", .{p.ast.tokenSlice(name)}), "add a body `{ ... }`; only required methods in a `protocol` end in `;`", &.{});
+                try report(p, .E0204, p.tokenSpan(name), bufPrint(&buf, "function `{s}` has no body", .{identName(p, name)}), "add a body `{ ... }`; only required methods in a `protocol` end in `;`", &.{});
             }
             break :blk null;
         },
@@ -451,8 +470,8 @@ fn parseParams(p: *Parser, ctx: FnCtx) Error!void {
                 p,
                 .E0206,
                 p.tokenSpan(name),
-                bufPrint(&buf, "parameter `{s}` has no default value, but comes after `{s}`, which has one", .{ p.ast.tokenSlice(name), p.ast.tokenSlice(d) }),
-                bufPrint(&help, "give `{s}` a default value, or move it before `{s}`", .{ p.ast.tokenSlice(name), p.ast.tokenSlice(d) }),
+                bufPrint(&buf, "parameter `{s}` has no default value, but comes after `{s}`, which has one", .{ identName(p, name), identName(p, d) }),
+                bufPrint(&help, "give `{s}` a default value, or move it before `{s}`", .{ identName(p, name), identName(p, d) }),
                 &.{},
             );
         }
@@ -513,8 +532,19 @@ fn reportPub(p: *Parser, t: TokenIndex, what: []const u8) std.mem.Allocator.Erro
     try report(p, .E0201, span, bufPrint(&buf, "`pub` is not allowed on {s}", .{what}), "remove `pub`", &.{.{ .span = del, .replacement = "" }});
 }
 
+/// Identifier token `t` cut to `max_ident_len` bytes at a UTF-8 boundary:
+/// longer ones got E0105 but still reach the parser, and message buffers
+/// are sized for this bound.
+fn identName(p: *Parser, t: TokenIndex) []const u8 {
+    const s = p.ast.tokenSlice(t);
+    if (s.len <= max_ident_len) return s;
+    var n: usize = max_ident_len;
+    while (s[n] & 0xC0 == 0x80) n -= 1;
+    return s[0..n];
+}
+
 /// `std.fmt.bufPrint` for messages whose buffers fit their longest input
-/// (identifiers are at most 255 bytes, §2.3).
+/// (names go through `identName`).
 fn bufPrint(buf: []u8, comptime fmt: []const u8, args: anytype) []const u8 {
     return std.fmt.bufPrint(buf, fmt, args) catch unreachable;
 }
@@ -1024,6 +1054,36 @@ test "E0206: defaults only on trailing parameters" {
         \\fn ok(a: i32, b: i32 = 1, c: bool = false) {}
         \\fn all_default(a: i32 = 0, b: i32 = 0,) {}
     , &.{ .{ .code = .E0206, .line = 1 }, .{ .code = .E0206, .line = 4 } });
+}
+
+test "E0204 and E0206 name identifiers longer than 255 bytes" {
+    const long: [400]u8 = @splat('a');
+    try expectDiags("fn " ++ long ++ "();", &.{ .{ .code = .E0105, .line = 1 }, .{ .code = .E0204, .line = 1 } });
+    try expectDiags(
+        "fn f(" ++ long ++ "x: i32 = 0, " ++ long ++ "y: i32) {}",
+        &.{ .{ .code = .E0105, .line = 1 }, .{ .code = .E0105, .line = 1 }, .{ .code = .E0206, .line = 1 } },
+    );
+}
+
+test "W0101: module doc comment after the first item" {
+    try expectDiags(
+        \\//! Module doc.
+        \\fn f() {}
+        \\/// Cut off by the module doc below.
+        \\//! Too late.
+        \\fn g() {}
+        \\struct S {
+        \\    //! In a body.
+        \\    x: i32,
+        \\}
+        \\fn h(
+        \\    //! In parameters.
+        \\    a: i32,
+        \\) {}
+    , &.{
+        .{ .code = .W0101, .line = 3 },  .{ .code = .W0101, .line = 7 },
+        .{ .code = .W0101, .line = 11 },
+    });
 }
 
 test "W0101: doc comment documenting nothing" {
