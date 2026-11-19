@@ -28,6 +28,7 @@ const kinds = @import("kinds.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_literals = @import("check_literals.zig");
+const builtins = @import("builtins.zig");
 const tir = @import("../tir/tir.zig");
 const module_graph = @import("../resolve/module_graph.zig");
 const Ref = @import("../resolve/imports.zig").Ref;
@@ -60,7 +61,7 @@ pub fn call(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
                 .global => |t| switch (t) {
                     .item => |ref| return direct(c, n, d, ref),
                     .unresolved => return failedCall(c, d),
-                    .prelude => return c.unsupported(n, "calls of prelude functions (T048)"),
+                    .prelude => |p| return (try builtins.callIntrinsic(c, n, p)) orelse c.unsupported(n, "prelude functions (T105)"),
                     .external => return c.unsupported(n, "calls of standard library functions (T163)"),
                     .module => {}, // not a value: reported by the callee
                 },

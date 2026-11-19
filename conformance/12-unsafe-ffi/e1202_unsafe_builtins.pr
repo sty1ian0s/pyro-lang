@@ -1,0 +1,9 @@
+// §8.7, §12.1, §12.2: the unsafe builtins outside `unsafe`; `@int_from_ptr` is safe.
+
+fn outside(addr: usize) -> usize {
+    let q = @ptr_from_int(u32, addr); //~ E1202
+    let r = @ptr_add(q, 1); //~ E1202
+    @volatile_write(r, 7); //~ E1202
+    let v: u32 = @volatile_read(r); //~ E1202
+    @int_from_ptr(r) + v as usize
+}

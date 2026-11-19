@@ -22,6 +22,7 @@ const emit_tir = @import("emit_tir.zig");
 const check_stmt = @import("check_stmt.zig");
 const check_literals = @import("check_literals.zig");
 const check_call = @import("check_call.zig");
+const builtins = @import("builtins.zig");
 const tir = @import("../tir/tir.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
@@ -57,6 +58,7 @@ const handlers = blk: {
         .{ .array_lit, check_literals.arrayLit },
         .{ .array_repeat, check_literals.arrayRepeat },
         .{ .tuple, check_literals.tuple },
+        .{ .builtin_call, builtins.check },
         .{ .block, check_stmt.block },
         .{ .@"if", check_stmt.ifExpr },
         .{ .loop, check_stmt.loopExpr },
@@ -69,7 +71,6 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .builtin_call => "builtin calls (T048)",
         .field_access => "field access and methods (T050)",
         .index, .range => "indexing and ranges (T051)",
         .match, .let_cond => "`match` (T052)",
@@ -173,7 +174,7 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
             // Already reported (the check fails anyway), or from a module a
             // single-file check did not load: not shown valid either way.
             .unresolved => return c.unsupported(n, "names from modules not loaded (multi-file check)"),
-            .prelude => return c.unsupported(n, "prelude functions and values (T048)"),
+            .prelude => return c.unsupported(n, "prelude functions and values (T105)"),
             .external => return c.unsupported(n, "standard library items (T163)"),
             .module => {
                 try c.report(n, .E0310, "module `{s}` is not a value", .{c.ast.tokenSlice(c.ast.mainToken(n))});
