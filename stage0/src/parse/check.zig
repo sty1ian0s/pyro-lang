@@ -35,6 +35,7 @@ pub fn checkFile(gpa: Allocator, ast: *const Ast, file: diag.FileId, sink: *diag
     if (ast.nodes.len == 0) return;
     var c: Checker = .{ .gpa = gpa, .ast = ast, .file = file, .sink = sink };
     defer c.labels.deinit(gpa);
+    defer c.work.deinit(gpa);
     try c.walk(.from(0));
 }
 
@@ -51,40 +52,52 @@ const Checker = struct {
     in_nursery: bool = false,
     /// Walking a `match` arm's pattern.
     alt_ok: bool = false,
+    /// Pending work, next item last. An explicit stack instead of native
+    /// recursion, so every tree the parser accepts is walked in bounded stack.
+    work: std.ArrayList(Item) = .empty,
 
-    fn walk(c: *Checker, n: Node.Index) Allocator.Error!void {
+    const Item = union(enum) {
+        visit: Node.Index,
+        set_alt_ok: bool,
+        /// Leaves a `fn`, lambda, `nursery` or labelled loop.
+        restore: Scope,
+    };
+
+    const Scope = struct { labels_len: usize, label_base: usize, in_nursery: bool };
+
+    /// Visits the tree under `root` in source order.
+    fn walk(c: *Checker, root: Node.Index) Allocator.Error!void {
+        try c.work.append(c.gpa, .{ .visit = root });
+        while (c.work.pop()) |item| switch (item) {
+            .visit => |n| try c.visit(n),
+            .set_alt_ok => |v| c.alt_ok = v,
+            .restore => |s| {
+                c.labels.shrinkRetainingCapacity(s.labels_len);
+                c.label_base = s.label_base;
+                c.in_nursery = s.in_nursery;
+            },
+        };
+    }
+
+    /// Runs the checks of node `n` and queues its children.
+    fn visit(c: *Checker, n: Node.Index) Allocator.Error!void {
         const ast = c.ast;
         switch (ast.kind(n)) {
             .fn_decl, .lambda => {
-                const base = c.label_base;
-                const nursery = c.in_nursery;
-                defer {
-                    c.label_base = base;
-                    c.in_nursery = nursery;
-                }
+                try c.pushScope();
                 c.label_base = c.labels.items.len;
                 c.in_nursery = false;
-                try c.walkChildren(n);
             },
             .nursery => {
-                const nursery = c.in_nursery;
-                defer c.in_nursery = nursery;
+                try c.pushScope();
                 c.in_nursery = true;
-                try c.walkChildren(n);
             },
-            .spawn => {
-                if (!c.in_nursery) try c.report(.E0501, c.tokenSpan(ast.mainToken(n)), "`spawn` outside a `nursery` block", "put the `spawn` inside a `nursery { ... }` body of the same function; a `fn` or lambda boundary ends the nursery");
-                try c.walkChildren(n);
-            },
+            .spawn => if (!c.in_nursery) try c.report(.E0501, c.tokenSpan(ast.mainToken(n)), "`spawn` outside a `nursery` block", "put the `spawn` inside a `nursery { ... }` body of the same function; a `fn` or lambda boundary ends the nursery"),
             .labeled => {
+                try c.pushScope();
                 try c.labels.append(c.gpa, ast.mainToken(n));
-                defer _ = c.labels.pop();
-                try c.walkChildren(n);
             },
-            .@"break" => {
-                if (ast.data(n).@"break".label) |l| try c.checkLabel(l);
-                try c.walkChildren(n);
-            },
+            .@"break" => if (ast.data(n).@"break".label) |l| try c.checkLabel(l),
             .@"continue" => if (ast.data(n).@"continue".label) |l| try c.checkLabel(l),
             .assign => {
                 const lhs = ast.data(n).assign.lhs;
@@ -93,45 +106,57 @@ const Checker = struct {
                     .start = c.tokenSpan(firstToken(ast, lhs)).start,
                     .end = c.tokenSpan(ast.mainToken(n) - 1).end,
                 }, "the left side of this assignment is not a place", "assign to a variable, parameter, field, index or dereferenced pointer");
-                try c.walkChildren(n);
             },
-            .attributed => {
-                try c.checkAttrs(n);
-                try c.walkChildren(n);
-            },
+            .attributed => try c.checkAttrs(n),
             .match_arm => {
+                // Only the pattern may hold `|`; queued in reverse pop order.
                 const arm = ast.data(n).match_arm;
+                try c.work.append(c.gpa, .{ .visit = arm.body });
+                if (arm.guard) |g| try c.work.append(c.gpa, .{ .visit = g });
+                try c.work.append(c.gpa, .{ .set_alt_ok = false });
+                try c.work.append(c.gpa, .{ .visit = arm.pattern });
                 c.alt_ok = true;
-                try c.walk(arm.pattern);
-                c.alt_ok = false;
-                if (arm.guard) |g| try c.walk(g);
-                try c.walk(arm.body);
+                return;
             },
-            .pat_alt => {
-                if (c.alt_ok)
-                    try c.checkAlternatives(n)
-                else
-                    try c.report(.E0211, c.tokenSpan(ast.mainToken(n)), "alternative patterns are allowed only in `match` arms", "use a `match`, or test each alternative separately");
-                try c.walkChildren(n);
-            },
-            else => try c.walkChildren(n),
+            .pat_alt => if (c.alt_ok)
+                try c.checkAlternatives(n)
+            else
+                try c.report(.E0211, c.tokenSpan(ast.mainToken(n)), "alternative patterns are allowed only in `match` arms", "use a `match`, or test each alternative separately"),
+            else => {},
         }
+        try c.pushChildren(n);
     }
 
-    /// Walks every child node of `n` in source order.
-    fn walkChildren(c: *Checker, n: Node.Index) Allocator.Error!void {
+    /// Queues a restore of the current scope state, popped after the
+    /// children queued next.
+    fn pushScope(c: *Checker) Allocator.Error!void {
+        try c.work.append(c.gpa, .{ .restore = .{
+            .labels_len = c.labels.items.len,
+            .label_base = c.label_base,
+            .in_nursery = c.in_nursery,
+        } });
+    }
+
+    /// Queues every child node of `n` so they pop in source order.
+    fn pushChildren(c: *Checker, n: Node.Index) Allocator.Error!void {
+        const first = c.work.items.len;
         switch (c.ast.data(n)) {
             inline else => |payload| inline for (@typeInfo(@TypeOf(payload)).@"struct".field_names) |name| {
                 const v = @field(payload, name);
                 switch (@TypeOf(v)) {
-                    Node.Index => try c.walk(v),
-                    ?Node.Index => if (v) |x| try c.walk(x),
-                    []const Node.Index => for (v) |x| try c.walk(x),
-                    ?[]const Node.Index => if (v) |xs| for (xs) |x| try c.walk(x),
+                    Node.Index => try c.work.append(c.gpa, .{ .visit = v }),
+                    ?Node.Index => if (v) |x| try c.work.append(c.gpa, .{ .visit = x }),
+                    []const Node.Index => try c.pushAll(v),
+                    ?[]const Node.Index => if (v) |xs| try c.pushAll(xs),
                     else => {}, // token slots
                 }
             },
         }
+        std.mem.reverse(Item, c.work.items[first..]);
+    }
+
+    fn pushAll(c: *Checker, ns: []const Node.Index) Allocator.Error!void {
+        for (ns) |x| try c.work.append(c.gpa, .{ .visit = x });
     }
 
     // E0210 ------------------------------------------------------------------
@@ -407,6 +432,19 @@ test "E0501: spawn only inside a nursery of the same function" {
     try expectCodes("fn f() { nursery { let t = || { spawn work(); }; } }", "E0501");
     try expectCodes("fn f() { nursery {} spawn work(); }", "E0501");
     try expectCodes("fn f() { nursery { spawn a(); if c { spawn b(); } for i in xs { spawn c(i); } nursery { spawn d(); } } }", "");
+}
+
+test "deep nesting the parser accepts is checked without stack overflow" {
+    const depth = 2000;
+    const head = "fn f() { let x = ";
+    const tail = "; spawn g(); }";
+    var src: [head.len + 2 * depth + 1 + tail.len]u8 = undefined;
+    @memcpy(src[0..head.len], head);
+    @memset(src[head.len..][0..depth], '(');
+    src[head.len + depth] = '1';
+    @memset(src[head.len + depth + 1 ..][0..depth], ')');
+    @memcpy(src[src.len - tail.len ..], tail);
+    try expectCodes(&src, "E0501");
 }
 
 test "nothing is reported inside a construct that failed to parse" {
