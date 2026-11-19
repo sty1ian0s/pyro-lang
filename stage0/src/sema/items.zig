@@ -45,6 +45,7 @@ const attr_table = @import("../attr_table.zig");
 const type_kinds = @import("kinds.zig");
 const layout_soa = @import("layout_soa.zig");
 const tir = @import("../tir/tir.zig");
+const instantiate = @import("../comptime/instantiate.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -255,6 +256,12 @@ pub const Items = struct {
     main: ?Main = null,
     /// Memoized type kinds, owned by `kinds.zig` (arena-backed).
     kinds: type_kinds.Cache = .{},
+    /// The instantiation memo table, owned by `comptime/instantiate.zig`
+    /// (arena-backed).
+    memo: instantiate.Memo = .{},
+    /// The instantiation whose body or signature is being checked, if any:
+    /// its `comptime` parameters are bound to values (§8.2).
+    instance: ?*const instantiate.Frame = null,
 
     pub fn deinit(it: *Items) void {
         const gpa = it.arena.child_allocator;
@@ -977,6 +984,13 @@ pub const Items = struct {
         return it.fold(m, n, self_ty, .none);
     }
 
+    /// The value of comptime argument `n` of module `m` (where `Self` is
+    /// `self_ty`) converted to `ty` (§8.2); `.unknown` if it was reported
+    /// or cannot be evaluated.
+    pub fn comptimeArg(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId, ty: TypeId) Error!Value {
+        return it.coerceValue(m, n, try it.fold(m, n, self_ty, ty), ty);
+    }
+
     fn hook(it: *Items, m: ModuleId, n: Node.Index, expected: TypeId) Error!Value {
         const h = it.options.comptime_hook orelse return .unknown;
         return try h.eval(h.ctx, it, m, n, expected) orelse .unknown;
@@ -1033,7 +1047,11 @@ pub const Items = struct {
             .ident => {
                 const e = it.names.get(m, n) orelse return .unknown; // reported by the expression checker
                 return switch (e.res) {
-                    .local => |l| if (a.kind(l) == .const_decl) (try it.constValue(m, l, self_ty)).value else .unknown,
+                    .local => |l| switch (a.kind(l)) {
+                        .const_decl => (try it.constValue(m, l, self_ty)).value,
+                        .param => instantiate.boundValue(it, m, l) orelse .unknown,
+                        else => .unknown,
+                    },
                     .global => |t| it.targetValue(m, n, t, self_ty),
                 };
             },

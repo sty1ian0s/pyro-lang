@@ -1,4 +1,4 @@
-//@ expected-fail: T063
+//@ expected-fail: T066
 //@ covers: E0801
 // §8.1, §8.2, §8.6.1: literals, consts, forwarded `comptime` parameters and
 // `comptime` expressions are comptime-known.

@@ -1,4 +1,4 @@
-//@ expected-fail: T064
+//@ expected-fail: T061
 //@ covers: E0812
 // §4.12: a chain of 201 nested instantiations is within the limit of 256.
 

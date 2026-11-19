@@ -43,6 +43,7 @@ const kinds_mod = @import("kinds.zig");
 const layout_mod = @import("layout.zig");
 const protocols_mod = @import("protocols.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
+const instantiate = @import("../comptime/instantiate.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -433,10 +434,9 @@ pub fn checkFn(bodies: *Bodies, it: *Items, m: ModuleId, sig: items_mod.Fn, self
             .value => .param,
             .mut => .param_mut,
             .move => .param_move,
-            .@"comptime" => {
-                _ = c.unsupported(p.node, "`comptime` parameters (T063)");
-                return null;
-            },
+            // Bound in an instantiation; a function with `comptime`
+            // parameters is checked only as one (§8.2).
+            .@"comptime" => if (instantiate.boundValue(it, m, p.node) != null) continue else return null,
         };
         if (p.type == .err) c.failed = true;
         c.b.node = p.node;

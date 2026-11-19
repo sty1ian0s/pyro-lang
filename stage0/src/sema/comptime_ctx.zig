@@ -52,6 +52,7 @@ const EvalArena = @import("../comptime/arena.zig").EvalArena;
 const embed = @import("../comptime/embed.zig");
 const interp_ctrl = @import("../comptime/interp_ctrl.zig");
 const limits = @import("../comptime/limits.zig");
+const instantiate = @import("../comptime/instantiate.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -65,7 +66,8 @@ const Error = Allocator.Error;
 /// A computed value as item checking records it.
 pub const Computed = @FieldType(items_mod.Value, "computed");
 
-const Key = struct { ModuleId, Node.Index };
+/// An expression and the instantiation it is evaluated in (`instantiate.current`).
+const Key = struct { ModuleId, Node.Index, instantiate.Id };
 
 /// The comptime state of one package. Must not move after `hook`.
 pub const Ctx = struct {
@@ -129,7 +131,7 @@ pub const Ctx = struct {
     /// `expected` (or of its own type for `.none`); null if it failed or
     /// cannot be evaluated yet (reported, or recorded as unsupported).
     pub fn eval(cx: *Ctx, it: *Items, m: ModuleId, n: Node.Index, expected: TypeId) Error!?items_mod.Value {
-        const key: Key = .{ m, n };
+        const key: Key = .{ m, n, instantiate.current(it) };
         if (cx.cache.get(key)) |v| return v;
         if ((try cx.active.getOrPut(cx.gpa, key)).found_existing) {
             const ast = it.im.graph.modules[m].ast;
@@ -277,10 +279,10 @@ fn checkCallees(bs: *Bodies, it: *Items) Error!void {
     }
 }
 
-const Decl = struct { f: items_mod.Fn, self_ty: TypeId, generics: []const TypeId };
+pub const Decl = struct { f: items_mod.Fn, self_ty: TypeId, generics: []const TypeId };
 
 /// The free function or struct/enum method declared by `fn_decl` `node`.
-fn declOf(it: *Items, m: ModuleId, node: Node.Index) Error!?Decl {
+pub fn declOf(it: *Items, m: ModuleId, node: Node.Index) Error!?Decl {
     for (it.im.graph.modules[m].items, 0..) |_, i| switch ((try it.info(.{ .module = m, .item = @intCast(i) })).*) {
         .@"fn" => |f| if (f.node == node) return .{ .f = f, .self_ty = .none, .generics = &.{} },
         .@"struct" => |s| for (s.methods) |f| if (f.node == node) return .{ .f = f, .self_ty = s.type, .generics = s.generics },
@@ -347,7 +349,7 @@ const protocols_mod = @import("protocols.zig");
 const Interner = @import("../base/Interner.zig");
 
 /// A package checked up to function bodies with comptime evaluation.
-const Fixture = struct {
+pub const Fixture = struct {
     p: module_graph.TestPackage,
     g: module_graph.Graph,
     im: imports.Imports,
@@ -359,7 +361,7 @@ const Fixture = struct {
     protos: protocols_mod.Protocols,
     bodies: Bodies,
 
-    fn init(f: *Fixture, source: []const u8) !void {
+    pub fn init(f: *Fixture, source: []const u8) !void {
         f.p = try .init(&.{.{ "a", source }});
         f.g = try f.p.graph(.{ .kind = .exe });
         f.im = try imports.resolve(testing.allocator, &f.p.sink, &f.g, .{});
@@ -373,7 +375,7 @@ const Fixture = struct {
         f.bodies = try emit_tir.checkBodies(testing.allocator, &f.items, &f.protos);
     }
 
-    fn deinit(f: *Fixture) void {
+    pub fn deinit(f: *Fixture) void {
         f.bodies.deinit();
         f.protos.deinit();
         f.items.deinit();
@@ -386,7 +388,7 @@ const Fixture = struct {
         f.p.deinit();
     }
 
-    fn expectDiags(f: *Fixture, want: []const struct { ?diag.DiagCode, []const u8 }) !void {
+    pub fn expectDiags(f: *Fixture, want: []const struct { ?diag.DiagCode, []const u8 }) !void {
         const ds = f.p.sink.finish();
         errdefer for (ds) |d| std.debug.print("got {?t}: {s}\n", .{ d.code, d.message });
         try testing.expectEqual(want.len, ds.len);
@@ -397,14 +399,14 @@ const Fixture = struct {
         }
     }
 
-    fn expectComplete(f: *Fixture) !void {
+    pub fn expectComplete(f: *Fixture) !void {
         if (f.bodies.unsupported) |u| {
             std.debug.print("unsupported: {s}\n", .{u.what});
             return error.TestUnexpectedResult;
         }
     }
 
-    fn constOf(f: *Fixture, name: []const u8) !items_mod.Const {
+    pub fn constOf(f: *Fixture, name: []const u8) !items_mod.Const {
         return (try f.items.info(.{ .module = 0, .item = f.g.modules[0].names.get(name).? })).@"const";
     }
 };

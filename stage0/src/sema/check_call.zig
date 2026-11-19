@@ -11,7 +11,9 @@
 //! - Parameter modes at the call site (§5.5.2): E0334 for a missing `mut`
 //!   marker, E0335 for an extra one, E0336 for a `mut` argument that is not
 //!   a mutable place, E0801 for a `comptime` argument that is not
-//!   comptime-known (`Items.runtimeRef`: no runtime name in it).
+//!   comptime-known (`Items.runtimeRef`: no runtime name in it). A call
+//!   with `comptime` arguments calls their instantiation
+//!   (`comptime/instantiate.zig`).
 //! - `fnValue` gives a named non-generic function as an `fn(...) -> R`
 //!   value; named and default arguments do not apply through it (§7.2.5).
 //! - `checkSignature` checks parameter declarations: E0339 for a `mut T`
@@ -21,8 +23,7 @@
 //!   receiver for its first parameter; method calls (`check_member.zig`)
 //!   bind through it.
 //!
-//! Generic calls are T068's and calls of functions with `comptime`
-//! parameters (instantiation) T063's.
+//! Generic calls are T068's.
 
 const std = @import("std");
 const Ast = @import("../ast/Ast.zig");
@@ -41,6 +42,7 @@ const unsafe = @import("unsafe.zig");
 const tir = @import("../tir/tir.zig");
 const module_graph = @import("../resolve/module_graph.zig");
 const Ref = @import("../resolve/imports.zig").Ref;
+const instantiate = @import("../comptime/instantiate.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -104,21 +106,36 @@ pub fn callFn(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_m
     if (items_mod.hasAttr(c.items.im.graph.modules[m].ast, sig.attrs, .unsafe))
         try unsafe.callee(c, c.ast.data(n).call.callee, c.items.im.graph.modules[m].ast, sig, false);
     if (sig.generics.len > 0) return c.unsupported(n, "generic calls (T068)");
-    if (sig.ret == .err) c.failed = true;
     const skip = @intFromBool(recv != null);
-    const params = try c.arena.alloc(Param, sig.params.len - skip);
-    var has_comptime = false;
-    for (sig.params[skip..], params) |p, *o| {
-        o.* = .{ .name = p.name, .mode = p.mode, .type = p.type, .default = p.default };
-        has_comptime = has_comptime or p.mode == .@"comptime";
-    }
+    const has_comptime = for (sig.params[skip..]) |p| {
+        if (p.mode == .@"comptime") break true;
+    } else false;
+    // A call with `comptime` arguments calls their instantiation (§8.2).
+    const inst = if (has_comptime) try instantiate.instance(c, n, m, sig, skip, args) else null;
+    const f = if (inst) |i| i.sig else sig;
+    if (f.ret == .err) c.failed = true;
+    const params = try c.arena.alloc(Param, f.params.len - skip);
+    for (f.params[skip..], params) |p, *o| o.* = .{ .name = p.name, .mode = p.mode, .type = p.type, .default = p.default };
     var b = try bind(c, n, c.ast.data(n).call.callee, args, params, true);
     if (recv) |r| {
         b.args = try std.mem.concat(c.arena, tir.Ref, &.{ &.{r.ref}, b.args });
         b.ok = b.ok and r.ty != .err;
         b.diverges = b.diverges or r.ty == .noreturn;
     }
-    if (has_comptime and b.ok) return c.unsupported(n, "calls of functions with `comptime` parameters (T063)");
+    if (has_comptime) {
+        const i = inst orelse {
+            c.failed = true; // reported or recorded
+            return .err;
+        };
+        // The instance takes the runtime arguments only.
+        var len: usize = 0;
+        for (f.params, b.args) |p, a| if (p.mode != .@"comptime") {
+            b.args[len] = a;
+            len += 1;
+        };
+        b.args = b.args[0..len];
+        return finish(c, f.ret, b, .{ .call = .{ .callee = i.id, .args = b.args } });
+    }
     const id = try c.bodies.fnId(m, sig.node, sig.name);
     return finish(c, sig.ret, b, .{ .call = .{ .callee = id, .args = b.args } });
 }
@@ -254,7 +271,7 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
         try c.reportAt(ast.mainToken(r), .E0801, &.{"pass a literal, a `const`, a `comptime` parameter or a `comptime` expression"}, "argument for `comptime` parameter{s} is not comptime-known: `{s}` is a runtime value", .{ try paramName(c, p), ast.tokenSlice(ast.mainToken(r)) });
         _ = try check_expr.check(c, value, .none);
         return .err;
-    };
+    } else return .void_value; // evaluated by the instantiation
     // A `move` argument needs the `move` prefix and ownership checks
     // (§5.5.2). A concrete plain `move` parameter is E0326 at its
     // declaration and its argument is checked as a copy.
@@ -384,12 +401,19 @@ pub fn fnOf(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod
     var bad = sig.ret == .err;
     for (sig.params, params) |p, *o| {
         bad = bad or p.type == .err;
-        o.* = .{ .type = p.type, .mode = switch (p.mode) {
-            .value => .value,
-            .mut => .mut,
-            .move => .move,
-            .@"comptime" => return c.unsupported(n, "functions with `comptime` parameters as values (T063)"),
-        } };
+        o.* = .{
+            .type = p.type,
+            .mode = switch (p.mode) {
+                .value => .value,
+                .mut => .mut,
+                .move => .move,
+                .@"comptime" => {
+                    // An `fn` type has no `comptime` parameters (§4.6, §8.2).
+                    try c.reportAt(c.ast.mainToken(n), null, &.{"call it with its `comptime` arguments instead"}, "`{s}` has `comptime` parameters and cannot be used as a value", .{sig.name});
+                    return .err;
+                },
+            },
+        };
     }
     if (bad) {
         c.failed = true; // reported with the signature

@@ -1,4 +1,4 @@
-//@ expected-fail: T064
+//@ expected-fail: T061
 // §4.12, §8.2: each `comptime` argument value is a separate instantiation;
 // a chain deeper than 256 is an error, reported at the call that exceeds it.
 
