@@ -482,15 +482,20 @@ const Graph = struct {
     /// The source to fetch for a dependency declared by a manifest. `base` is
     /// the declaring path package's directory relative to the root ("" for the
     /// root itself), or null inside a git package, where path sources have no
-    /// meaning. A git source keeps its locked commit. Null after reporting.
+    /// meaning. A git source keeps its locked commit while the lock entry has
+    /// the manifest's URL and reference. Null after reporting.
     fn want(g: *Graph, name: []const u8, src: manifest.Source, base: ?[]const u8, span: ?diag.Span) !?lock.Source {
         const a = g.s.a;
         switch (src) {
             .registry => |r| return .{ .registry = r.registry },
             .git => |gs| {
-                if (g.locked(name, null)) |p| if (p.source == .git and std.mem.eql(u8, p.source.git.url, gs.url))
-                    return .{ .git = .{ .url = gs.url, .rev = p.source.git.rev } };
-                return .{ .git = .{ .url = gs.url, .rev = try fetch.gitRev(a, gs.ref) } };
+                const ref: []const u8 = switch (gs.ref) {
+                    .default => "",
+                    inline else => |v, tag| try std.mem.concat(a, u8, &.{ @tagName(tag), "=", v }),
+                };
+                if (g.locked(name, null)) |p| if (p.source == .git and std.mem.eql(u8, p.source.git.url, gs.url) and std.mem.eql(u8, p.source.git.ref, ref))
+                    return .{ .git = .{ .url = gs.url, .rev = p.source.git.rev, .ref = ref } };
+                return .{ .git = .{ .url = gs.url, .rev = try fetch.gitRev(a, gs.ref), .ref = ref } };
             },
             .path => |p| {
                 const b = base orelse {
@@ -559,7 +564,7 @@ const Graph = struct {
                 const hash = try a.alloc(lock.Hash, 1);
                 hash[0] = got.sha256;
                 const source: lock.Source = switch (src) {
-                    .git => |gs| .{ .git = .{ .url = gs.url, .rev = try a.dupe(u8, got.rev.?) } },
+                    .git => |gs| .{ .git = .{ .url = gs.url, .rev = try a.dupe(u8, got.rev.?), .ref = gs.ref } },
                     else => src,
                 };
                 g.nodes.getPtr(name).?.* = .{ .source = source, .releases = rel, .hashes = hash };
@@ -592,11 +597,11 @@ fn insertEntry(a: Allocator, text: []const u8, doc: *const toml.Document, sectio
 }
 
 /// `text`, parsed as `doc`, without the line of entry `name` of table
-/// `section`; null if there is no such entry. A table this leaves empty at the
-/// end of the file goes too, with one blank line before it, which undoes the
-/// table `insertEntry` appends.
-/// shortcut: a file without a final newline gets one back when its table goes;
-/// record the original ending if that matters.
+/// `section`; null if there is no such entry. The table header always stays,
+/// even when the table ends up empty: a header `insertEntry` appended cannot be
+/// told from one the user wrote, and only the user's may be kept. So removing
+/// what `add` put into an existing table restores the text byte for byte, and
+/// removing it from a table `add` created leaves that table's empty header.
 fn removeEntry(a: Allocator, text: []const u8, doc: *const toml.Document, section: []const u8, name: []const u8) EditError!?[]u8 {
     const v = doc.root.get(section) orelse return null;
     const t = try headerTable(v);
@@ -604,20 +609,10 @@ fn removeEntry(a: Allocator, text: []const u8, doc: *const toml.Document, sectio
     if (endOf(&e.value) == 0 or (e.value.data == .table and e.value.data.table.kind == .dotted)) return error.UnsupportedLayout;
     const start = lineStart(text, e.key_span.start);
     if (std.mem.trim(u8, text[start..e.key_span.start], " \t").len != 0) return error.UnsupportedLayout;
-    const nl = std.mem.indexOfScalarPos(u8, text, e.value.span.end, '\n');
-    var from = start;
-    const to = if (nl) |n| n + 1 else text.len;
-    if (to == text.len) {
-        const header = lineStart(text, v.span.start);
-        const header_end = if (std.mem.indexOfScalarPos(u8, text, v.span.end, '\n')) |n| n + 1 else text.len;
-        if (t.entries.count() == 1 and header_end == start) {
-            from = header;
-            if (header >= 2 and text[header - 1] == '\n' and text[header - 2] == '\n') from -= 1;
-        } else if (nl == null and start > 0) {
-            from = start - 1; // the newline `insertEntry` added before the line
-        }
-    }
-    return try std.mem.concat(a, u8, &.{ text[0..from], text[to..] });
+    if (std.mem.indexOfScalarPos(u8, text, e.value.span.end, '\n')) |nl|
+        return try std.mem.concat(a, u8, &.{ text[0..start], text[nl + 1 ..] });
+    // An unterminated last line: drop the newline `insertEntry` added before it.
+    return try a.dupe(u8, text[0 .. start - @intFromBool(start > 0)]);
 }
 
 fn headerTable(v: *const toml.Value) error{UnsupportedLayout}!*const toml.Table {
@@ -655,13 +650,17 @@ const gpa_t = testing.allocator;
 const io_t = testing.io;
 const args_mod = @import("args.zig");
 
-test "insertEntry then removeEntry restores the text" {
+test "insertEntry then removeEntry restores the text, but for a header it added" {
     var arena: std.heap.ArenaAllocator = .init(gpa_t);
     defer arena.deinit();
     const a = arena.allocator();
+    const line = "util = \"1.0\"";
     const texts = [_][]const u8{
         "",
         "[package]\nname = \"x\"\n",
+        "[package]\nname = \"x\"",
+        "[package]\nname = \"x\"\n\n[dependencies]\n",
+        "[dependencies]",
         "[dependencies]\n[build]\nbackend = \"llvm\"\n",
         "[dependencies]\nm = \"1\" # pinned\nn = { version = \"2\", registry = \"r\" }\n\n# trailer\n[gpu]\n",
         "[dependencies]\nm = \"1\"",
@@ -671,15 +670,30 @@ test "insertEntry then removeEntry restores the text" {
         var d: toml.Diagnostic = undefined;
         var doc = try toml.parse(gpa_t, text, &d);
         defer doc.deinit();
-        // The shortcut on `removeEntry`: a new table after an unterminated last line.
-        if (text.len != 0 and !std.mem.endsWith(u8, text, "\n") and doc.root.get(section) == null) continue;
-        const added = try insertEntry(a, text, &doc, section, "util = \"1.0\"");
+        const added = try insertEntry(a, text, &doc, section, line);
         var doc2 = try toml.parse(gpa_t, added, &d);
         defer doc2.deinit();
         try testing.expectEqualStrings("1.0", doc2.root.get(section).?.data.table.get("util").?.data.string);
-        try testing.expectEqualStrings(text, (try removeEntry(a, added, &doc2, section, "util")).?);
+        const removed = (try removeEntry(a, added, &doc2, section, "util")).?;
         try testing.expectEqual(null, try removeEntry(a, added, &doc2, section, "absent"));
+        if (doc.root.get(section) != null) {
+            try testing.expectEqualStrings(text, removed);
+        } else {
+            // The added header stays; from then on the round trip is exact.
+            try testing.expectEqualStrings(added[0 .. added.len - line.len - 1], removed);
+            var doc3 = try toml.parse(gpa_t, removed, &d);
+            defer doc3.deinit();
+            try testing.expectEqualStrings(added, try insertEntry(a, removed, &doc3, section, line));
+        }
     };
+    // A user's table keeps its header when its last entry goes.
+    {
+        const text = "[package]\nname = \"x\"\n\n[dependencies]\nfoo = \"1\"\n";
+        var d: toml.Diagnostic = undefined;
+        var doc = try toml.parse(gpa_t, text, &d);
+        defer doc.deinit();
+        try testing.expectEqualStrings(text[0 .. text.len - "foo = \"1\"\n".len], (try removeEntry(a, text, &doc, "dependencies", "foo")).?);
+    }
     // Entries written as their own sections or dotted keys are not removed.
     var d: toml.Diagnostic = undefined;
     var doc = try toml.parse(gpa_t, texts[texts.len - 1], &d);
@@ -878,10 +892,13 @@ test "add then remove leaves pyro.toml byte-identical" {
         \\
     , added);
 
+    // `[dev-dependencies]` was new, so its header stays (see `removeEntry`).
+    const with_dev = app_manifest ++ "\n[dev-dependencies]\n";
     try fx.expect(.ok, &.{ "remove", "util" });
     const removed = try fx.read("app/pyro.toml");
     defer gpa_t.free(removed);
-    try testing.expectEqualStrings(app_manifest, removed);
+    try testing.expectEqualStrings(with_dev, removed);
+    try fx.write("app/pyro.toml", app_manifest);
 
     try expectFailure(&fx, .failed, &.{ "add", "local" }, "`local` is already in `[dependencies]`");
     try expectFailure(&fx, .failed, &.{ "add", "ghost" }, "the registry has no package `ghost`");
@@ -981,6 +998,41 @@ test "fetch locks and caches; update touches only the named dependency's subgrap
     const after_all = try fx.read("app/pyro.lock");
     defer gpa_t.free(after_all);
     try testing.expect(std.mem.indexOf(u8, after_all, gfx_entry) == null); // gfx moved to the new commit
+}
+
+test "a changed git reference moves the locked commit; --locked fails until then" {
+    var fx: Fixture = undefined;
+    try fx.init("");
+    defer fx.deinit();
+    try fx.write("gfx/pyro.toml", "[package]\nname = \"gfx\"\nversion = \"1.0.0\"\nedition = \"2026\"\n");
+    try fx.write("gfx/src/lib.pr", "pub fn draw() {}\n");
+    try fx.sh("gfx", &.{ "git", "init", "--quiet" });
+    try fx.commit("gfx");
+    try fx.sh("gfx", &.{ "git", "tag", "v1" });
+    try fx.write("gfx/src/lib.pr", "pub fn draw() { }\n");
+    try fx.commit("gfx");
+    try fx.sh("gfx", &.{ "git", "tag", "v2" });
+
+    var locks: [2][]u8 = .{ &.{}, &.{} };
+    defer for (locks) |l| gpa_t.free(l);
+    for ([_][]const u8{ "v1", "v2" }, &locks) |tag, *out| {
+        const m = try std.fmt.allocPrint(gpa_t, "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n[dependencies]\ngfx = {{ git = \"file://{s}/gfx\", tag = \"{s}\" }}\n", .{ fx.root, tag });
+        defer gpa_t.free(m);
+        try fx.write("app/pyro.toml", m);
+        if (out == &locks[1]) try expectFailure(&fx, .failed, &.{ "fetch", "--locked" }, "`pyro.lock` needs to be updated");
+        try fx.expect(.ok, &.{"fetch"});
+        try fx.expect(.ok, &.{ "fetch", "--locked" });
+        out.* = try fx.read("app/pyro.lock");
+    }
+    try testing.expect(std.mem.indexOf(u8, locks[0], "/gfx?tag=v1#") != null);
+    try testing.expect(std.mem.indexOf(u8, locks[1], "/gfx?tag=v2#") != null);
+    const commit = struct {
+        fn of(text: []const u8) []const u8 {
+            const at = std.mem.indexOfScalarPos(u8, text, std.mem.indexOf(u8, text, "?tag=").?, '#').? + 1;
+            return text[at..std.mem.indexOfScalarPos(u8, text, at, '"').?];
+        }
+    }.of;
+    try testing.expect(!std.mem.eql(u8, commit(locks[0]), commit(locks[1])));
 }
 
 test "offline fetch with a cold cache fails clearly; warm, it needs no registry" {
