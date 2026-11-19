@@ -206,7 +206,8 @@ fn parseSource(s: []const u8) ?Source {
     return null;
 }
 
-fn parseHash(s: []const u8) ?Hash {
+/// Parses 64 lowercase hex digits; null otherwise.
+pub fn parseHash(s: []const u8) ?Hash {
     if (s.len != 64) return null;
     for (s) |c| if (!std.ascii.isDigit(c) and !(c >= 'a' and c <= 'f')) return null;
     var h: Hash = undefined;
@@ -253,7 +254,8 @@ pub fn render(gpa: std.mem.Allocator, packages: []const Package) error{OutOfMemo
     return out.toOwnedSlice();
 }
 
-fn versionFmt(v: semver.Version) std.fmt.Alt(semver.Version, writeVersion) {
+/// Formats `v` as its SemVer text (`{f}`).
+pub fn versionFmt(v: semver.Version) std.fmt.Alt(semver.Version, writeVersion) {
     return .{ .data = v };
 }
 
