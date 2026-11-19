@@ -397,8 +397,8 @@ pub fn stageOf(ast: *const Ast, attrs: []const Node.Index) ?Stage {
 }
 
 fn contextOf(c: *Checker) Context {
-    // shortcut: bodies are checked only as runtime code outside `unsafe` and contracts; T054, T060 and T135 set those flags when they check such code.
-    return .{ .stage = stageOf(c.ast, c.sig.attrs) };
+    // shortcut: `@ensures` contracts are not checked yet; T135 sets `in_ensures` when it checks them.
+    return .{ .stage = stageOf(c.ast, c.sig.attrs), .in_unsafe = c.in_unsafe, .in_comptime = c.in_comptime };
 }
 
 // ---------------------------------------------------------------------------

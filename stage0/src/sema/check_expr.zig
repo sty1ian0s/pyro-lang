@@ -26,6 +26,7 @@ const check_member = @import("check_member.zig");
 const check_index = @import("check_index.zig");
 const builtins = @import("builtins.zig");
 const patterns = @import("patterns.zig");
+const unsafe = @import("unsafe.zig");
 const tir = @import("../tir/tir.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
@@ -71,6 +72,7 @@ const handlers = blk: {
         .{ .@"while", check_stmt.whileExpr },
         .{ .labeled, check_stmt.labeled },
         .{ .match, patterns.matchExpr },
+        .{ .unsafe_block, unsafe.block },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -78,7 +80,6 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .unsafe_block => "`unsafe` blocks (T054)",
         .comptime_block, .comptime_if => "comptime evaluation (T060)",
         .lambda => "lambdas (T074)",
         .@"for", .for_inline => "`for` loops (T076)",
@@ -221,7 +222,8 @@ fn prefix(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const operand = c.ast.data(n).prefix.operand;
     switch (op) {
         .minus, .tilde, .bang => {},
-        .star, .amp => return c.unsupported(n, "raw pointer operations (T054)"),
+        .star => return unsafe.deref(c, n, expected),
+        .amp => return unsafe.addrOf(c, n, expected),
         .kw_move => return c.unsupported(n, "`move` (T080)"),
         else => return c.unsupported(n, "`comptime` expressions (T060)"),
     }
@@ -533,11 +535,11 @@ fn allEq(c: *Checker, tys: []const TypeId, depth: u32) Error!?bool {
     return true;
 }
 
-/// `< > <= >=` (§6.4.1): integers, floats, `str`, payload-free enums, and
-/// `vec`s lane-wise.
+/// `< > <= >=` (§6.4.1): integers, floats, `str`, raw pointers (§12.2),
+/// payload-free enums, and `vec`s lane-wise.
 fn supportsOrd(c: *Checker, ty: TypeId) bool {
     const u = c.underlying(ty);
-    if (u == .str or isNumeric(c, u)) return true;
+    if (u == .str or isNumeric(c, u) or c.types.get(u) == .ptr) return true;
     const e = c.items.enumOf(u) orelse return false;
     return !e.has_payload;
 }
@@ -565,7 +567,7 @@ fn cast(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
         return .err;
     };
     if (kind == .identity) return .{ .ty = to, .ref = v.ref };
-    // shortcut: `usize as *T` is only legal in `unsafe` code; T054 adds the context check (E1202).
+    if (kind == .int_to_ptr and !try unsafe.require(c, n, "converting an integer to a pointer")) return .err;
     return .{ .ty = to, .ref = try c.emit(to, .{ .cast = .{ .value = v.ref } }) };
 }
 

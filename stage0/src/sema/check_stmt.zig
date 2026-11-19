@@ -141,8 +141,8 @@ pub fn mixedPlace(c: *Checker, n: Node.Index) bool {
 pub const Place = struct { ref: tir.Ref, ty: TypeId };
 
 /// The storage assignment target `n` names (§3.5, §1.6), or null after a
-/// diagnostic. Fields are `check_member`'s, elements `check_index`'s;
-/// dereference targets are T054's.
+/// diagnostic. Fields are `check_member`'s, elements `check_index`'s,
+/// dereferences `unsafe`'s.
 fn place(c: *Checker, n: Node.Index) Error!?Place {
     if (mixedPlace(c, n)) {
         _ = c.unsupported(n, "places mixing fields and elements (W13 follow-up)");
@@ -161,10 +161,16 @@ fn place(c: *Checker, n: Node.Index) Error!?Place {
             const p = try @import("check_index.zig").writable(c, n) orelse return null;
             return .{ .ref = p.ref, .ty = p.ty };
         },
-        else => {
-            _ = c.unsupported(n, "assignment to dereferences (T054)");
-            return null;
-        },
+        .prefix => if (c.ast.tokens.items(.kind)[c.ast.mainToken(n)] == .star) return @import("unsafe.zig").derefPlace(c, n, true),
+        else => {},
+    }
+    if (c.ast.kind(n) != .ident) {
+        _ = try check_expr.check(c, n, .none);
+        try c.reportAt(c.ast.mainToken(n), .E0207, &.{"assign to a binding, a field or element of one, or `*p`"}, "assignment target is not a place", .{});
+        return null;
+    }
+    switch (c.ast.kind(n)) {
+        else => {},
     }
     const name = c.ast.tokenSlice(c.ast.mainToken(n));
     const e = c.items.names.get(c.m, n) orelse {

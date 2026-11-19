@@ -173,6 +173,10 @@ pub const Checker = struct {
     self_local: tir.Local = .none,
     /// Enclosing loops, innermost last.
     loops: std.ArrayList(Loop) = .empty,
+    /// Inside an `unsafe` block (§12.1).
+    in_unsafe: bool = false,
+    /// Checking comptime code (§8.6); set by comptime evaluation (T060).
+    in_comptime: bool = false,
     /// An error was reported or a construct is unsupported: nothing more is
     /// emitted and the body gets no TIR.
     failed: bool = false,

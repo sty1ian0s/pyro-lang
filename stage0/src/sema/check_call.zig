@@ -37,6 +37,7 @@ const builtins = @import("builtins.zig");
 const check_member = @import("check_member.zig");
 const check_stmt = @import("check_stmt.zig");
 const builtins_expr = @import("builtins_expr.zig");
+const unsafe = @import("unsafe.zig");
 const tir = @import("../tir/tir.zig");
 const module_graph = @import("../resolve/module_graph.zig");
 const Ref = @import("../resolve/imports.zig").Ref;
@@ -90,13 +91,18 @@ fn direct(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), ref: Ref)
         .@"fn" => |f| f,
         else => return c.unsupported(n, "calls of this form (T046, T065)"),
     };
+    const item = c.items.im.graph.modules[ref.module].items[ref.item];
+    if (item.kind == .extern_fn) try unsafe.callee(c, d.callee, c.items.im.graph.modules[ref.module].ast, sig, true);
     return callFn(c, n, ref.module, sig, null, d.args);
 }
 
 /// Call `n` of function `sig` declared in module `m` with `args`. A
 /// `recv`, already passed by the caller, is the first argument (§6.3.3)
-/// and `args` bind to the other parameters.
+/// and `args` bind to the other parameters. An `extern` callee is gated
+/// by the caller; an `@unsafe` one here (§12.1).
 pub fn callFn(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod.Fn, recv: ?Typed, args: []const Node.Index) Error!Typed {
+    if (items_mod.hasAttr(c.items.im.graph.modules[m].ast, sig.attrs, .unsafe))
+        try unsafe.callee(c, c.ast.data(n).call.callee, c.items.im.graph.modules[m].ast, sig, false);
     if (sig.generics.len > 0) return c.unsupported(n, "generic calls (T068)");
     if (sig.ret == .err) c.failed = true;
     const skip = @intFromBool(recv != null);
@@ -300,8 +306,8 @@ pub fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
 }
 
 /// The mutable place `value` of `mut` argument `a` names (§5.5.2): a
-/// `let mut` binding, a `mut` parameter or `mut self`, or a field or
-/// element of one (§5.5.2, §6.5.4); E0336 otherwise.
+/// `let mut` binding, a `mut` parameter or `mut self`, a field or element
+/// of one (§5.5.2, §6.5.4), or `*p` for `p: *T` (§12.2); E0336 otherwise.
 fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?check_index.Place {
     const ast = c.ast;
     if (check_stmt.mixedPlace(c, value)) {
@@ -322,8 +328,12 @@ fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?check_index.Pl
     switch (ast.kind(v)) {
         // `*p` names a place through a raw pointer; other prefix forms are values.
         .prefix => if (ast.tokens.items(.kind)[ast.mainToken(v)] == .star) {
-            _ = c.unsupported(v, "raw pointer operations (T054)");
-            return null;
+            if (fields) {
+                _ = c.unsupported(v, "fields through raw pointers (T054)");
+                return null;
+            }
+            const p = try unsafe.derefPlace(c, v, true) orelse return null;
+            return .{ .ref = p.ref, .ty = p.ty, .mutable = true };
         },
         .ident => if (c.items.names.get(c.m, v) == null) {
             _ = try check_expr.check(c, v, .none); // reports the unknown name
