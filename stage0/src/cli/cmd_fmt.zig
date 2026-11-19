@@ -2,36 +2,59 @@
 //! canonical style (`fmt/fmt.zig`, `docs/style.md`).
 //!
 //! Each path is a `.pr` file or a directory searched recursively for `.pr`
-//! files. Without paths, the `src/` and `tests/` trees of the package around
-//! the current directory are formatted. Every file whose text changes is
-//! named on stdout; it is rewritten in place (atomically), or with `--check`
-//! left alone and the command exits 1. A file that does not lex or parse is
-//! not formatted: its diagnostics are reported and the command exits 1.
+//! files. Without paths, `build.pr` and the `src/` and `tests/` trees of the
+//! package around the current directory are formatted, and at a workspace
+//! root those of every member too. Every file whose text changes is named on
+//! stdout; it is rewritten in place (atomically, through a symlink, keeping
+//! its mode), or with `--check` left alone and the command exits 1. `--check`
+//! also reports names that break the §2.3 conventions (`fmt/naming.zig`) and
+//! then exits 1. A file that does not lex or parse is not formatted: its
+//! diagnostics are reported and the command exits 1.
 
 const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const cli = @import("main.zig");
 const fmt = @import("../fmt/fmt.zig");
+const naming = @import("../fmt/naming.zig");
 const diag = @import("../diag/diag.zig");
 const SourceMap = @import("../source/SourceMap.zig");
 const layout = @import("../pkg/layout.zig");
 
+/// Runs `pyro fmt`; without paths, on the package around the working directory.
 pub fn run(ctx: *cli.Ctx) !cli.Exit {
+    return runFrom(ctx, ".");
+}
+
+/// `run`, finding the package (when no paths are given) at or above `start`.
+fn runFrom(ctx: *cli.Ctx, start: []const u8) !cli.Exit {
     var arena_state: std.heap.ArenaAllocator = .init(ctx.gpa);
     defer arena_state.deinit();
     const a = arena_state.allocator();
-    var files: std.ArrayList([]const u8) = .empty;
-    if (ctx.opts.positionals.len == 0) {
-        const root = try layout.findRoot(a, ctx.io, ".") orelse {
-            try ctx.out.stderr.writeAll("error: could not find `pyro.toml` in `.` or any parent directory; name the files to format\n");
-            return .failed;
-        };
-        for ([_][]const u8{ "src", "tests" }) |sub| try collect(a, ctx.io, try std.fs.path.join(a, &.{ root, sub }), false, &files);
-    } else for (ctx.opts.positionals) |p| try collect(a, ctx.io, p, true, &files);
-
     var sm: SourceMap = .init(ctx.gpa, ctx.io);
     defer sm.deinit();
+    var files: std.ArrayList([]const u8) = .empty;
+    if (ctx.opts.positionals.len == 0) {
+        const root = try layout.findRoot(a, ctx.io, start) orelse {
+            try ctx.out.stderr.print("error: could not find `pyro.toml` in `{s}` or any parent directory; name the files to format\n", .{start});
+            return .failed;
+        };
+        var sink: diag.Sink = .init(ctx.gpa, ctx.io);
+        defer sink.deinit();
+        var l = layout.open(ctx.gpa, ctx.io, &sm, &sink, root) catch |err| switch (err) {
+            error.InvalidManifest, error.InvalidLayout => {
+                try cli.renderDiagnostics(ctx, &sm, sink.finish());
+                return .failed;
+            },
+            else => |e| return e,
+        };
+        defer l.deinit();
+        // The package and, at a workspace root, every member (§13.1, §13.5).
+        for (try std.mem.concat(a, []const u8, &.{ &.{l.dir}, l.members })) |dir| {
+            for ([_][]const u8{ "build.pr", "src", "tests" }) |sub| try collect(a, ctx.io, try std.fs.path.join(a, &.{ dir, sub }), false, &files);
+        }
+    } else for (ctx.opts.positionals) |p| try collect(a, ctx.io, p, true, &files);
+
     var exit: cli.Exit = .ok;
     for (files.items) |path| {
         var sink: diag.Sink = .init(ctx.gpa, ctx.io);
@@ -41,16 +64,27 @@ pub fn run(ctx: *cli.Ctx) !cli.Exit {
             return .usage;
         };
         const file = sm.get(id);
-        const formatted = (if (sink.hasErrors()) null else fmt.formatSource(ctx.gpa, ctx.io, file.text, id, &sink)) catch |err| switch (err) {
+        var ast = (if (sink.hasErrors()) null else try fmt.parse(ctx.gpa, file.text, id, &sink)) orelse {
+            try cli.renderDiagnostics(ctx, &sm, sink.finish());
+            exit = .failed;
+            continue;
+        };
+        defer ast.deinit(ctx.gpa);
+        if (ctx.opts.check) {
+            const bad = try naming.check(ctx.gpa, &ast);
+            defer ctx.gpa.free(bad);
+            for (bad) |v| {
+                const loc = sm.location(id, ast.tokens.items(.start)[v.token]);
+                try ctx.out.stdout.print("{s}:{d}:{d}: `{s}` is not {t} (§2.3)\n", .{ path, loc.line, loc.column, ast.tokenSlice(v.token), v.want });
+                exit = .failed;
+            }
+        }
+        const formatted = fmt.format(ctx.gpa, ctx.io, &ast) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.TokensChanged => {
                 try ctx.out.stderr.print("error: internal compiler error: formatting `{s}` would change its tokens\n", .{path});
                 return .internal;
             },
-        } orelse {
-            try cli.renderDiagnostics(ctx, &sm, sink.finish());
-            exit = .failed;
-            continue;
         };
         defer ctx.gpa.free(formatted);
         if (std.mem.eql(u8, formatted, file.raw)) continue;
@@ -59,7 +93,10 @@ pub fn run(ctx: *cli.Ctx) !cli.Exit {
             exit = .failed;
             continue;
         }
-        var af = try Io.Dir.cwd().createFileAtomic(ctx.io, path, .{ .replace = true });
+        // Rewrite the target of a symlink, not the link, and keep the file's mode.
+        const real = try Io.Dir.cwd().realPathFileAlloc(ctx.io, path, a);
+        const st = try Io.Dir.cwd().statFile(ctx.io, real, .{});
+        var af = try Io.Dir.cwd().createFileAtomic(ctx.io, real, .{ .replace = true, .permissions = st.permissions });
         defer af.deinit(ctx.io);
         try af.file.writeStreamingAll(ctx.io, formatted);
         try af.replace(ctx.io);
@@ -140,4 +177,84 @@ test "pyro fmt leaves a file with a syntax error alone and exits 1" {
     const r = try runPyro(a, &.{ "fmt", file });
     try testing.expectEqual(cli.Exit.failed, r[0]);
     try testing.expectEqualStrings("fn main( {\n", try tmp.dir.readFileAlloc(testing.io, "bad.pr", a, .unlimited));
+}
+
+/// Runs `pyro fmt [--check]` with no paths, for the package at or above `start`.
+fn runPackage(a: Allocator, start: []const u8, check: bool) !struct { cli.Exit, []const u8 } {
+    var out: Io.Writer.Allocating = .init(a);
+    var err: Io.Writer.Allocating = .init(a);
+    const env: std.process.Environ.Map = .init(a);
+    var ctx: cli.Ctx = .{ .gpa = testing.allocator, .io = testing.io, .environ = &env, .opts = .{ .command = .fmt, .check = check }, .out = .{ .stdout = &out.writer, .stderr = &err.writer } };
+    return .{ try runFrom(&ctx, start), out.written() };
+}
+
+test "pyro fmt without paths formats build.pr, src/ and tests/ of the workspace and its members" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const pkg = "[package]\nname = \"p\"\nversion = \"0.1.0\"\nedition = \"2026\"\n";
+    const ugly = "fn main(){}\n";
+    for ([_][2][]const u8{
+        .{ "pyro.toml", "[workspace]\nmembers = [\"m\"]\n" ++ pkg },
+        .{ "build.pr", ugly },
+        .{ "src/main.pr", ugly },
+        .{ "tests/t.pr", ugly },
+        .{ "other/x.pr", ugly },
+        .{ "m/pyro.toml", pkg },
+        .{ "m/build.pr", ugly },
+        .{ "m/src/lib.pr", ugly },
+    }) |f| {
+        if (std.fs.path.dirname(f[0])) |d| try tmp.dir.createDirPath(testing.io, d);
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = f[0], .data = f[1] });
+    }
+    const start = try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path, "src" });
+    const r = try runPackage(a, start, false);
+    try testing.expectEqual(cli.Exit.ok, r[0]);
+    for ([_][]const u8{ "build.pr", "src/main.pr", "tests/t.pr", "m/build.pr", "m/src/lib.pr" }) |p| {
+        try testing.expectEqualStrings("fn main() {}\n", try tmp.dir.readFileAlloc(testing.io, p, a, .unlimited));
+    }
+    try testing.expectEqualStrings(ugly, try tmp.dir.readFileAlloc(testing.io, "other/x.pr", a, .unlimited));
+    try testing.expectEqual(cli.Exit.ok, (try runPackage(a, start, true))[0]);
+}
+
+test "pyro fmt rewrites the target of a symlink and keeps the file mode" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "real.pr", .data = "fn main(){}\n" });
+    try tmp.dir.symLink(testing.io, "real.pr", "link.pr", .{});
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "exe.pr", .data = "fn main(){}\n", .flags = .{ .permissions = .fromMode(0o755) } });
+    const dir = try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path });
+
+    const r = try runPyro(a, &.{ "fmt", try std.fs.path.join(a, &.{ dir, "link.pr" }), try std.fs.path.join(a, &.{ dir, "exe.pr" }) });
+    try testing.expectEqual(cli.Exit.ok, r[0]);
+    try testing.expectEqualStrings("fn main() {}\n", try tmp.dir.readFileAlloc(testing.io, "real.pr", a, .unlimited));
+    const link = try tmp.dir.statFile(testing.io, "link.pr", .{ .follow_symlinks = false });
+    try testing.expectEqual(Io.File.Kind.sym_link, link.kind);
+    const exe = try tmp.dir.statFile(testing.io, "exe.pr", .{});
+    try testing.expectEqual(@as(std.posix.mode_t, 0o755), exe.permissions.toMode() & 0o777);
+}
+
+test "pyro fmt --check reports names that break the §2.3 conventions" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "n.pr", .data = "struct point { x: i32 }\nfn Main() {}\n" });
+    const file = try std.fs.path.join(a, &.{ ".zig-cache", "tmp", &tmp.sub_path, "n.pr" });
+    const r = try runPyro(a, &.{ "fmt", "--check", file });
+    try testing.expectEqual(cli.Exit.failed, r[0]);
+    try testing.expectEqualStrings(try std.fmt.allocPrint(a,
+        \\{0s}:1:8: `point` is not PascalCase (§2.3)
+        \\{0s}:2:4: `Main` is not snake_case (§2.3)
+        \\
+    , .{file}), r[1]);
+    // Without `--check`, names are not checked and the file is already formatted.
+    try testing.expectEqual(cli.Exit.ok, (try runPyro(a, &.{ "fmt", file }))[0]);
 }

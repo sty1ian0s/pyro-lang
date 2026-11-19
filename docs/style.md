@@ -2,10 +2,19 @@
 
 `pyro fmt` (§13.8) formats every `.pr` file in one canonical style. The style
 has no options. This file records the style decisions; the implementation is
-`stage0/src/fmt/fmt.zig`. The style was taken from the spec's examples: 72 of
-the 77 `pyro` blocks in `spec/` are already formatted. The other 5 align code
-inside a line with extra spaces (`let rock   = ...`) or align a continuation
-line under an opening bracket, and the formatter does neither.
+`stage0/src/fmt/fmt.zig`. The style was taken from the spec's examples. Of the
+77 `pyro` blocks in `spec/`, 25 are fragments that do not parse on their own.
+Of the 52 that parse, 47 are already formatted. The formatter changes the
+other 5, because it never aligns code with extra spaces:
+
+- §11 (two ray-query calls): a continuation line aligned under the call's `(`
+  is indented one level instead.
+- §14 (`pub protocol Ord        { ... }` and the next four protocols): the
+  padding that lines up the `{` is removed.
+- §14 (`let rock   = w.create(...)`): the padding that lines up the `=` is
+  removed.
+- Appendix D (`.{ health: 50.0,  threat: 8, ... }`): the second space after
+  the `,` is removed.
 
 ## Guarantees
 
@@ -16,8 +25,30 @@ line under an opening bracket, and the formatter does neither.
 - **Idempotent.** Formatting formatted text changes nothing.
 - **Only valid files are formatted.** A file with a lexical or syntax error is
   left unchanged, and its diagnostics are reported.
-- `pyro fmt --check` writes nothing. It names each file that would change and
-  exits 1 if there is at least one.
+- `pyro fmt --check` writes nothing. It names each file that would change,
+  reports each name that breaks a naming convention (below), and exits 1 if
+  there is at least one of either.
+- A file is rewritten atomically. A symlink is followed, so its target is
+  rewritten and the link stays; the file keeps its permission bits.
+- Without paths, `pyro fmt` formats `build.pr`, `src/` and `tests/` of the
+  package around the working directory. At a workspace root it formats those
+  of every member too.
+
+## Naming (§2.3)
+
+`pyro fmt --check` checks the names whose category the syntax alone decides:
+
+- `PascalCase` (an upper-case letter, then letters and digits): the names of
+  `struct`, `enum`, `protocol` and `type` declarations.
+- `snake_case` (lower-case letters, digits and `_`): function names, fields,
+  enum variants, parameters, and the names bound by `let`, `for`, `match` and
+  other patterns.
+
+`r#` is ignored. Not checked: functions in an `extern` block, which keep their
+C names; `const` items, which are `SCREAMING_SNAKE_CASE` constants or
+`PascalCase` types; and `comptime` and generic parameters, which may be types
+or values. Telling these apart needs types: the check of these names belongs
+to T065 (type values), which decides when a `const` or parameter is a type.
 
 ## Lines
 
@@ -94,4 +125,5 @@ keep one space.
 - `pyro fmt` normalizes generic types in type positions to `<…>` (§3.6). That
   changes tokens, and telling a generic type `Pool(T)` from a comptime type
   function call needs name resolution, so stage 0 keeps the author's spelling.
-- The naming conventions of §2.3 are not checked yet.
+- The naming conventions of `const` items, `comptime` parameters and generic
+  parameters are not checked yet (see Naming).

@@ -37,11 +37,21 @@ pub const Error = error{ OutOfMemory, TokensChanged };
 /// null if lexing or parsing reported an error on `sink`: a file that does not
 /// parse is not formatted. The result is owned by the caller.
 pub fn formatSource(gpa: Allocator, io: std.Io, src: []const u8, file: diag.FileId, sink: *diag.Sink) Error!?[]u8 {
+    var ast = try parse(gpa, src, file, sink) orelse return null;
+    defer ast.deinit(gpa);
+    return try format(gpa, io, &ast);
+}
+
+/// Lexes and parses `src` (file `file`, BOM stripped). Returns null if lexing
+/// or parsing reported an error on `sink`. The caller deinits the result.
+pub fn parse(gpa: Allocator, src: []const u8, file: diag.FileId, sink: *diag.Sink) Allocator.Error!?Ast {
     const tokens = try lexer.tokenize(gpa, src, file, sink, lex_options);
     var ast = try Parser.parse(gpa, src, tokens, file, sink);
-    defer ast.deinit(gpa);
-    if (sink.hasErrors()) return null;
-    return try format(gpa, io, &ast);
+    if (sink.hasErrors()) {
+        ast.deinit(gpa);
+        return null;
+    }
+    return ast;
 }
 
 /// Formats the file `ast` was parsed from; `ast` must have no parse errors.
@@ -91,15 +101,9 @@ fn computeRoles(gpa: Allocator, ast: *const Ast) Allocator.Error![]Role {
             .range, .pat_range => roles[mt] = .range,
             .generic_expr_arg => roles[mt] = .tight_brace,
             .use_list => roles[ast.data(ast.data(n).use_list.path).path.last + 1] = .tight_brace,
+            // `launch IDENT call over expr`: `over` follows the `)` closing the call (mt `(`).
             .launch => if (ast.data(n).launch.over != null) {
-                // `launch IDENT call over expr`: the first `over` outside brackets after the target.
-                var depth: u32 = 0;
-                var t = mt + 2;
-                while (depth > 0 or kinds[t] != .ident or !std.mem.eql(u8, ast.tokenSlice(t), "over")) : (t += 1) {
-                    if (isOpener(kinds[t])) depth += 1;
-                    if (isCloser(kinds[t])) depth -= 1;
-                }
-                roles[t] = .contextual_kw;
+                roles[closing(kinds, ast.mainToken(ast.data(n).launch.call), .r_paren) + 1] = .contextual_kw;
             },
             .lambda => if (kinds[mt] == .pipe) {
                 roles[mt] = .lambda_open;
@@ -489,6 +493,11 @@ test "use lists, open ranges, trailing commas and launch over" {
         \\}
         \\
     );
+    // `over` inside the callee is an ordinary identifier.
+    try expectFormat("fn f() { launch cpu a.over(x) over 4; launch gpu over(x)over(n); }\n",
+        \\fn f() { launch cpu a.over(x) over 4; launch gpu over(x) over (n); }
+        \\
+    );
 }
 
 test "continuation lines, brackets and multi-line strings" {
@@ -550,6 +559,18 @@ test "tokens that would merge keep a space" {
     try testing.expect(wouldMerge("as", "u32"));
     try testing.expect(!wouldMerge("(", "x"));
     try testing.expect(!wouldMerge("-", "-"));
+}
+
+test "sameTokens rejects a changed token text, kind or count" {
+    var sink: diag.Sink = .init(testing.allocator, testing.io);
+    defer sink.deinit();
+    var ast = (try parse(testing.allocator, "const x = a >= b; const y = c >> d;", scratch_file, &sink)).?;
+    defer ast.deinit(testing.allocator);
+    try testing.expect(try sameTokens(testing.allocator, testing.io, &ast, "const  x=a>=b;\nconst y=c>>d ;"));
+    try testing.expect(!try sameTokens(testing.allocator, testing.io, &ast, "const x = a > = b; const y = c >> d;"));
+    try testing.expect(!try sameTokens(testing.allocator, testing.io, &ast, "const x = a >= b; const y = c > > d;"));
+    try testing.expect(!try sameTokens(testing.allocator, testing.io, &ast, "const z = a >= b; const y = c >> d;"));
+    try testing.expect(!try sameTokens(testing.allocator, testing.io, &ast, "const x = a >= 1; const y = c >> d;"));
 }
 
 test "a file with a syntax error is not formatted" {
