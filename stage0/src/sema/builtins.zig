@@ -185,7 +185,7 @@ pub const Rule = enum {
     fn_info,
     /// `(E, I) -> Option<E>`.
     enum_from_int,
-    /// `(I, I) -> Option<I>`.
+    /// `(I, I) -> Option<I>`; `@shl_checked` is `(I, U) -> Option<I>`, `U` unsigned.
     checked,
     /// `@compile_error` and `@compile_log` (T061).
     compile_diag,
@@ -468,7 +468,8 @@ pub const Args = struct {
     ok: bool = true,
     diverges: bool = false,
 
-    fn record(a: *Args, i: usize, v: Typed) Typed {
+    /// Stores checked argument `v` as argument `i`.
+    pub fn record(a: *Args, i: usize, v: Typed) Typed {
         a.ok = a.ok and v.ty != .err;
         a.diverges = a.diverges or v.ty == .noreturn;
         a.refs[i] = v.ref;

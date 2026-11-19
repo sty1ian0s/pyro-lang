@@ -464,7 +464,8 @@ fn isInt(c: *Checker, ty: TypeId) bool {
     return ty == .usize or ty == .isize or c.types.get(ty) == .int;
 }
 
-fn isUnsigned(c: *Checker, ty: TypeId) bool {
+/// True for `usize` and the unsigned fixed-width integer types.
+pub fn isUnsigned(c: *Checker, ty: TypeId) bool {
     return ty == .usize or switch (c.types.get(ty)) {
         .int => |i| i.signedness == .unsigned,
         else => false,

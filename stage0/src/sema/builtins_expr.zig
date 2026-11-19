@@ -14,6 +14,7 @@ const Types = @import("types.zig");
 const convert = @import("convert.zig");
 const emit_tir = @import("emit_tir.zig");
 const builtins = @import("builtins.zig");
+const check_expr = @import("check_expr.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -22,15 +23,35 @@ const Typed = emit_tir.Typed;
 const Error = emit_tir.Error;
 const Args = builtins.Args;
 
-/// `@add_checked`, `@sub_checked`, `@mul_checked`, `@shl_checked`:
-/// `(I, I) -> Option<I>`, `I` an integer type; `.none` on overflow in
+/// `@add_checked`, `@sub_checked`, `@mul_checked`: `(I, I) -> Option<I>`,
+/// `I` an integer type; `@shl_checked`: `(I, U) -> Option<I>`, `U` any
+/// unsigned integer type as for `<<` (§6.4.1). `.none` on overflow in
 /// every build (§6.4.2). An expected `Option<I>` types constant operands.
 pub fn checked(a: *Args, expected: TypeId) Error!Typed {
     const c = a.c;
     const want = if (expected == .none or expected == .err) .none else convert.optionPayload(c.types, expected) orelse .none;
+    if (a.b == .shl_checked) return shlChecked(a, want);
     const ty = try a.common(2, want);
     if (!builtins.isInt(c, c.underlying(ty))) return a.wrong(0, "an integer", ty);
     return a.finish(try c.items.optionOf(ty));
+}
+
+/// `@shl_checked(x, n)`: a constant shift amount takes `x`'s type if
+/// unsigned, else `u32`, as for `<<` (`check_expr.operate`).
+fn shlChecked(a: *Args, want: TypeId) Error!Typed {
+    const c = a.c;
+    var x = try check_expr.check(c, a.nodes[0], want);
+    x = a.record(0, if (x.isUntyped() and want != .none) try c.coerce(x, want, a.nodes[0]) else try c.materialize(x, a.nodes[0]));
+    const u = c.underlying(x.ty);
+    var n = try check_expr.check(c, a.nodes[1], .none);
+    if (n.isUntyped()) n = try c.coerce(n, if (check_expr.isUnsigned(c, u)) u else .int(.unsigned, 32), a.nodes[1]);
+    _ = a.record(1, n);
+    if (!builtins.isInt(c, u)) return a.wrong(0, "an integer", x.ty);
+    if (n.ty != .err and n.ty != .noreturn and !check_expr.isUnsigned(c, c.underlying(n.ty))) {
+        try c.report(a.nodes[1], .E0310, "shift amount must be an unsigned integer, found `{s}`", .{try c.tyName(n.ty)});
+        return a.finish(.err);
+    }
+    return a.finish(try c.items.optionOf(x.ty));
 }
 
 /// `@enum_from_int(E, x) -> Option<E>` (§7.4): the variant of
@@ -92,10 +113,14 @@ test "@enum_from_int gives Option<E>; checked arithmetic gives Option<I>" {
         \\    let mt: Option<i32> = m;
         \\    let k: Option<u16> = @shl_checked(1, 3);
         \\}
+        \\fn shl(x: u8, n: u32, y: i64) {
+        \\    let a: Option<u8> = @shl_checked(x, n);
+        \\    let b: Option<i64> = @shl_checked(y, 3);
+        \\}
     );
     defer f.deinit();
     try f.expectDiags(&.{});
-    for ([_][]const u8{ "decode", "three", "add", "ops" }) |name| _ = try f.func(name);
+    for ([_][]const u8{ "decode", "three", "add", "ops", "shl" }) |name| _ = try f.func(name);
     try f.expectDump("add",
         \\fn add(l0 x: u8) -> Option<u8> {
         \\b0:
@@ -122,12 +147,17 @@ test "@enum_from_int and checked arithmetic argument errors" {
         \\    let d = @mul_checked(b, b);
         \\    let w: u8 = @add_checked(1u8, 2);
         \\}
+        \\fn shifts(y: i32, m: i32, x: f32) {
+        \\    let s = @shl_checked(y, m);
+        \\    let t = @shl_checked(x, 1u32);
+        \\}
         \\enum Order { lt, eq, gt }
     );
     defer f.deinit();
     try f.expectDiags(&.{
         .{ .E0310, "Shape" }, .{ .E0310, "P" }, .{ .E0310, "x" },
         .{ .E0310, "x" },     .{ .E0310, "b" }, .{ .E0310, "@add_checked" },
+        .{ .E0310, "m" },     .{ .E0310, "x" },
     });
 }
 
