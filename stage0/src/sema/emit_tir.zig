@@ -283,7 +283,7 @@ pub const Checker = struct {
             .never => return v,
             .constant => return c.constTo(v.konst.?, to, at),
             .int_widen, .float_widen, .ptr_to_const => return .{ .ty = to, .ref = try c.emit(to, .{ .coerce = .{ .value = v.ref } }) },
-            .wrap_some => return c.unsupported(at, "wrapping in `Option` (T046)"),
+            .wrap_some => return @import("check_literals.zig").wrapSome(c, v, to, at),
             .array_to_slice, .soa_array_to_soa_slice => return c.unsupported(at, "array-to-slice views (T051)"),
             .lambda_to_fn_ptr => return c.unsupported(at, "lambdas (T074)"),
             .fn_ref => return c.unsupported(at, "`FnRef` values (T071)"),
@@ -594,7 +594,12 @@ pub const Fixture = struct {
     bodies: Bodies,
 
     pub fn init(f: *Fixture, source: []const u8) !void {
-        f.p = try .init(&.{.{ "a", source }});
+        return f.initPackage(&.{.{ "a", source }});
+    }
+
+    /// A package of modules `{ path, source }`; the first is module 0.
+    pub fn initPackage(f: *Fixture, mods: []const [2][]const u8) !void {
+        f.p = try .init(mods);
         f.g = try f.p.graph(.{ .kind = .exe });
         f.im = try imports.resolve(testing.allocator, &f.p.sink, &f.g, .{});
         f.names = try names_mod.resolve(testing.allocator, &f.p.sink, &f.im);

@@ -20,6 +20,7 @@ const convert = @import("convert.zig");
 const items_mod = @import("items.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_stmt = @import("check_stmt.zig");
+const check_literals = @import("check_literals.zig");
 const tir = @import("../tir/tir.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
@@ -49,6 +50,12 @@ const handlers = blk: {
         .{ .binary, binary },
         .{ .cast, cast },
         .{ .call, call },
+        .{ .struct_lit, check_literals.structLit },
+        .{ .anon_lit, check_literals.anonLit },
+        .{ .inferred_member, check_literals.inferredMember },
+        .{ .array_lit, check_literals.arrayLit },
+        .{ .array_repeat, check_literals.arrayRepeat },
+        .{ .tuple, check_literals.tuple },
         .{ .block, check_stmt.block },
         .{ .@"if", check_stmt.ifExpr },
         .{ .loop, check_stmt.loopExpr },
@@ -61,7 +68,6 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .struct_lit, .anon_lit, .inferred_member, .array_lit, .array_repeat, .tuple => "literals (T046)",
         .builtin_call => "builtin calls (T048)",
         .field_access => "field access and methods (T050)",
         .index, .range => "indexing and ranges (T051)",
@@ -142,7 +148,7 @@ fn stringLit(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     return .{ .ty = .str, .ref = try c.emit(.str, .{ .str = .{ .string = s } }) };
 }
 
-fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
+pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     const e = c.items.names.get(c.m, n) orelse {
         try c.report(n, null, "cannot find `{s}` in this scope", .{c.ast.tokenSlice(c.ast.mainToken(n))});
         return .err;
@@ -539,9 +545,10 @@ fn cast(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
 /// A direct call `f(args)` of a non-generic function with positional
 /// arguments for value parameters (§6.9). Method calls, named and default
 /// arguments, parameter modes and function pointers are T047's and T050's.
-fn call(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
+fn call(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const d = c.ast.data(n).call;
     const ast = c.ast;
+    if (ast.kind(d.callee) == .inferred_member) return check_literals.inferredCall(c, n, expected);
     if (ast.kind(d.callee) != .ident) return c.unsupported(n, "calls of this form (T047, T050)");
     const e = c.items.names.get(c.m, d.callee) orelse return failedCall(c, d);
     const ref = switch (e.res) {
