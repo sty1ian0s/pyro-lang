@@ -139,7 +139,7 @@ pub const Imports = struct {
         if (ref.module == m) return true;
         for (im.scopes[m].bindings) |b| switch (b.target) {
             .item => |r| if (r.eql(ref)) return true,
-            .module => |mm| if (im.exports(mm, ref)) return true,
+            .module => |mm| if (im.exports(mm, ref, im.graph.modules.len)) return true,
             else => {},
         };
         return false;
@@ -153,11 +153,19 @@ pub const Imports = struct {
         return im.nameable(m, p) and (impl.target == null or im.nameable(m, impl.target.?));
     }
 
-    /// Whether module `mm` lets importers name item `ref`.
-    fn exports(im: *const Imports, mm: ModuleId, ref: Ref) bool {
+    /// Whether module `mm` lets importers name item `ref`, also through
+    /// modules it re-exports with `pub use`. `depth` bounds the recursion,
+    /// since modules of an import cycle can re-export each other.
+    fn exports(im: *const Imports, mm: ModuleId, ref: Ref, depth: usize) bool {
         if (ref.module == mm and im.graph.modules[mm].items[ref.item].is_pub) return true;
+        if (depth == 0) return false;
         for (im.scopes[mm].bindings) |b| {
-            if (b.is_pub and b.target == .item and b.target.item.eql(ref)) return true;
+            if (!b.is_pub) continue;
+            switch (b.target) {
+                .item => |r| if (r.eql(ref)) return true,
+                .module => |sub| if (im.exports(sub, ref, depth - 1)) return true,
+                else => {},
+            }
         }
         return false;
     }
@@ -216,11 +224,16 @@ const Resolver = struct {
     }
 
     /// E0904: module `m`'s first path segment is a dependency name, so
-    /// `use` paths could never reach it (§7.8.2).
+    /// `use` paths could never reach it (§7.8.2). Reported once per
+    /// dependency: at the top-level module of that name if there is one,
+    /// else at the first module under it (modules are sorted by path, so
+    /// those sharing a first segment are adjacent and the top-level one
+    /// comes first).
     fn shadowedDependency(r: *Resolver, m: ModuleId) !void {
         const mod = &r.g.modules[m];
-        const head = mod.path[0 .. std.mem.indexOfScalar(u8, mod.path, '.') orelse mod.path.len];
+        const head = headSegment(mod.path);
         if (std.mem.eql(u8, head, "std") or !r.isExternal(head)) return;
+        if (m > 0 and std.mem.eql(u8, headSegment(r.g.modules[m - 1].path), head)) return;
         try r.sink.emit(.{
             .code = .E0904,
             .severity = .of(.E0904),
@@ -285,8 +298,7 @@ const Resolver = struct {
     /// followed by member lookups for the remaining segments.
     fn path(r: *Resolver, m: ModuleId, u: collect.Use, d_path: Node.Index) !Target {
         const ast = r.g.modules[m].ast;
-        const head = u.path[0 .. std.mem.indexOfScalar(u8, u.path, '.') orelse u.path.len];
-        if (r.isExternal(head)) return .{ .external = u.path };
+        if (r.isExternal(headSegment(u.path))) return .{ .external = u.path };
         var end = u.path.len;
         var rest: u32 = 0; // segments after the module prefix
         while (r.g.lookup(u.path[0..end]) == null) : (rest += 1) {
@@ -309,16 +321,10 @@ const Resolver = struct {
         const span = tokenSpan(imp, tok);
         switch (base) {
             .external => |p| return .{ .external = try std.fmt.allocPrint(r.a, "{s}.{s}", .{ p, name }) },
+            // The prelude's only module is `std` (§14.1): `std.x` is a std path.
+            .prelude => |p| if (std.mem.eql(u8, p, "std")) return .{ .external = try std.fmt.allocPrint(r.a, "std.{s}", .{name}) } else return r.notModule(name, span),
             .unresolved => return .unresolved,
-            .item, .prelude => {
-                if (r.report) try r.sink.emit(.{
-                    .code = .E0905,
-                    .severity = .of(.E0905),
-                    .message = try std.fmt.allocPrint(r.a, "cannot import `{s}` from an item: only modules and their `pub` items can be imported", .{name}),
-                    .spans = &.{.{ .span = span, .primary = true }},
-                });
-                return .unresolved;
-            },
+            .item => return r.notModule(name, span),
             .module => |mm| {
                 const mod = &r.g.modules[mm];
                 var private = false;
@@ -346,6 +352,17 @@ const Resolver = struct {
                 return .unresolved;
             },
         }
+    }
+
+    /// E0905 for member `name` of an item.
+    fn notModule(r: *Resolver, name: []const u8, span: diag.Span) !Target {
+        if (r.report) try r.sink.emit(.{
+            .code = .E0905,
+            .severity = .of(.E0905),
+            .message = try std.fmt.allocPrint(r.a, "cannot import `{s}` from an item: only modules and their `pub` items can be imported", .{name}),
+            .spans = &.{.{ .span = span, .primary = true }},
+        });
+        return .unresolved;
     }
 
     /// Every `impl` block of the package with what its protocol and type name.
@@ -420,6 +437,11 @@ const Builder = struct {
     }
 };
 
+/// The first segment of module or import path `path`.
+fn headSegment(path: []const u8) []const u8 {
+    return path[0 .. std.mem.indexOfScalar(u8, path, '.') orelse path.len];
+}
+
 /// The identifier an IDENT token names: `r#type` is `type` (§2.3).
 fn identText(ast: *const Ast, t: Ast.TokenIndex) []const u8 {
     const s = ast.tokenSlice(t);
@@ -436,15 +458,19 @@ fn itemSpan(mod: *const collect.Module, it: collect.Item) diag.Span {
     return tokenSpan(mod, mod.ast.mainToken(it.node) + 1);
 }
 
-/// `resolve` hook for single-file `pyro check`: each input file is the root
-/// module of its own package, of which only that file is loaded
-/// (`Options.partial`). Package mode registers the graph and import stages
-/// with the package's manifest instead (T163).
+/// `resolve` hook for single-file `pyro check`: each input file is the only
+/// loaded module of its own package (`Options.partial`), named by the file's
+/// stem (`main` if the stem is no valid module name), so that `use main.x`
+/// in a non-root file is no self-import. Package mode registers the graph
+/// and import stages with the package's manifest instead (T163).
 pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
-    const sep = std.fs.path.sep_str;
     for (comp.files.items) |*f| {
         if (f.poisoned) continue;
-        const in: module_graph.Input = .{ .module = .{ .path = "main", .file = "src" ++ sep ++ "main.pr" }, .file = f.id, .ast = &f.ast };
+        const stem = std.fs.path.stem(comp.sources.get(f.id).path);
+        const name = if (collect.isValidSegment(stem)) stem else "main";
+        const file = try std.mem.concat(comp.gpa, u8, &.{ "src" ++ std.fs.path.sep_str, name, ".pr" });
+        defer comp.gpa.free(file);
+        const in: module_graph.Input = .{ .module = .{ .path = name, .file = file }, .file = f.id, .ast = &f.ast };
         var g = try module_graph.build(comp.gpa, &comp.sink, &.{in}, .{ .kind = .exe });
         defer g.deinit();
         var im = try resolve(comp.gpa, &comp.sink, &g, .{ .partial = true });
@@ -531,13 +557,17 @@ test "E0903: renaming with `as` resolves a collision; one module under two names
     }}, .{}, &.{});
 }
 
-test "E0904: a local module named like a dependency" {
+test "E0904: a local module named like a dependency, once per dependency" {
     try expectDiags(&.{
         .{ "main", "use util;\nuse helpers;" },
         .{ "util", "" },
+        .{ "util.a", "" },
         .{ "helpers", "" },
-    }, .{ .dependencies = &.{"util"} }, &.{
+        .{ "dep.b", "" },
+        .{ "dep.c", "" },
+    }, .{ .dependencies = &.{ "util", "dep" } }, &.{
         .{ .E0904, "module `util` has the name of the dependency `util`" },
+        .{ .E0904, "module `dep.b` has the name of the dependency `dep`" },
     });
 }
 
@@ -641,6 +671,37 @@ test "impl index: methods visible where both protocol and type are nameable" {
     try testing.expect(!im.implVisible(g.lookup("both").?, display));
 }
 
+test "impl index: a `std.` protocol path is nameable" {
+    var p: TestPackage = try .init(&.{.{ "main", "pub struct Sq {}\nimpl std.fmt.Display for Sq {}" }});
+    defer p.deinit();
+    var g = try p.graph(.{ .kind = .exe });
+    defer g.deinit();
+    var im = try resolve(testing.allocator, &p.sink, &g, .{});
+    defer im.deinit();
+    try testing.expectEqual(0, p.sink.finish().len);
+    try testing.expectEqualStrings("std.fmt.Display", im.impls[0].protocol.?.external);
+    try testing.expect(im.implVisible(0, im.impls[0]));
+}
+
+test "impl index: nameable through a re-exported module" {
+    var p: TestPackage = try .init(&.{
+        .{ "proto", "pub protocol Shape {}\npub struct Sq {}\nimpl Shape for Sq {}" },
+        .{ "outer", "pub use proto;" },
+        .{ "main", "use outer;" },
+        .{ "cyc_a", "pub use cyc_b;" },
+        .{ "cyc_b", "pub use cyc_a;" },
+    });
+    defer p.deinit();
+    var g = try p.graph(.{ .kind = .exe });
+    defer g.deinit();
+    var im = try resolve(testing.allocator, &p.sink, &g, .{});
+    defer im.deinit();
+    try testing.expectEqual(1, p.sink.finish().len); // E0902 for cyc_a/cyc_b
+    try testing.expect(im.implVisible(g.lookup("main").?, im.impls[0]));
+    // Re-exports through a cycle terminate.
+    try testing.expect(!im.implVisible(g.lookup("cyc_a").?, im.impls[0]));
+}
+
 test "an import cycle leaves the bindings it needs unresolved, without cascades" {
     try expectDiags(&.{
         // `a` binds `w` before `b` is resolved, so neither `w` resolves.
@@ -663,4 +724,20 @@ test "runFiles: single files resolve alone; missing package modules are not erro
     try testing.expectEqual(1, ds.len);
     try testing.expectEqual(diag.DiagCode.E0903, ds[0].code.?);
     try testing.expectEqual(comp.files.items[0].id, ds[0].primarySpan().?.file);
+}
+
+test "runFiles: a non-root file importing from `main` is no self-import" {
+    var comp: Compilation = undefined;
+    try comp.init(testing.allocator, testing.io, .{ .jobs = 1, .stop_after = .check });
+    defer comp.deinit();
+    try comp.addHook(.resolve, .{ .run = runFiles });
+    _ = try comp.addSource("a.pr", "use main.{helper};\nfn other() {}\n");
+    _ = try comp.addSource("bad-name.pr", "use main.{x};\npub fn main() {}\n");
+    try comp.run();
+    const ds = comp.sink.finish();
+    errdefer for (ds) |d| std.debug.print("got {?t}: {s}\n", .{ d.code, d.message });
+    // Only `bad-name.pr`, checked as `main`, imports itself.
+    try testing.expectEqual(1, ds.len);
+    try testing.expectEqual(diag.DiagCode.E0902, ds[0].code.?);
+    try testing.expectEqual(comp.files.items[1].id, ds[0].primarySpan().?.file);
 }
