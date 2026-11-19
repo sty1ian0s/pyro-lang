@@ -32,6 +32,14 @@ pub fn build(b: *std.Build) void {
     run_cmd.addPassthruArgs();
     b.step("run", "Build and run pyro").dependOn(&run_cmd.step);
 
+    // T028: the front end as one module, for tools outside stage0/src.
+    const frontend = b.createModule(.{
+        .root_source_file = b.path("stage0/src/frontend.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addCommonImports(b, frontend, common);
+
     // --- zig build test: auto-discovered test trees --------------------------
     const test_step = b.step("test", "Run all unit tests (auto-discovered)");
     for (test_trees) |tree| {
@@ -54,7 +62,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         addCommonImports(b, test_mod, common);
-        addTreeOptions(b, tree, test_mod);
+        addTreeOptions(b, tree, test_mod, frontend);
         const name = b.fmt("test-{s}", .{tree});
         std.mem.replaceScalar(u8, name, '/', '-');
         const t = b.addTest(.{ .name = name, .root_module = test_mod });
@@ -92,6 +100,37 @@ pub fn build(b: *std.Build) void {
     run_conf.addFileArg(b.path("spec/A-diagnostics.md"));
     run_conf.addPassthruArgs();
     b.step("conformance", "Run the conformance suite (B.9)").dependOn(&run_conf.step);
+
+    // --- T028: zig build fuzz / zig build bench ------------------------------
+    // Long-running tools, never part of `zig build test`. Pass arguments after
+    // `--`, e.g. `zig build fuzz -Doptimize=ReleaseSafe -- --seconds 600`.
+    const fuzz = addFrontendTool(b, "pyro-fuzz", "tools/fuzz/main.zig", target, optimize, frontend);
+    fuzz.addArg("--corpus");
+    fuzz.addDirectoryArg(b.path("conformance"));
+    fuzz.addPassthruArgs();
+    b.step("fuzz", "Fuzz the lexer and parser (default 10 s)").dependOn(&fuzz.step);
+
+    const bench = addFrontendTool(b, "pyro-bench-frontend", "bench/frontend/main.zig", target, optimize, frontend);
+    bench.addPassthruArgs();
+    for ([_][]const u8{ "conformance", "std", "examples" }) |d| bench.addDirectoryArg(b.path(d));
+    b.step("bench", "Measure front-end lines/sec/core (not a merge gate)").dependOn(&bench.step);
+}
+
+/// T028: a run step for an executable at `root` that imports `frontend`.
+/// It always reruns: its output is a measurement, not a cached artifact.
+fn addFrontendTool(
+    b: *std.Build,
+    name: []const u8,
+    root: []const u8,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    frontend: *std.Build.Module,
+) *std.Build.Step.Run {
+    const mod = b.createModule(.{ .root_source_file = b.path(root), .target = target, .optimize = optimize });
+    mod.addImport("frontend", frontend);
+    const run = b.addRunArtifact(b.addExecutable(.{ .name = name, .root_module = mod }));
+    run.has_side_effects = true;
+    return run;
 }
 
 /// Returns the sorted tree-relative paths (with '/') of every `.zig` file under
@@ -154,7 +193,8 @@ fn addCommonImports(b: *std.Build, m: *std.Build.Module, c: Common) void {
 
 /// EDIT POINT: per-tree settings for the test module of `tree`.
 /// T010 adds its C harness wiring to the `runtime` branch.
-fn addTreeOptions(b: *std.Build, tree: []const u8, m: *std.Build.Module) void {
+fn addTreeOptions(b: *std.Build, tree: []const u8, m: *std.Build.Module, frontend: *std.Build.Module) void {
+    if (std.mem.eql(u8, tree, "tools")) m.addImport("frontend", frontend); // T028: tools/fuzz
     if (std.mem.eql(u8, tree, "runtime")) {
         m.link_libc = true; // runtime tests call libc (getpid, abort paths)
         // T010: C harness that calls pyro_rt_trap through the C ABI.
