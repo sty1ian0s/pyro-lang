@@ -1,4 +1,3 @@
-//@ expected-fail: T026
 // §3.5, §10.2: `spawn` must be lexically inside a `nursery` body, without crossing a
 // `fn` or lambda boundary.
 

@@ -1,4 +1,3 @@
-//@ expected-fail: T026
 // §3.7: every alternative of a `|` pattern binds the same names.
 enum Shape { circle(f32), square(f32), point }
 
