@@ -7,7 +7,7 @@
 //! the post-parse checks over all of them on one thread, pass after pass,
 //! until `--seconds` (default 3) have passed. Prints a human summary and one
 //! tab-separated line, `bench<TAB>frontend<TAB><lines/s/core><TAB><bytes/s/core>`,
-//! that the nightly job keeps as its tracked result. Not a merge gate: build
+//! that `tools/ci/nightly.sh` appends to `bench/frontend/results.tsv`. Not a merge gate: build
 //! with `-Doptimize=ReleaseFast` for meaningful numbers.
 
 const std = @import("std");

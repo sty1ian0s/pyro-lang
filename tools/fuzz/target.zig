@@ -76,11 +76,7 @@ pub fn checkInput(gpa: Allocator, io: std.Io, pool: *fe.Pool, bytes: []const u8,
 
     var par = try fe.parallel.tokenize(gpa, pool, text, file, &par_sink, opts);
     defer par.deinit(gpa);
-    if (ast.tokens.len != par.len) return error.TokensDiffer;
-    inline for (comptime std.enums.values(fe.token.TokenBuffer.Field)) |f| {
-        if (!std.mem.eql(@FieldType(fe.token.Token, @tagName(f)), ast.tokens.items(f), par.items(f)))
-            return error.TokensDiffer;
-    }
+    try sameTokens(ast.tokens, par);
 
     const lex_diags = seq_sink.finish();
     try checkDiagnostics(lex_diags, file, text.len, .coded);
@@ -110,6 +106,14 @@ pub fn checkDiagnostics(ds: []const diag.Diagnostic, file: diag.FileId, len: usi
 
 fn checkSpan(s: diag.Span, file: diag.FileId, len: usize) Failure!void {
     if (s.file != file or s.start > s.end or s.end > len) return error.BadSpan;
+}
+
+fn sameTokens(want: fe.token.TokenBuffer, got: fe.token.TokenBuffer) Failure!void {
+    if (want.len != got.len) return error.TokensDiffer;
+    inline for (comptime std.enums.values(fe.token.TokenBuffer.Field)) |f| {
+        if (!std.mem.eql(@FieldType(fe.token.Token, @tagName(f)), want.items(f), got.items(f)))
+            return error.TokensDiffer;
+    }
 }
 
 fn sameDiagnostics(want: []const diag.Diagnostic, got: []const diag.Diagnostic) Failure!void {
@@ -192,12 +196,12 @@ pub const seed_programs = [_][]const u8{
 const dictionary = dict: {
     @setEvalBranchQuota(10_000);
     var words: []const []const u8 = &.{
-        "x",      "T",        "self",  "r#type", "_",        "Self",         "main",
-        "0",      "1_000",    "0xff",  "0b102",  "1.5e3",    "300u8",        "1.",
-        "'a'",    "'\\u{0}'", "\"s\"", "\"\\q",  "r\"r\"",   "\"",           "'",
-        "\\\\ m", "// c",     "/// d", "//! m",  "@soa",     "@align(8)",    "@size_of",
-        "@",      "#",        "$",     "`",      "\n",       "\r\n",         "\r",
-        " ",      "\t",       "\x00",  "\xff",   "\xc3\xa9", "\xef\xbb\xbf",
+        "x",      "T",        "self",  "r#type",   "_",            "Self",      "main",
+        "0",      "1_000",    "0xff",  "0b102",    "1.5e3",        "300u8",     "1.",
+        "'a'",    "'\\u{0}'", "\"s\"", "\"\\q",    "r\"r\"",       "\"",        "'",
+        "\\\\ m", "// c",     "/// d", "//! m",    "@soa",         "@align(8)", "@size_of",
+        "@",      "#",        "$",     "`",        "\n",           "\r\n",      "\r",
+        " ",      "\t",       "\x00",  "\xc3\xa9", "\xef\xbb\xbf",
     };
     for (std.meta.tags(fe.token.TokenKind)) |k| {
         if (k.lexeme()) |s| words = words ++ &[_][]const u8{s};
@@ -205,19 +209,32 @@ const dictionary = dict: {
     break :dict words;
 };
 
-/// Bytes random-byte inputs draw from most of the time.
+/// ASCII bytes random-byte inputs and byte flips draw from most of the time.
 const charset = "abcxyz_019 \t\n.,;:(){}[]<>=!+-*/%&|^~?@#'\"\\r";
 
 /// Replaces `out` with a fresh input drawn from `rand`: random bytes, token
-/// soup, or a mutated program from `seed_programs` and `corpus`.
+/// soup, or a mutated program from `seed_programs` and `corpus`. About one
+/// input in ten may contain raw (likely invalid UTF-8) bytes; the rest stay
+/// valid UTF-8 unless a mutation splits a multi-byte sequence, so most
+/// inputs get past loading (E0101) into the lexer and parser.
 pub fn generate(gpa: Allocator, rand: std.Random, corpus: []const []const u8, out: *std.ArrayList(u8)) Allocator.Error!void {
     out.clearRetainingCapacity();
+    const raw = rand.uintLessThan(u8, 10) == 0;
     switch (rand.uintLessThan(u8, 10)) {
         0, 1 => for (0..rand.uintAtMost(usize, 512)) |_| {
-            try out.append(gpa, if (rand.uintLessThan(u8, 8) == 0)
-                rand.int(u8)
-            else
-                charset[rand.uintLessThan(usize, charset.len)]);
+            if (rand.uintLessThan(u8, 8) != 0) {
+                try out.append(gpa, charset[rand.uintLessThan(usize, charset.len)]);
+            } else if (raw) {
+                try out.append(gpa, rand.int(u8));
+            } else {
+                var cp: [4]u8 = undefined;
+                // Surrogate halves cannot be encoded; fall back to ASCII.
+                const n = std.unicode.utf8Encode(rand.uintAtMost(u21, 0x10FFFF), &cp) catch {
+                    try out.append(gpa, 'u');
+                    continue;
+                };
+                try out.appendSlice(gpa, cp[0..n]);
+            }
         },
         2, 3, 4 => for (0..rand.uintAtMost(usize, 256)) |_| {
             try out.appendSlice(gpa, dictionary[rand.uintLessThan(usize, dictionary.len)]);
@@ -225,7 +242,7 @@ pub fn generate(gpa: Allocator, rand: std.Random, corpus: []const []const u8, ou
         },
         else => {
             try out.appendSlice(gpa, pickSeed(rand, corpus));
-            for (0..1 + rand.uintLessThan(usize, 8)) |_| try mutate(gpa, rand, corpus, out);
+            for (0..1 + rand.uintLessThan(usize, 8)) |_| try mutate(gpa, rand, corpus, raw, out);
         },
     }
 }
@@ -235,15 +252,15 @@ fn pickSeed(rand: std.Random, corpus: []const []const u8) []const u8 {
     return if (i < seed_programs.len) seed_programs[i] else corpus[i - seed_programs.len];
 }
 
-/// Applies one random edit to `out`.
-fn mutate(gpa: Allocator, rand: std.Random, corpus: []const []const u8, out: *std.ArrayList(u8)) Allocator.Error!void {
+/// Applies one random edit to `out`; a byte flip writes any byte only if `raw`.
+fn mutate(gpa: Allocator, rand: std.Random, corpus: []const []const u8, raw: bool, out: *std.ArrayList(u8)) Allocator.Error!void {
     const len = out.items.len;
     const at = rand.uintAtMost(usize, len);
     const span = @min(len - at, rand.uintAtMost(usize, 32));
     if (len >= max_len) return out.replaceRange(gpa, at, span, "");
     switch (rand.uintLessThan(u8, 6)) {
         0 => if (at < len) {
-            out.items[at] = rand.int(u8);
+            out.items[at] = if (raw) rand.int(u8) else charset[rand.uintLessThan(usize, charset.len)];
         },
         1 => try out.insertSlice(gpa, at, dictionary[rand.uintLessThan(usize, dictionary.len)]),
         2 => out.replaceRange(gpa, at, span, "") catch unreachable, // shrinking never allocates
@@ -289,6 +306,57 @@ test "broken invariants are detected" {
     try testing.expectError(error.BadSpan, checkDiagnostics(&.{.{ .code = .E0101, .severity = .@"error", .message = "m", .spans = &.{ok} }}, g, 3, .coded));
     const backwards: diag.Label = .{ .span = .{ .file = f, .start = 2, .end = 1 } };
     try testing.expectError(error.BadSpan, checkDiagnostics(&.{.{ .code = .E0101, .severity = .@"error", .message = "m", .spans = &.{ ok, backwards } }}, f, 3, .coded));
+}
+
+test "parallel/sequential differences are detected" {
+    const f: diag.FileId = @fromBackingInt(@intCast(0));
+    const at1: diag.Label = .{ .span = .{ .file = f, .start = 1, .end = 2 }, .primary = true };
+    const at2: diag.Label = .{ .span = .{ .file = f, .start = 2, .end = 3 }, .primary = true };
+    const base: diag.Diagnostic = .{ .code = .E0101, .severity = .@"error", .message = "m", .spans = &.{at1} };
+    var other_code = base;
+    other_code.code = .E0102;
+    var other_span = base;
+    other_span.spans = &.{at2};
+    var other_msg = base;
+    other_msg.message = "n";
+    try sameDiagnostics(&.{base}, &.{base});
+    for ([_]diag.Diagnostic{ other_code, other_span, other_msg }) |d|
+        try testing.expectError(error.DiagnosticsDiffer, sameDiagnostics(&.{base}, &.{d}));
+    try testing.expectError(error.DiagnosticsDiffer, sameDiagnostics(&.{base}, &.{}));
+
+    const gpa = testing.allocator;
+    var a: fe.token.TokenBuffer = .empty;
+    defer a.deinit(gpa);
+    var b: fe.token.TokenBuffer = .empty;
+    defer b.deinit(gpa);
+    for ([_]*fe.token.TokenBuffer{ &a, &b }) |t| {
+        try t.append(gpa, .{ .kind = .kw_fn, .start = 0, .len = 2 });
+        try t.append(gpa, .{ .kind = .ident, .start = 3, .len = 1 });
+    }
+    try sameTokens(a, b);
+    b.items(.len)[1] = 2;
+    try testing.expectError(error.TokensDiffer, sameTokens(a, b));
+    b.items(.len)[1] = 1;
+    b.items(.kind)[1] = .kw_fn;
+    try testing.expectError(error.TokensDiffer, sameTokens(a, b));
+    b.items(.kind)[1] = .ident;
+    b.items(.start)[1] = 4;
+    try testing.expectError(error.TokensDiffer, sameTokens(a, b));
+    _ = b.pop();
+    try testing.expectError(error.TokensDiffer, sameTokens(a, b));
+}
+
+test "most generated inputs are valid UTF-8" {
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(testing.allocator);
+    var valid: usize = 0;
+    for (0..1000) |seed| {
+        var prng: std.Random.DefaultPrng = .init(seed);
+        try generate(testing.allocator, prng.random(), &.{}, &buf);
+        valid += @intFromBool(std.unicode.utf8ValidateSlice(buf.items));
+    }
+    // Invalid UTF-8 stops `checkInput` at load (E0101); keep that path rare.
+    try testing.expect(valid >= 800);
 }
 
 test "bounded run of generated inputs" {

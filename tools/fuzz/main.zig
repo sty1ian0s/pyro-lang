@@ -9,7 +9,7 @@
 //! `--seed <failing seed> --count 1` and the same corpus. An invariant
 //! failure, a panic, or an input running longer than `hang_seconds` prints
 //! the failing seed and exits non-zero. The nightly job runs
-//! `zig build fuzz -Doptimize=ReleaseSafe -- --seconds 600`.
+//! `zig build fuzz -Doptimize=ReleaseSafe -- --seconds 600` (`tools/ci/nightly.sh`).
 
 const std = @import("std");
 const Io = std.Io;
