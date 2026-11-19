@@ -24,24 +24,22 @@
 //!   (E0808) or `error.Unsupported` (E0805); `Eval.reported` tells the
 //!   driver that a diagnostic was emitted, so the latter is a failed
 //!   evaluation, not an unsupported construct.
-//! - An `unsafe` block is forbidden when an instruction inside it runs, so a
-//!   block on a branch comptime does not take is allowed. The interpreter
-//!   finds the blocks of each function on first entry (`unsafeBlocks`) and
-//!   tests each instruction against them (`enclosingUnsafe`).
+//! - An `unsafe` block is forbidden when control enters it, so a block on a
+//!   branch comptime does not take is allowed. Checking opens each block
+//!   with an empty scope whose node is the `unsafe` block
+//!   (`sema/unsafe.zig`); the interpreter stops at its `scope_begin`.
 //!
 //! `@set_eval_quota` outside comptime evaluation has no effect; its type is
 //! `(u32) -> void` (`builtins.zig`).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Ast = @import("../ast/Ast.zig");
 const diag = @import("../diag/diag.zig");
 const tir = @import("../tir/tir.zig");
 const interp_ctrl = @import("interp_ctrl.zig");
 
 const Machine = interp_ctrl.Machine;
 const Stop = interp_ctrl.Stop;
-const Node = Ast.Node;
 
 /// The budget of a top-level evaluation (§8.6): executed backward branches
 /// and calls.
@@ -81,18 +79,12 @@ pub fn report(m: *Machine, why: Stop) Allocator.Error!void {
     const tr = try m.trace();
     defer tr.deinit(m.gpa);
     if (m.eval) |e| e.reported = true;
-    var span = tr.span;
     const code: diag.DiagCode, const msg = switch (why) {
         .budget => .{ .E0808, if (m.eval) |e|
             try std.fmt.allocPrint(m.gpa, "comptime evaluation exceeded its budget of {d} backward branches and calls", .{e.quota})
         else
             try m.gpa.dupe(u8, "comptime evaluation exceeded its budget") },
-        .forbidden => |what| blk: {
-            const top = m.frames.getLast();
-            const at = top.func.blockInsts(top.block)[top.pc];
-            if (enclosingUnsafe(m.astOf(top.id), top.unsafe, top.func.nodeOf(at))) |u| span = tokenSpan(m, top.id, u);
-            break :blk .{ .E0805, try std.fmt.allocPrint(m.gpa, "{s} cannot be used in comptime code", .{what}) };
-        },
+        .forbidden => |what| .{ .E0805, try std.fmt.allocPrint(m.gpa, "{s} cannot be used in comptime code", .{what}) },
     };
     defer m.gpa.free(msg);
     const help: []const []const u8 = if (why == .budget) &.{"raise it with `@set_eval_quota(n)` inside the evaluation"} else &.{};
@@ -100,49 +92,10 @@ pub fn report(m: *Machine, why: Stop) Allocator.Error!void {
         .code = code,
         .severity = .of(code),
         .message = msg,
-        .spans = &.{.{ .span = span, .primary = true }},
+        .spans = &.{.{ .span = tr.span, .primary = true }},
         .help = help,
         .trace = tr.frames,
     });
-}
-
-/// The `unsafe` blocks in function `id`, outermost first, allocated in the
-/// evaluation arena. Relies on the parser appending nodes in postorder: a
-/// function's nodes are the indices just below its `fn_decl` whose main
-/// tokens follow its `fn` keyword (its attributes, parsed first, come last
-/// when walking down).
-pub fn unsafeBlocks(m: *const Machine, id: tir.FnId) Allocator.Error![]const Node.Index {
-    const ast = m.astOf(id);
-    const decl = m.bodies.fns.items[id.int()].node;
-    const kw = ast.mainToken(decl);
-    var out: std.ArrayList(Node.Index) = .empty;
-    var i = decl.int();
-    while (i > 0) {
-        i -= 1;
-        const n: Node.Index = .from(i);
-        if (ast.mainToken(n) < kw) break;
-        if (ast.kind(n) == .unsafe_block) try out.append(m.in.arena, n);
-    }
-    return out.items;
-}
-
-/// The block of `blocks` (from `unsafeBlocks`) that contains `node`, if any.
-/// In postorder the subtree of `u` is the nodes up to `u` whose main tokens
-/// do not precede its `unsafe` keyword.
-pub fn enclosingUnsafe(ast: *const Ast, blocks: []const Node.Index, node: tir.NodeIndex) ?Node.Index {
-    const x = node.unwrap() orelse return null;
-    for (blocks) |u| {
-        if (x.int() <= u.int() and ast.mainToken(x) >= ast.mainToken(u)) return u;
-    }
-    return null;
-}
-
-/// The main token of `node` in function `id`'s module.
-fn tokenSpan(m: *const Machine, id: tir.FnId, node: Node.Index) diag.Span {
-    const mod = m.in.items.im.graph.modules[m.bodies.fns.items[id.int()].module];
-    const t = mod.ast.mainToken(node);
-    const start = mod.ast.tokens.items(.start)[t];
-    return .{ .file = mod.file, .start = start, .end = start + mod.ast.tokens.items(.len)[t] };
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +224,7 @@ test "the budget is per top-level evaluation" {
     try testing.expectEqual(10_000_000, (Eval{}).left);
 }
 
-test "E0805: unsafe blocks, extern calls and raw pointers stop at their reached `unsafe` block" {
+test "E0805: entering an `unsafe` block stops, whatever it contains" {
     var x: Fixture = undefined;
     try x.init(
         \\extern "C" { fn abs(x: i32) -> i32; }
@@ -284,6 +237,8 @@ test "E0805: unsafe blocks, extern calls and raw pointers stop at their reached 
         \\fn ext() -> i32 { unsafe { abs(-1) } }
         \\fn ptr() -> u64 { let x = 7u64; unsafe { let p = &x; *p } }
         \\fn top() -> u64 { guarded(true) }
+        \\fn empty() -> u64 { unsafe { } 3 }
+        \\fn constant() -> u64 { unsafe { 1 } }
     );
     defer x.deinit();
     // Not reached: allowed.
@@ -295,6 +250,8 @@ test "E0805: unsafe blocks, extern calls and raw pointers stop at their reached 
         .{ .name = "top", .notes = &.{"in call to `guarded`"} },
         .{ .name = "ext", .notes = &.{} },
         .{ .name = "ptr", .notes = &.{} },
+        .{ .name = "empty", .notes = &.{} },
+        .{ .name = "constant", .notes = &.{} },
     }) |c| {
         x.sink.deinit();
         x.sink = .init(testing.allocator, testing.io);

@@ -31,6 +31,13 @@ const Error = emit_tir.Error;
 /// `unsafe { ... }` (§6.11, §12.1). E0805 in comptime code (§8.6).
 pub fn block(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     if (c.in_comptime) try c.report(n, .E0805, "`unsafe` cannot be used in comptime code", .{});
+    // An empty scope at the block's entry marks it for the interpreter,
+    // which forbids running it (§8.6, `comptime/limits.zig`).
+    const node = c.b.node;
+    c.b.node = n;
+    const mark = try c.emit(.void, .{ .scope_begin = .{} });
+    _ = try c.emit(.void, .{ .scope_end = .{ .scope = mark } });
+    c.b.node = node;
     const saved = c.in_unsafe;
     c.in_unsafe = true;
     defer c.in_unsafe = saved;

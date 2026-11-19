@@ -39,7 +39,6 @@ const tir = @import("../tir/tir.zig");
 const emit_tir = @import("../sema/emit_tir.zig");
 const interp_expr = @import("interp_expr.zig");
 const Value = @import("value.zig").Value;
-const Ast = @import("../ast/Ast.zig");
 const builtins = @import("../sema/builtins.zig");
 const limits = @import("limits.zig");
 
@@ -129,8 +128,6 @@ const Frame = struct {
     pc: u32 = 0,
     pending: std.ArrayList(Pending) = .empty,
     resume_at: std.ArrayList(Resume) = .empty,
-    /// The `unsafe` blocks of `func` (§8.6, `limits.unsafeBlocks`).
-    unsafe: []const Ast.Node.Index = &.{},
 
     fn at(f: *const Frame) Ref {
         return f.func.blockInsts(f.block)[f.pc];
@@ -167,8 +164,6 @@ pub const Machine = struct {
     /// (`limits.Eval.attach`).
     eval: ?*limits.Eval = null,
     hooks: ?Hooks = null,
-    /// The `unsafe` blocks of each function entered, in the evaluation arena.
-    unsafe_blocks: std.AutoHashMapUnmanaged(tir.FnId, []const Ast.Node.Index) = .empty,
     frames: std.ArrayList(*Frame) = .empty,
     scratch: std.ArrayList(Reg) = .empty,
 
@@ -176,7 +171,6 @@ pub const Machine = struct {
         while (m.frames.items.len > 0) m.pop();
         m.frames.deinit(m.gpa);
         m.scratch.deinit(m.gpa);
-        m.unsafe_blocks.deinit(m.gpa);
         m.* = undefined;
     }
 
@@ -241,9 +235,10 @@ pub const Machine = struct {
         b.* -= 1;
     }
 
-    /// The syntax tree of function `id`'s module.
-    pub fn astOf(m: *const Machine, id: tir.FnId) *const Ast {
-        return m.in.items.im.graph.modules[m.bodies.fns.items[id.int()].module].ast;
+    /// Whether instruction `r` of `f` opens an `unsafe` block.
+    fn isUnsafe(m: *const Machine, f: *const Frame, r: Ref) bool {
+        const n = f.func.nodeOf(r).unwrap() orelse return false;
+        return m.in.items.im.graph.modules[m.bodies.fns.items[f.id.int()].module].ast.kind(n) == .unsafe_block;
     }
 
     fn types(m: *const Machine) *Types {
@@ -260,12 +255,11 @@ pub const Machine = struct {
         const regs = try m.gpa.alloc(Reg, func.insts.len);
         errdefer m.gpa.free(regs);
         const locals = try m.gpa.alloc(Reg, func.locals.len);
+        errdefer m.gpa.free(locals);
         @memset(regs, .none);
         @memset(locals, .none);
         @memcpy(locals[0..args.len], args);
-        const blocks = try m.unsafe_blocks.getOrPut(m.gpa, id);
-        if (!blocks.found_existing) blocks.value_ptr.* = try limits.unsafeBlocks(m, id);
-        f.* = .{ .id = id, .func = func, .regs = regs, .locals = locals, .unsafe = blocks.value_ptr.* };
+        f.* = .{ .id = id, .func = func, .regs = regs, .locals = locals };
         try m.frames.append(m.gpa, f);
     }
 
@@ -406,8 +400,6 @@ pub const Machine = struct {
         const in = &m.in;
         const out = &f.regs[r.int()];
         const d = func.data(r);
-        if (f.unsafe.len != 0 and limits.enclosingUnsafe(m.astOf(f.id), f.unsafe, func.nodeOf(r)) != null)
-            return m.forbid("`unsafe` blocks");
         const v: Value = switch (d) {
             .int => |x| .{ .ty = ty, .data = .{ .scalar = x.value } },
             .float => |x| if (in.base(ty) == .f32)
@@ -420,7 +412,9 @@ pub const Machine = struct {
                 const b = m.bodies.fns.items[x.func.int()];
                 break :blk .{ .ty = ty, .data = .{ .fn_ref = .{ .module = b.module, .node = b.node } } };
             },
-            .block_param, .scope_begin => return .next,
+            .block_param => return .next,
+            // `unsafe.block` marks each `unsafe` block's entry with a scope.
+            .scope_begin => return if (m.isUnsafe(f, r)) m.forbid("`unsafe` blocks") else .next,
 
             .local => |x| {
                 const slot = &f.locals[x.local.int()];
