@@ -1,4 +1,4 @@
-//@ expected-fail: T059
+//@ expected-fail: T076
 //@ covers: E0805
 // §8.6: comptime runs ordinary code: loops, recursion, arrays and the
 // deterministic inputs.

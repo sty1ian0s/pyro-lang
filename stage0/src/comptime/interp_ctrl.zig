@@ -39,6 +39,9 @@ const tir = @import("../tir/tir.zig");
 const emit_tir = @import("../sema/emit_tir.zig");
 const interp_expr = @import("interp_expr.zig");
 const Value = @import("value.zig").Value;
+const Ast = @import("../ast/Ast.zig");
+const builtins = @import("../sema/builtins.zig");
+const limits = @import("limits.zig");
 
 const Interp = interp_expr.Interp;
 const TypeId = Types.TypeId;
@@ -126,6 +129,8 @@ const Frame = struct {
     pc: u32 = 0,
     pending: std.ArrayList(Pending) = .empty,
     resume_at: std.ArrayList(Resume) = .empty,
+    /// The `unsafe` blocks of `func` (§8.6, `limits.unsafeBlocks`).
+    unsafe: []const Ast.Node.Index = &.{},
 
     fn at(f: *const Frame) Ref {
         return f.func.blockInsts(f.block)[f.pc];
@@ -158,7 +163,12 @@ pub const Machine = struct {
     /// Remaining steps: one per call and per backward branch (§8.6).
     /// Null is unbounded.
     budget: ?*u64 = null,
+    /// The limits `budget` points into, raised by `@set_eval_quota`
+    /// (`limits.Eval.attach`).
+    eval: ?*limits.Eval = null,
     hooks: ?Hooks = null,
+    /// The `unsafe` blocks of each function entered, in the evaluation arena.
+    unsafe_blocks: std.AutoHashMapUnmanaged(tir.FnId, []const Ast.Node.Index) = .empty,
     frames: std.ArrayList(*Frame) = .empty,
     scratch: std.ArrayList(Reg) = .empty,
 
@@ -166,6 +176,7 @@ pub const Machine = struct {
         while (m.frames.items.len > 0) m.pop();
         m.frames.deinit(m.gpa);
         m.scratch.deinit(m.gpa);
+        m.unsafe_blocks.deinit(m.gpa);
         m.* = undefined;
     }
 
@@ -230,6 +241,11 @@ pub const Machine = struct {
         b.* -= 1;
     }
 
+    /// The syntax tree of function `id`'s module.
+    pub fn astOf(m: *const Machine, id: tir.FnId) *const Ast {
+        return m.in.items.im.graph.modules[m.bodies.fns.items[id.int()].module].ast;
+    }
+
     fn types(m: *const Machine) *Types {
         return m.in.items.types;
     }
@@ -247,7 +263,9 @@ pub const Machine = struct {
         @memset(regs, .none);
         @memset(locals, .none);
         @memcpy(locals[0..args.len], args);
-        f.* = .{ .id = id, .func = func, .regs = regs, .locals = locals };
+        const blocks = try m.unsafe_blocks.getOrPut(m.gpa, id);
+        if (!blocks.found_existing) blocks.value_ptr.* = try limits.unsafeBlocks(m, id);
+        f.* = .{ .id = id, .func = func, .regs = regs, .locals = locals, .unsafe = blocks.value_ptr.* };
         try m.frames.append(m.gpa, f);
     }
 
@@ -388,6 +406,8 @@ pub const Machine = struct {
         const in = &m.in;
         const out = &f.regs[r.int()];
         const d = func.data(r);
+        if (f.unsafe.len != 0 and limits.enclosingUnsafe(m.astOf(f.id), f.unsafe, func.nodeOf(r)) != null)
+            return m.forbid("`unsafe` blocks");
         const v: Value = switch (d) {
             .int => |x| .{ .ty = ty, .data = .{ .scalar = x.value } },
             .float => |x| if (in.base(ty) == .f32)
@@ -412,7 +432,7 @@ pub const Machine = struct {
                     out.* = f.regs[x.ptr.int()];
                     return .next;
                 },
-                else => return m.forbid("raw pointers at comptime (E0805, T059)"),
+                else => return m.forbid("raw-pointer operations"),
             },
             .field => |x| {
                 out.* = .{ .place = try m.sub(placeOf(f, x.base), .{ .member = x.index }) };
@@ -517,9 +537,13 @@ pub const Machine = struct {
                 out.* = .{ .place = .{ .root = root } };
                 return .next;
             },
-            .addr_of => return m.forbid("raw pointers at comptime (E0805, T059)"),
-            .builtin => return m.fail("builtin calls at comptime (T059)"),
-            .nursery_begin, .spawn, .spawn_indirect, .nursery_end, .pfor_begin, .pfor_end, .launch => return m.forbid("concurrency at comptime (E0805, T059)"),
+            .addr_of => return m.forbid("raw-pointer operations"),
+            .builtin => |x| blk: {
+                if (x.builtin != builtins.Builtin.set_eval_quota.id()) return m.fail("builtin calls at comptime (T060)");
+                if (m.eval) |e| e.raise(val(f, x.args[0]).data.scalar);
+                break :blk .{ .ty = .void, .data = .void };
+            },
+            .nursery_begin, .spawn, .spawn_indirect, .nursery_end, .pfor_begin, .pfor_end, .launch => return m.forbid("concurrency"),
             .@"unreachable" => return m.fail("`unreachable` reached at comptime"),
         };
         out.* = .{ .value = v };

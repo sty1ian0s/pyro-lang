@@ -1,4 +1,4 @@
-//@ expected-fail: T059
+//@ expected-fail: T125
 // §8.6: comptime code may not run `unsafe` blocks or concurrency; each
 // top-level evaluation reports the operation it reached, with a trace.
 
