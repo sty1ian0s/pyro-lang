@@ -145,6 +145,10 @@ pub const Fetcher = struct {
     io: Io,
     cache: *const Cache,
     sink: *diag.Sink,
+    /// The parent environment (`std.process.Init.environ_map`). Git runs with
+    /// it, minus the variables that redirect a repository and plus ones that
+    /// ignore system and user configuration, so a fetch is reproducible.
+    environ: *const std.process.Environ.Map,
     registries: []const Registry = &.{},
     /// Directory path dependencies are relative to (the root manifest's).
     root_dir: []const u8 = ".",
@@ -324,6 +328,11 @@ pub const Fetcher = struct {
 
     const Mirror = struct { path: []u8, fresh: bool };
 
+    /// A mirror's `info/attributes`: overrides in-tree and user attributes so
+    /// `git archive` emits the committed bytes (no eol conversion, filters,
+    /// `export-subst`, `export-ignore` or `ident`) and the tree hash is stable.
+    const raw_tree = "* -export-subst -export-ignore -text -eol -filter -ident\n";
+
     /// The bare mirror of `url`, cloned on first use.
     fn openMirror(f: *Fetcher, req: Request, url: []const u8) Error!Mirror {
         const name = cache.urlKey(url) ++ ".git".*;
@@ -341,10 +350,16 @@ pub const Fetcher = struct {
             return err;
         };
         f.gpa.free(out);
-        f.cache.dir.rename(&s.name, f.cache.dir, "git/" ++ name, f.io) catch {
-            // Another process cloned it first; use theirs.
-            f.cache.dir.deleteTree(f.io, &s.name) catch {};
+        const info = s.name ++ "/info".*;
+        const err: anyerror = install: {
+            f.cache.dir.createDirPath(f.io, &info) catch |e| break :install e;
+            f.cache.dir.writeFile(f.io, .{ .sub_path = &(info ++ "/attributes".*), .data = raw_tree }) catch |e| break :install e;
+            f.cache.dir.rename(&s.name, f.cache.dir, "git/" ++ name, f.io) catch |e| break :install e;
+            return .{ .path = path, .fresh = true };
         };
+        f.cache.dir.deleteTree(f.io, &s.name) catch {};
+        // Another process may have cloned it first; then use theirs.
+        Io.Dir.cwd().access(f.io, path, .{}) catch return f.fail(req, "cannot write the package cache: {t}", .{err});
         return .{ .path = path, .fresh = true };
     }
 
@@ -392,9 +407,17 @@ pub const Fetcher = struct {
     }
 
     fn runGit(f: *Fetcher, cwd: []const u8, args: []const []const u8, stderr: *[]u8) ![]u8 {
-        const argv = try std.mem.concat(f.gpa, []const u8, &.{ &.{ "git", "-C", cwd }, args });
+        const argv = try std.mem.concat(f.gpa, []const u8, &.{ &.{ "git", "-c", "core.autocrlf=false", "-C", cwd }, args });
         defer f.gpa.free(argv);
-        const r = try std.process.run(f.gpa, f.io, .{ .argv = argv });
+        var env: std.process.Environ.Map = .init(f.gpa);
+        defer env.deinit();
+        var it = f.environ.iterator();
+        while (it.next()) |e| try env.put(e.key_ptr.*, e.value_ptr.*);
+        for ([_][]const u8{ "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE" }) |k|
+            _ = env.swapRemove(k);
+        for ([_][2][]const u8{ .{ "GIT_CONFIG_NOSYSTEM", "1" }, .{ "GIT_CONFIG_GLOBAL", "/dev/null" }, .{ "GIT_TERMINAL_PROMPT", "0" } }) |kv|
+            try env.put(kv[0], kv[1]);
+        const r = try std.process.run(f.gpa, f.io, .{ .argv = argv, .environ_map = &env });
         stderr.* = r.stderr;
         if (r.term.success()) return r.stdout;
         f.gpa.free(r.stdout);
@@ -479,6 +502,7 @@ const Fixture = struct {
     git_url: []u8,
     util_hash: lock.Hash,
     cache: Cache,
+    env: std.process.Environ.Map,
 
     fn init(f: *Fixture) !void {
         f.tmp = testing.tmpDir(.{});
@@ -520,9 +544,11 @@ const Fixture = struct {
         const c = try std.fs.path.join(gpa_t, &.{ f.root, "cache" });
         defer gpa_t.free(c);
         f.cache = try .open(gpa_t, io_t, c);
+        f.env = try testing.environ.createMap(gpa_t);
     }
 
     fn deinit(f: *Fixture) void {
+        f.env.deinit();
         f.cache.close(gpa_t, io_t);
         gpa_t.free(f.root);
         gpa_t.free(f.reg_url);
@@ -533,7 +559,7 @@ const Fixture = struct {
     fn fetcher(f: *Fixture, sink: *diag.Sink) Fetcher {
         const regs = gpa_t.alloc(Registry, 1) catch unreachable;
         regs[0] = .{ .url = f.reg_url };
-        return .{ .gpa = gpa_t, .io = io_t, .cache = &f.cache, .sink = sink, .registries = regs, .root_dir = f.root };
+        return .{ .gpa = gpa_t, .io = io_t, .cache = &f.cache, .sink = sink, .environ = &f.env, .registries = regs, .root_dir = f.root };
     }
 };
 
@@ -704,6 +730,64 @@ test "hash mismatches, offline misses and tampered cache entries fail clearly" {
         try testing.expectEqual(1, sink.finish().len);
         try testing.expectEqual(.E0911, sink.finish()[0].code);
     }
+}
+
+test "a git source hashes its committed bytes whatever the git config, attributes or environment" {
+    var fx: Fixture = undefined;
+    try fx.init();
+    defer fx.deinit();
+    var sink: diag.Sink = .init(gpa_t, io_t);
+    defer sink.deinit();
+    var f = fx.fetcher(&sink);
+    defer gpa_t.free(f.registries);
+
+    const d = fx.tmp.dir;
+    try d.createDirPath(io_t, "subst");
+    for ([_][2][]const u8{
+        .{ "subst/.gitattributes", "* text=auto\nv.txt export-subst\nskip.txt export-ignore\n" },
+        .{ "subst/f.txt", "a\nb\n" },
+        .{ "subst/v.txt", "$Format:%ar$\n" },
+        .{ "subst/skip.txt", "kept\n" },
+    }) |e| try d.writeFile(io_t, .{ .sub_path = e[0], .data = e[1] });
+    var src = try d.openDir(io_t, "subst", .{ .iterate = true });
+    const want = try lock.hashTree(gpa_t, io_t, src);
+    src.close(io_t);
+    const g = try std.fs.path.join(gpa_t, &.{ fx.root, "subst" });
+    defer gpa_t.free(g);
+    try sh(g, &.{ "git", "init", "--quiet" });
+    try sh(g, &.{ "git", "add", "." });
+    try sh(g, &.{ "git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "init" });
+    const url = try std.mem.concat(gpa_t, u8, &.{ "file://", g });
+    defer gpa_t.free(url);
+
+    // `-c core.autocrlf=true` for every git command, and a stray GIT_DIR.
+    var env = try testing.environ.createMap(gpa_t);
+    defer env.deinit();
+    for ([_][2][]const u8{
+        .{ "GIT_CONFIG_COUNT", "1" },      .{ "GIT_CONFIG_KEY_0", "core.autocrlf" },
+        .{ "GIT_CONFIG_VALUE_0", "true" }, .{ "GIT_DIR", "/nonexistent" },
+    }) |kv| try env.put(kv[0], kv[1]);
+    f.environ = &env;
+
+    var got = try f.fetch(.{ .name = "subst", .source = .{ .git = .{ .url = url, .rev = "HEAD" } } });
+    defer got.deinit(gpa_t);
+    try testing.expect(!sink.hasErrors());
+    try testing.expectEqual(want, got.sha256);
+}
+
+test "a mirror that cannot be installed is a cache write error" {
+    var fx: Fixture = undefined;
+    try fx.init();
+    defer fx.deinit();
+    var sink: diag.Sink = .init(gpa_t, io_t);
+    defer sink.deinit();
+    var f = fx.fetcher(&sink);
+    defer gpa_t.free(f.registries);
+
+    try fx.cache.dir.deleteTree(io_t, "git");
+    try fx.cache.dir.writeFile(io_t, .{ .sub_path = "git", .data = "" });
+    try testing.expectError(error.FetchFailed, f.fetch(.{ .name = "gfx", .source = .{ .git = .{ .url = fx.git_url, .rev = "HEAD" } } }));
+    try expectMessage(&sink, "cannot write the package cache");
 }
 
 test "registry index parsing and the offline index copy" {
