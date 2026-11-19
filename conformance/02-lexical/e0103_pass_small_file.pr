@@ -1,4 +1,3 @@
 //@ covers: E0103
-//@ expected-fail: T011 (source loading); runs once T024 wires `pyro check`
 // Any file below 2^32 - 1 bytes is accepted.
 const A: u32 = 1;

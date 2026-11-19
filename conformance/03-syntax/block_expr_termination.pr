@@ -1,4 +1,3 @@
-//@ expected-fail: T025
 // §3.5: at statement position a block expression ends the statement;
 // elsewhere it is an operand like any other expression.
 fn termination(c: bool, x: i32) -> i32 {

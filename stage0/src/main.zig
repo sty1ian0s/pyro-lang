@@ -1,36 +1,11 @@
-//! Stage-0 `pyro` entry point. CLI shell only: every invocation prints usage
-//! and exits 2 (invalid usage, §13.8) until T024 adds command dispatch.
+//! Stage-0 `pyro` entry point. The command line lives in `cli/main.zig`.
 
 const std = @import("std");
+const cli = @import("cli/main.zig");
 
-const usage =
-    \\usage: pyro <command> [options]
-    \\
-    \\commands:
-    \\  new, init     create a package
-    \\  build         compile (default env dev)
-    \\  run           build and run the executable
-    \\  check         parse, resolve and type-check only
-    \\  test          run tests and laws
-    \\  bench         run benchmarks
-    \\  fmt           format source
-    \\  doc           generate HTML docs
-    \\  lsp           language server over stdio
-    \\  profile       run with the sampling profiler
-    \\  add, remove   edit [dependencies]
-    \\  update, fetch re-resolve or download dependencies
-    \\  publish       upload to a registry
-    \\  clean         delete build outputs
-    \\
-    \\stage 0: no commands are implemented yet.
-    \\
-;
+/// Panics are internal compiler errors: exit status 3 (§13.8).
+pub const panic = cli.panic;
 
-pub fn main() u8 {
-    std.debug.print("{s}", .{usage});
-    return 2;
-}
-
-test "usage lists the check command" {
-    try std.testing.expect(std.mem.indexOf(u8, usage, "check") != null);
+pub fn main(init: std.process.Init) u8 {
+    return cli.main(init);
 }

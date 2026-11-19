@@ -1,5 +1,4 @@
 //@ covers: E0202 E0203
-//@ expected-fail: T026
 // §3.3, §8.8: listed attributes in positions they support.
 /// A particle stored column-wise.
 @soa

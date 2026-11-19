@@ -1,4 +1,3 @@
-//@ expected-fail: T012 (lexer core); runs once T024 wires `pyro check`
 //! module doc comment
 //
 // ordinary comment

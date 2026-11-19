@@ -1,4 +1,3 @@
-//@ expected-fail: T025
 // §3.5: every statement form.
 fn work(n: u32) {}
 

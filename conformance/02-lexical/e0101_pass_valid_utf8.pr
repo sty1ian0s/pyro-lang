@@ -1,5 +1,4 @@
 //@ covers: E0101
-//@ expected-fail: T011 (source loading); runs once T024 wires `pyro check`
 // Valid multi-byte UTF-8 in comments and literals: é € 😀 􏿿 � 
 const GREETING: str = "héllo, wörld € 😀";
 const EURO: u32 = '€';

@@ -1,5 +1,4 @@
 //@ covers: E0106
-//@ expected-fail: T012 (lexer core); runs once T024 wires `pyro check`
 // Words that contain or resemble reserved words are ordinary identifiers.
 const actors: u32 = 1;
 const async_io: u32 = 2;

@@ -1,5 +1,4 @@
 //@ covers: E0206
-//@ expected-fail: T020
 // §3.4: defaults on a trailing run of parameters.
 fn f(a: i32, b: i32 = 1, c: bool = false) {}
 
