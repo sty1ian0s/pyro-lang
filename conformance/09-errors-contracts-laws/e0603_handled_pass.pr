@@ -1,4 +1,4 @@
-//@ expected-fail: T049
+//@ expected-fail: T077
 //@ covers: E0603
 // §9.1.1: a `Result` is handled with `?`, `match` or `if let`, or discarded with
 // `_ = expr;`. Discarding an `Option` or any other value is allowed.

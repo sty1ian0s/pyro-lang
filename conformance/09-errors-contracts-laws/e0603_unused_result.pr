@@ -1,4 +1,4 @@
-//@ expected-fail: T049
+//@ expected-fail: T050
 // §9.1.1: an expression statement whose type is `Result<T, E>` is an error,
 // whether the `Result` comes from a function or a method call.
 
