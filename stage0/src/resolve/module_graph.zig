@@ -2,7 +2,7 @@
 //!
 //! `build` collects every module (`collect.zig`), checks module paths (E0901),
 //! turns `use` and `pub use` declarations into edges between the package's own
-//! modules, rejects import cycles with their full chain (E0902), and orders the
+//! modules, rejects every import cycle with its full chain (E0902), and orders the
 //! modules in topological layers: a module's imports are all in earlier layers,
 //! so import resolution (§7.10 step 2) can run layer by layer, and the modules
 //! of one layer are independent. Each module appears exactly once however many
@@ -37,6 +37,7 @@ pub const Input = struct {
     ast: *const Ast,
 };
 
+/// How to read the package's modules.
 pub const Options = struct {
     /// Decides the root module: `main` for executables, `lib` for libraries (§7.8.1).
     kind: layout.Kind,
@@ -45,6 +46,8 @@ pub const Options = struct {
     dependencies: []const []const u8 = &.{},
 };
 
+/// The module graph of one package. Owns its module paths; borrows each
+/// input's `Ast`, which must outlive the graph.
 pub const Graph = struct {
     arena: std.heap.ArenaAllocator,
     /// Every input module, sorted by module path.
@@ -62,6 +65,7 @@ pub const Graph = struct {
     /// An E0902 was reported.
     has_cycle: bool,
 
+    /// Frees everything the graph owns.
     pub fn deinit(g: *Graph) void {
         g.arena.deinit();
         g.* = undefined;
@@ -83,7 +87,7 @@ pub fn rootPath(kind: layout.Kind) []const u8 {
 
 /// Builds the module graph of `inputs`. Problems in the program (E0901,
 /// E0902) are reported to `sink`; errors are internal failures only.
-/// The graph borrows the inputs' trees.
+/// The graph copies the module paths and borrows the inputs' trees.
 pub fn build(gpa: Allocator, sink: *diag.Sink, inputs: []const Input, options: Options) Allocator.Error!Graph {
     var arena: std.heap.ArenaAllocator = .init(gpa);
     errdefer arena.deinit();
@@ -99,11 +103,12 @@ pub fn build(gpa: Allocator, sink: *diag.Sink, inputs: []const Input, options: O
     const modules = try a.alloc(collect.Module, sorted.len);
     var by_path: std.StringHashMapUnmanaged(ModuleId) = .empty;
     for (sorted, modules, 0..) |in, *m, i| {
-        m.* = try collect.collect(a, in.module.path, in.file, in.ast);
+        const path = try a.dupe(u8, in.module.path);
+        m.* = try collect.collect(a, path, in.file, in.ast);
         // `file` is `<root dir>/<rel>`: check `rel` (src/ or tests/ stripped).
         const f = in.module.file;
         const rel = if (std.mem.indexOfScalar(u8, f, std.fs.path.sep)) |k| f[k + 1 ..] else f;
-        if (try collect.checkPath(sink, in.file, rel)) try by_path.put(a, in.module.path, @intCast(i));
+        if (try collect.checkPath(sink, in.file, rel)) try by_path.put(a, path, @intCast(i));
     }
 
     const edges = try a.alloc([]const Edge, modules.len);
@@ -145,8 +150,8 @@ fn target(by_path: *const std.StringHashMapUnmanaged(ModuleId), options: Options
     }
 }
 
-/// Tarjan's algorithm over `g.edges`: fills `g.layers` and reports every
-/// cyclic strongly connected component once (E0902).
+/// Tarjan's algorithm over `g.edges`: fills `g.layers` and reports the
+/// cycles of every cyclic strongly connected component (E0902).
 fn order(a: Allocator, sink: *diag.Sink, g: *Graph) Allocator.Error!void {
     const n = g.modules.len;
     const unvisited = std.math.maxInt(u32);
@@ -189,8 +194,10 @@ const Tarjan = struct {
     /// Layer of each component, by component number.
     scc_layer: []u32,
     scc_count: u32 = 0,
-    /// Scratch for `reportCycle`.
+    /// Scratch for `shortestCycle`.
     parent: []u32,
+    /// Edges `from → to` closing an already reported cycle, as `from << 32 | to`.
+    cut: std.AutoHashMapUnmanaged(u64, void) = .empty,
 
     fn visit(t: *Tarjan, v: ModuleId) Allocator.Error!void {
         t.index[v] = t.next;
@@ -227,33 +234,55 @@ const Tarjan = struct {
             }
         }
         t.scc_layer[s] = layer;
-        if (cyclic) try t.reportCycle(members, s);
+        if (cyclic) try t.reportCycles(members, s);
         t.stack.shrinkRetainingCapacity(top);
     }
 
-    /// E0902 for component `s`: the shortest cycle through its first module
-    /// by path, `a → b → c → a`, at the `use` in `a`, labelling every `use` on it.
-    fn reportCycle(t: *Tarjan, members: []const ModuleId, s: u32) Allocator.Error!void {
-        const g = t.g;
+    /// E0902 for every cycle of component `s`. For each member `start` by
+    /// path, reports the shortest cycle `start → … → start` and cuts its
+    /// closing edge, until no cycle returns to `start`. Once every member is
+    /// done no uncut cycle is left, and no cycle is reported twice.
+    fn reportCycles(t: *Tarjan, members: []ModuleId, s: u32) Allocator.Error!void {
         t.g.has_cycle = true;
-        const start = std.mem.min(ModuleId, members);
+        std.mem.sort(ModuleId, members, {}, std.sort.asc(ModuleId)); // ids are in path order
+        for (members) |start| {
+            while (try t.shortestCycle(members, s, start)) |last| {
+                try t.reportCycle(start, last);
+                try t.cut.put(t.a, key(last, start), {});
+            }
+        }
+    }
+
+    fn key(from: ModuleId, to: ModuleId) u64 {
+        return @as(u64, from) << 32 | to;
+    }
+
+    /// Breadth-first from `start` over uncut edges inside component `s`: the
+    /// last module of the shortest cycle back to `start`, with the path to it
+    /// in `parent`. Null if no cycle returns to `start`.
+    fn shortestCycle(t: *Tarjan, members: []const ModuleId, s: u32, start: ModuleId) Allocator.Error!?ModuleId {
         const none = std.math.maxInt(u32);
         for (members) |m| t.parent[m] = none;
-
-        // Breadth-first from `start` until an edge returns to it.
         var queue: std.ArrayList(ModuleId) = .empty;
         try queue.append(t.a, start);
         var i: usize = 0;
-        const last = find: while (i < queue.items.len) : (i += 1) {
+        while (i < queue.items.len) : (i += 1) {
             const u = queue.items[i];
-            for (g.edges[u]) |e| {
-                if (e.target == start) break :find u;
-                if (t.scc_of[e.target] != s or e.target == start or t.parent[e.target] != none) continue;
+            for (t.g.edges[u]) |e| {
+                if (t.cut.contains(key(u, e.target))) continue;
+                if (e.target == start) return u;
+                if (t.scc_of[e.target] != s or t.parent[e.target] != none) continue;
                 t.parent[e.target] = u;
                 try queue.append(t.a, e.target);
             }
-        } else unreachable;
+        }
+        return null;
+    }
 
+    /// One E0902: the cycle `start → … → last → start` found by `shortestCycle`,
+    /// at the `use` in `start`, labelling every `use` on it.
+    fn reportCycle(t: *Tarjan, start: ModuleId, last: ModuleId) Allocator.Error!void {
+        const g = t.g;
         var chain: std.ArrayList(ModuleId) = .empty; // start ... last, reversed below
         var m = last;
         while (m != start) : (m = t.parent[m]) try chain.append(t.a, m);
@@ -308,6 +337,7 @@ pub const Stage = struct {
         try comp.addHook(.resolve, .{ .ctx = s, .run = run });
     }
 
+    /// Frees the graph, if `run` built one.
     pub fn deinit(s: *Stage) void {
         if (s.graph) |*g| g.deinit();
         s.* = undefined;
@@ -342,7 +372,7 @@ const TestPackage = struct {
             .sink = .init(gpa, testing.io),
         };
         for (mods, p.asts, p.inputs, 0..) |md, *ast, *in, i| {
-            ast.* = try collect.parseForTest(md[1]);
+            ast.* = try @import("test_util.zig").parseForTest(md[1]);
             const file = try std.mem.concat(gpa, u8, &.{ "src" ++ std.fs.path.sep_str, md[0], ".pr" });
             std.mem.replaceScalar(u8, file["src/".len .. file.len - ".pr".len], '.', std.fs.path.sep);
             in.* = .{ .module = .{ .path = md[0], .file = file }, .file = @fromBackingInt(@intCast(i)), .ast = ast };
@@ -426,6 +456,25 @@ test "E0902: the full chain once per cycle, at the use in its first module" {
 
     // Every module still gets one layer; a cycle shares one.
     try expectLayers(&g, &.{ &.{ "a", "b", "c", "self_ref" }, &.{"main"} });
+}
+
+test "E0902: every cycle of one component is reported, each once" {
+    var p: TestPackage = try .init(&.{
+        // Figure eight through `a`, and `b ↔ d`, which does not pass through `a`.
+        .{ "a", "use b;\nuse c;" },
+        .{ "b", "use a;\nuse d;" },
+        .{ "c", "use a;" },
+        .{ "d", "use b;" },
+    });
+    defer p.deinit();
+    var g = try p.graph(.{ .kind = .lib });
+    defer g.deinit();
+    const ds = p.sink.finish();
+    try testing.expectEqual(3, ds.len);
+    try testing.expectEqualStrings("cyclic module imports: a → b → a", ds[0].message);
+    try testing.expectEqualStrings("cyclic module imports: a → c → a", ds[1].message);
+    try testing.expectEqualStrings("cyclic module imports: b → d → b", ds[2].message);
+    try expectLayers(&g, &.{&.{ "a", "b", "c", "d" }});
 }
 
 test "dependencies and std add no edges; unknown paths add none either" {

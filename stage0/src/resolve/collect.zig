@@ -172,20 +172,7 @@ fn identText(ast: *const Ast, t: Ast.TokenIndex) []const u8 {
 // Tests
 
 const testing = std.testing;
-const lexer = @import("../lex/lexer.zig");
-const Parser = @import("../parse/Parser.zig");
-
-/// Lexes and parses `src` as file 0; the test fails on any diagnostic.
-pub fn parseForTest(src: []const u8) !Ast {
-    var sink: diag.Sink = .init(testing.allocator, testing.io);
-    defer sink.deinit();
-    const file: diag.FileId = @fromBackingInt(@intCast(0));
-    const tokens = try lexer.tokenize(testing.allocator, src, file, &sink, .{});
-    var ast = try Parser.parse(testing.allocator, src, tokens, file, &sink);
-    errdefer ast.deinit(testing.allocator);
-    try testing.expectEqual(0, sink.finish().len);
-    return ast;
-}
+const parseForTest = @import("test_util.zig").parseForTest;
 
 test "segments must be identifiers, not keywords or reserved words" {
     for ([_][]const u8{ "main", "rigid_body", "_x", "a1", "Gpu", "gpu", "result" }) |s| try testing.expect(isValidSegment(s));
