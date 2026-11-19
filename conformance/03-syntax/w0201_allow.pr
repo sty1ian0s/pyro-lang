@@ -1,0 +1,10 @@
+//@ covers: W0201
+// A.2, §8.8: `@allow(W0201)` suppresses the warning inside the item only.
+@allow(W0201)
+fn f(a: u32, b: u32) -> u32 {
+    a << 1 + b
+}
+
+fn g(a: u32, b: u32) -> u32 {
+    a << 1 + b //~ W0201
+}

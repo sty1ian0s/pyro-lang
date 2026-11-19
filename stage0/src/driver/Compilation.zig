@@ -41,6 +41,7 @@ const lexer = @import("../lex/lexer.zig");
 const parallel = @import("../lex/parallel.zig");
 const Parser = @import("../parse/Parser.zig");
 const check = @import("../parse/check.zig");
+const Levels = @import("../diag/levels.zig");
 
 const Compilation = @This();
 
@@ -58,6 +59,8 @@ files: std.ArrayList(File) = .empty,
 hooks: [hook_stages.len]std.ArrayList(Hook) = @splat(.empty),
 /// One `Arena.PerThread` per hook stage; see `arena`.
 arenas: [hook_stages.len]Arena.PerThread,
+/// `@allow`/`@deny` of every file, filled after parsing (A.2).
+levels: Levels = .{},
 
 /// Last stage `run` performs (`--stop-after`, `pyro check`, `--expand`).
 pub const StopAfter = enum { lex, parse, check, expand, build };
@@ -124,6 +127,7 @@ pub fn deinit(comp: *Compilation) void {
     comp.files.deinit(gpa);
     for (&comp.hooks) |*h| h.deinit(gpa);
     for (&comp.arenas) |*a| a.deinit(gpa);
+    comp.levels.deinit(gpa);
     comp.pool.deinit(gpa);
     comp.sink.deinit();
     comp.interner.deinit();
@@ -224,6 +228,9 @@ fn parseAll(comp: *Compilation) !void {
             try check.checkFile(c.gpa, &f.ast, f.id, &c.sink);
         }
     }.parse);
+    for (comp.files.items) |*f| if (!f.poisoned) try comp.levels.addFile(comp.gpa, &f.ast, f.id);
+    // A policy set by the caller (tests) wins.
+    if (comp.sink.warning_policy == null) comp.sink.warning_policy = comp.levels.policy();
 }
 
 /// Calls `func` on every non-poisoned file on the pool.

@@ -1,0 +1,6 @@
+//@ covers: E0214
+// A.2: errors cannot be suppressed; `@allow` of an error code has no effect.
+@allow(E0214)
+fn f(a: u32, b: u32) -> bool {
+    a < b < a //~ E0214
+}
