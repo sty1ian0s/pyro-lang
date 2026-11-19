@@ -10,8 +10,12 @@
 //! - Locals are registers too. A `mut` parameter's local holds the caller's
 //!   place (`tir.LocalKind.param_mut`), so writes through it reach the
 //!   caller's storage.
-//! - Values are immutable (`value.zig`); a store rebuilds the members on the
-//!   path from the root (copy on write), so a loaded copy never changes.
+//! - A local's value is owned by its register: `store` and `load` copy
+//!   aggregates and variants (`own`), and a store writes the one member at
+//!   its path in place, so building an array costs memory linear in its
+//!   length. Slice values are views: copying one shares its elements, and
+//!   `a[lo..hi]` shares the elements of `a`, so writes through a slice reach
+//!   the array it views. `str` and `[N]u8` bytes are never written in place.
 //! - Calls do not recurse on the host stack: frames live on an explicit
 //!   stack, so deep comptime recursion is bounded only by memory and the
 //!   budget (§8.6, T059). `return tail` reuses the frame.
@@ -46,10 +50,44 @@ pub const Error = Allocator.Error || error{
     /// The evaluation reached something the interpreter cannot run yet;
     /// `Machine.unsupported` says what. Nothing was reported.
     Unsupported,
+    /// `Machine.budget` ran out (§8.6, E0808). Only `Hooks.stop` reported it.
+    OverBudget,
+};
+
+/// Extension points for the budget and E0805 diagnostics (T059) and for
+/// globals and other comptime constants (T060).
+pub const Hooks = struct {
+    ctx: *anyopaque,
+    /// The value of `.global` or `.@"comptime"` instruction `r` of `func`;
+    /// returns `error.Unsupported` (after `Machine.fail`) when it has none.
+    resolve: *const fn (ctx: *anyopaque, m: *Machine, func: *const tir.Func, r: Ref) StepError!Value,
+    /// Called when the evaluation stops for `why`, with every call frame
+    /// still live (`Machine.trace`), to report the diagnostic.
+    stop: *const fn (ctx: *anyopaque, m: *Machine, why: Stop) Allocator.Error!void,
+};
+
+/// Why `Hooks.stop` is called.
+pub const Stop = union(enum) {
+    /// An operation §8.6 forbids at comptime (E0805): what it is.
+    forbidden: []const u8,
+    /// `Machine.budget` ran out (E0808).
+    budget,
+};
+
+/// The span of the current instruction and the comptime trace.
+pub const Trace = struct {
+    span: diag.Span,
+    /// Innermost call first, then `Machine.outer`; the notes are owned.
+    frames: []diag.TraceFrame,
+
+    pub fn deinit(t: Trace, gpa: Allocator) void {
+        for (t.frames) |tf| gpa.free(tf.note);
+        gpa.free(t.frames);
+    }
 };
 
 /// The errors of one instruction; `call` reports a trap.
-const StepError = interp_expr.Error || error{Unsupported};
+pub const StepError = interp_expr.Error || error{ Unsupported, OverBudget };
 
 /// One step of a place: member `i` of an aggregate, slice or `str`, or
 /// payload field `i` of the current variant of an enum.
@@ -117,6 +155,10 @@ pub const Machine = struct {
     outer: []const diag.TraceFrame = &.{},
     /// What the last `error.Unsupported` reached, with its owning task.
     unsupported: ?[]const u8 = null,
+    /// Remaining steps: one per call and per backward branch (§8.6).
+    /// Null is unbounded.
+    budget: ?*u64 = null,
+    hooks: ?Hooks = null,
     frames: std.ArrayList(*Frame) = .empty,
     scratch: std.ArrayList(Reg) = .empty,
 
@@ -129,11 +171,11 @@ pub const Machine = struct {
 
     /// Calls function `callee` with `args` (one value per parameter, no
     /// `mut` parameters) and returns its result, allocated in the
-    /// evaluation arena.
+    /// evaluation arena. `args` are copied, never written.
     pub fn call(m: *Machine, callee: tir.FnId, args: []const Value) Error!Value {
         const regs = try m.gpa.alloc(Reg, args.len);
         defer m.gpa.free(regs);
-        for (regs, args) |*r, a| r.* = .{ .value = a };
+        for (regs, args) |*r, a| r.* = .{ .value = try m.own(a) };
         const base = m.frames.items.len;
         errdefer while (m.frames.items.len > base) m.pop();
         try m.push(callee, regs);
@@ -143,6 +185,7 @@ pub const Machine = struct {
             const next = m.step(f, r) catch |e| switch (e) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.Unsupported => return error.Unsupported,
+                error.OverBudget => return error.OverBudget,
                 else => |t| {
                     try m.reportTrap(t);
                     return error.Trapped;
@@ -165,9 +208,26 @@ pub const Machine = struct {
         }
     }
 
-    fn fail(m: *Machine, what: []const u8) error{Unsupported} {
+    /// Stops the evaluation at something it cannot run yet.
+    pub fn fail(m: *Machine, what: []const u8) error{Unsupported} {
         m.unsupported = what;
         return error.Unsupported;
+    }
+
+    /// Stops the evaluation at an operation §8.6 forbids (E0805).
+    fn forbid(m: *Machine, what: []const u8) (Allocator.Error || error{Unsupported}) {
+        if (m.hooks) |h| try h.stop(h.ctx, m, .{ .forbidden = what });
+        return m.fail(what);
+    }
+
+    /// Spends one step of the budget.
+    fn tick(m: *Machine) (Allocator.Error || error{OverBudget})!void {
+        const b = m.budget orelse return;
+        if (b.* == 0) {
+            if (m.hooks) |h| try h.stop(h.ctx, m, .budget);
+            return error.OverBudget;
+        }
+        b.* -= 1;
     }
 
     fn types(m: *const Machine) *Types {
@@ -225,7 +285,7 @@ pub const Machine = struct {
         return f.regs[r.int()].place;
     }
 
-    /// The register stored at `p`.
+    /// The register stored at `p`, sharing its storage.
     fn load(p: Place) Reg {
         if (p.path.len == 0) return p.root.*;
         var v = p.root.value;
@@ -248,29 +308,75 @@ pub const Machine = struct {
         return .{ .root = p.root, .path = path };
     }
 
-    fn store(m: *Machine, p: Place, r: Reg) Allocator.Error!void {
-        p.root.* = if (p.path.len == 0) r else .{ .value = try m.replace(p.root.value, p.path, r.value) };
+    /// A copy of the register stored at `p` that later stores leave alone.
+    fn read(m: *Machine, p: Place) Allocator.Error!Reg {
+        return switch (load(p)) {
+            .value => |v| .{ .value = try m.own(v) },
+            else => |r| r,
+        };
     }
 
-    /// `v` with the member at `path` replaced by `new`.
-    // shortcut: copies every member on the path per store (O(n) for an array element); add in-place stores to uniquely owned values if comptime array loops get slow.
-    fn replace(m: *Machine, v: Value, path: []const Step, new: Value) Allocator.Error!Value {
-        if (path.len == 0) return new;
-        switch (path[0]) {
-            .payload => |i| {
-                const x = v.data.variant;
-                const payload = try m.in.arena.dupe(Value, x.payload);
-                payload[i] = try m.replace(payload[i], path[1..], new);
-                return .{ .ty = v.ty, .data = .{ .variant = .{ .index = x.index, .payload = payload } } };
-            },
-            .member => |i| {
-                const n: usize = @intCast(Interp.len(v).data.scalar);
-                const elems = try m.in.arena.alloc(Value, n);
-                for (elems, 0..) |*e, k| e.* = Interp.extract(v, @intCast(k));
-                elems[i] = try m.replace(elems[i], path[1..], new);
-                return .{ .ty = v.ty, .data = if (v.data == .slice) .{ .slice = elems } else .{ .aggregate = elems } };
-            },
+    /// `v` with fresh aggregate and variant members, so that it can be
+    /// written in place. Slices stay views; `str` and bytes are never written.
+    fn own(m: *Machine, v: Value) Allocator.Error!Value {
+        return .{ .ty = v.ty, .data = switch (v.data) {
+            .aggregate => |vs| .{ .aggregate = try m.ownAll(vs) },
+            .variant => |x| .{ .variant = .{ .index = x.index, .payload = try m.ownAll(x.payload) } },
+            else => v.data,
+        } };
+    }
+
+    fn ownAll(m: *Machine, vs: []const Value) Allocator.Error![]const Value {
+        const out = try m.in.arena.alloc(Value, vs.len);
+        for (out, vs) |*o, v| o.* = try m.own(v);
+        return out;
+    }
+
+    /// Writes `r` at `p`: the one member at its path, in place.
+    fn store(m: *Machine, p: Place, r: Reg) Allocator.Error!void {
+        const new: Reg = switch (r) {
+            .value => |v| .{ .value = try m.own(v) },
+            else => r,
+        };
+        if (p.path.len == 0) {
+            p.root.* = new;
+            return;
         }
+        (try m.storage(p)).* = new.value;
+    }
+
+    /// The storage of the value at `p`. The members of stored values are
+    /// owned (`own`) or viewed through a slice of owned members, so they
+    /// are writable arena memory.
+    fn storage(m: *Machine, p: Place) Allocator.Error!*Value {
+        var at = &p.root.value;
+        for (p.path) |s| {
+            try m.unpack(at);
+            at = switch (s) {
+                .payload => |i| &@constCast(at.data.variant.payload)[i],
+                .member => |i| &@constCast(switch (at.data) {
+                    .aggregate, .slice => |vs| vs,
+                    else => unreachable,
+                })[i],
+            };
+        }
+        return at;
+    }
+
+    /// Turns `[N]u8` bytes at `at` into an aggregate of `u8`, so that its
+    /// elements can be written and viewed by slices.
+    fn unpack(m: *Machine, at: *Value) Allocator.Error!void {
+        if (at.data != .bytes) return;
+        const elems = try m.in.arena.alloc(Value, at.data.bytes.len);
+        for (elems, 0..) |*e, k| e.* = Interp.extract(at.*, @intCast(k));
+        at.data = .{ .aggregate = elems };
+    }
+
+    /// The value at `p`, for a slice that views its storage.
+    fn sliceable(m: *Machine, p: Place) Allocator.Error!Value {
+        const at = try m.storage(p);
+        try m.unpack(at);
+        return at.*;
     }
 
     // -----------------------------------------------------------------------
@@ -306,7 +412,7 @@ pub const Machine = struct {
                     out.* = f.regs[x.ptr.int()];
                     return .next;
                 },
-                else => return m.fail("raw pointers at comptime (E0805, T059)"),
+                else => return m.forbid("raw pointers at comptime (E0805, T059)"),
             },
             .field => |x| {
                 out.* = .{ .place = try m.sub(placeOf(f, x.base), .{ .member = x.index }) };
@@ -324,14 +430,16 @@ pub const Machine = struct {
                 return .next;
             },
             inline .load, .move => |x| {
-                out.* = load(placeOf(f, x.place));
+                out.* = try m.read(placeOf(f, x.place));
                 return .next;
             },
             .view => |x| blk: {
-                const pv = loadValue(placeOf(f, x.place));
+                const p = placeOf(f, x.place);
+                // A view shares the storage: §5.4.2 forbids writes to it while the view lives.
+                const pv = loadValue(p);
                 // An array viewed as a slice (§4.9.1); other views read the place.
                 const to_slice = m.types().get(in.base(ty)) == .slice and pv.data != .slice;
-                break :blk if (to_slice) try in.slice(ty, pv, null, null) else pv;
+                break :blk if (to_slice) try in.slice(ty, try m.sliceable(p), null, null) else pv;
             },
             .view_mut => |x| {
                 out.* = f.regs[x.place.int()];
@@ -372,7 +480,7 @@ pub const Machine = struct {
             .len => |x| Interp.len(m.valueOrPlace(f, x.value)),
             .slice => |x| try in.slice(
                 ty,
-                loadValue(placeOf(f, x.base)),
+                try m.sliceable(placeOf(f, x.base)),
                 if (x.lo) |lo| val(f, lo) else null,
                 if (x.hi) |hi| val(f, hi) else null,
             ),
@@ -401,10 +509,17 @@ pub const Machine = struct {
             },
             .ret => |x| return .{ .ret = if (x.value) |a| f.regs[a.int()] else .{ .value = .{ .ty = .void, .data = .void } } },
 
-            .global, .@"comptime" => return m.fail("globals and comptime constants in comptime code (T060)"),
-            .addr_of => return m.fail("raw pointers at comptime (E0805, T059)"),
+            .@"comptime" => if (m.hooks) |h| try h.resolve(h.ctx, m, func, r) else return m.fail("globals and comptime constants in comptime code (T060)"),
+            .global => {
+                const h = m.hooks orelse return m.fail("globals and comptime constants in comptime code (T060)");
+                const root = try in.arena.create(Reg);
+                root.* = .{ .value = try m.own(try h.resolve(h.ctx, m, func, r)) };
+                out.* = .{ .place = .{ .root = root } };
+                return .next;
+            },
+            .addr_of => return m.forbid("raw pointers at comptime (E0805, T059)"),
             .builtin => return m.fail("builtin calls at comptime (T059)"),
-            .nursery_begin, .spawn, .spawn_indirect, .nursery_end, .pfor_begin, .pfor_end, .launch => return m.fail("concurrency at comptime (E0805, T059)"),
+            .nursery_begin, .spawn, .spawn_indirect, .nursery_end, .pfor_begin, .pfor_end, .launch => return m.forbid("concurrency at comptime (E0805, T059)"),
             .@"unreachable" => return m.fail("`unreachable` reached at comptime"),
         };
         out.* = .{ .value = v };
@@ -418,8 +533,10 @@ pub const Machine = struct {
         };
     }
 
-    /// Jumps to `target`, binding its block parameters to `args`.
-    fn branch(m: *Machine, f: *Frame, target: tir.Block, args: []const Ref) Allocator.Error!Next {
+    /// Jumps to `target`, binding its block parameters to `args`. A jump
+    /// to an earlier block (a loop's back edge) spends budget.
+    fn branch(m: *Machine, f: *Frame, target: tir.Block, args: []const Ref) StepError!Next {
+        if (target.int() <= f.block.int()) try m.tick();
         const regs = try m.gather(f, args);
         for (regs, f.func.blockInsts(target)[0..regs.len]) |a, p| f.regs[p.int()] = a;
         f.block = target;
@@ -430,12 +547,14 @@ pub const Machine = struct {
     /// Pushes the frame of a call to `callee`; its result lands in the
     /// caller's register of the call when it returns.
     fn enter(m: *Machine, f: *const Frame, callee: tir.FnId, args: []const Ref) StepError!Next {
+        try m.tick();
         try m.push(callee, try m.gather(f, args));
         return .moved;
     }
 
     /// `return tail callee(args)` (§6.9): the call replaces frame `f`.
     fn tail(m: *Machine, f: *const Frame, callee: tir.FnId, args: []const Ref) StepError!Next {
+        try m.tick();
         const regs = try m.gather(f, args);
         const owned = try m.gpa.dupe(Reg, regs);
         defer m.gpa.free(owned);
@@ -493,25 +612,36 @@ pub const Machine = struct {
         return .{ .file = mod.file, .start = start, .end = start + ast.tokens.items(.len)[t] };
     }
 
-    /// Reports trap `t` at the current instruction of the top frame, with
-    /// one trace frame per active call, innermost first, then `outer`.
-    fn reportTrap(m: *Machine, t: interp_expr.Trap) Allocator.Error!void {
+    /// The current instruction of the top frame and one trace frame per
+    /// active call, innermost first, then `outer`. Free with `deinit(gpa)`.
+    pub fn trace(m: *const Machine) Allocator.Error!Trace {
         const frames = m.frames.items;
-        var trace: std.ArrayList(diag.TraceFrame) = .empty;
-        defer {
-            for (trace.items) |tf| m.gpa.free(tf.note);
-            trace.deinit(m.gpa);
+        var out: std.ArrayList(diag.TraceFrame) = .empty;
+        errdefer {
+            for (out.items) |tf| m.gpa.free(tf.note);
+            out.deinit(m.gpa);
         }
         var i = frames.len - 1;
         while (i > 0) : (i -= 1) {
             const name = m.bodies.fns.items[frames[i].id.int()].name;
             const note = try std.fmt.allocPrint(m.gpa, "in call to `{s}`", .{name});
             errdefer m.gpa.free(note);
-            try trace.append(m.gpa, .{ .span = m.span(frames[i - 1], frames[i - 1].at()), .note = note });
+            try out.append(m.gpa, .{ .span = m.span(frames[i - 1], frames[i - 1].at()), .note = note });
         }
-        for (m.outer) |o| try trace.append(m.gpa, .{ .span = o.span, .note = try m.gpa.dupe(u8, o.note) });
+        for (m.outer) |o| {
+            const note = try m.gpa.dupe(u8, o.note);
+            errdefer m.gpa.free(note);
+            try out.append(m.gpa, .{ .span = o.span, .note = note });
+        }
         const top = frames[frames.len - 1];
-        try interp_expr.report(m.sink, t, m.span(top, top.at()), trace.items);
+        return .{ .span = m.span(top, top.at()), .frames = try out.toOwnedSlice(m.gpa) };
+    }
+
+    /// Reports trap `t` at the current instruction with the trace.
+    fn reportTrap(m: *Machine, t: interp_expr.Trap) Allocator.Error!void {
+        const tr = try m.trace();
+        defer tr.deinit(m.gpa);
+        try interp_expr.report(m.sink, t, tr.span, tr.frames);
     }
 };
 
@@ -610,6 +740,76 @@ test "recursion, loops, arrays, structs, match and mut parameters evaluate" {
     try testing.expectEqual(0, x.m.frames.items.len);
 }
 
+test "writes through a slice reach the array it views" {
+    var x: Fixture = undefined;
+    try x.init(
+        \\fn fill(mut s: []u32) { s[0] = 7; s[2] = 7; }
+        \\fn go() -> u32 { let mut a = [0u32; 3]; fill(mut a[..]); a[0] + a[2] }
+        \\fn mid() -> u32 { let mut a = [1u32, 2, 3, 4]; fill(mut a[1..]); a[0] * 1000 + a[1] * 100 + a[2] * 10 + a[3] }
+    );
+    defer x.deinit();
+    try testing.expect((try x.run("go", &.{})).eql(x.int(u32_t, 14)));
+    try testing.expect((try x.run("mid", &.{})).eql(x.int(u32_t, 1737)));
+}
+
+test "building an array stores in place: arena use is linear in its length" {
+    var x: Fixture = undefined;
+    try x.init(
+        \\fn table() -> [8192]u32 {
+        \\    let mut a = [0u32; 8192];
+        \\    let mut i: usize = 0;
+        \\    while i < 8192 { a[i] = (i * 3) as u32; i += 1; }
+        \\    a
+        \\}
+    );
+    defer x.deinit();
+    const t = try x.run("table", &.{});
+    for (t.data.aggregate, 0..) |e, i| try testing.expect(e.eql(x.int(u32_t, @intCast(i * 3))));
+    // A few copies of the array plus per-step scratch; copying the array per
+    // store would take about 8192² values.
+    try testing.expect(x.arena.queryCapacity() < 64 * 8192 * @sizeOf(Value));
+}
+
+test "the budget counts calls and back edges; hooks see live frames" {
+    var x: Fixture = undefined;
+    try x.init(
+        \\fn spin(n: u64) -> u64 { let mut i = 0u64; while i < n { i += 1; } i }
+        \\fn deep(n: u64) -> u64 { if n == 0 { 0 } else { deep(n - 1) } }
+    );
+    defer x.deinit();
+    const Spy = struct {
+        stops: u32 = 0,
+        depth: usize = 0,
+        fn resolve(_: *anyopaque, m: *Machine, _: *const tir.Func, _: Ref) StepError!Value {
+            return m.fail("unused");
+        }
+        fn stop(ctx: *anyopaque, m: *Machine, why: Stop) Allocator.Error!void {
+            const s: *@This() = @ptrCast(@alignCast(ctx));
+            std.debug.assert(why == .budget);
+            const tr = try m.trace();
+            defer tr.deinit(m.gpa);
+            s.stops += 1;
+            s.depth = tr.frames.len;
+        }
+    };
+    var spy: Spy = .{};
+    var budget: u64 = 100;
+    x.m.budget = &budget;
+    x.m.hooks = .{ .ctx = &spy, .resolve = Spy.resolve, .stop = Spy.stop };
+
+    try testing.expect((try x.run("spin", &.{x.int(u64_t, 50)})).eql(x.int(u64_t, 50)));
+    try testing.expect(budget < 100 and budget >= 40);
+    budget = 100;
+    try testing.expectError(error.OverBudget, x.run("spin", &.{x.int(u64_t, 1000)}));
+    try testing.expectEqual(1, spy.stops);
+    budget = 100;
+    try testing.expectError(error.OverBudget, x.run("deep", &.{x.int(u64_t, 1000)}));
+    try testing.expectEqual(2, spy.stops);
+    try testing.expectEqual(100, spy.depth); // the trace has one frame per call
+    try testing.expectEqual(0, x.m.frames.items.len);
+    try testing.expect(!x.sink.hasErrors());
+}
+
 test "deep recursion runs on the frame stack, not the host stack" {
     var x: Fixture = undefined;
     try x.init("fn depth(n: u64) -> u64 { if n == 0 { 0 } else { 1 + depth(n - 1) } }");
@@ -658,12 +858,15 @@ test "bounds and division traps are compile errors with the comptime trace" {
 
 test "defers run LIFO at scope ends; errdefers only on an error return" {
     var x: Fixture = undefined;
-    try x.init("fn d(fail: bool) -> u32 { 0 }");
+    try x.init(
+        \\fn d(mut acc: u32, fail: bool) -> u32 { 0 }
+        \\fn outer(fail: bool) -> u32 { let mut acc = 0u32; d(mut acc, fail); acc }
+    );
     defer x.deinit();
     const a = x.arena.allocator();
 
-    // fn(fail: bool) -> Result<u32, u32> {
-    //     let mut acc = 0;
+    // `d` replaced by
+    // fn(mut acc: u32, fail: bool) -> Result<u32, u32> {
     //     { defer acc = acc * 10 + 1; errdefer acc = acc * 10 + 2; defer acc = acc * 10 + 3;
     //       if fail { return .err(acc) } }   // the error value is read before the defers
     //     .ok(acc)
@@ -678,15 +881,14 @@ test "defers run LIFO at scope ends; errdefers only on an error return" {
         .lang = .result,
     } });
     var b: Builder = .init(a, result);
+    const acc = try b.addParam(.none, u32_t, .param_mut);
     const fail = try b.addParam(.none, .bool, .param);
-    const acc = try b.addLocal(.{ .ty = u32_t, .name = .none, .kind = .let_mut });
     const entry = try b.addBlock();
     const bodies = [3]tir.Block{ try b.addBlock(), try b.addBlock(), try b.addBlock() };
     const err_exit = try b.addBlock();
     const ok_exit = try b.addBlock();
 
     b.setBlock(entry);
-    _ = try b.add(.void, .{ .store = .{ .place = try b.add(u32_t, .{ .local = .{ .local = acc } }), .value = try b.add(u32_t, .{ .int = .{ .value = 0 } }) } });
     const scope = try b.add(.void, .{ .scope_begin = .{} });
     _ = try b.add(.void, .{ .@"defer" = .{ .scope = scope, .body = bodies[0] } });
     _ = try b.add(.void, .{ .@"errdefer" = .{ .scope = scope, .body = bodies[1] } });
@@ -719,13 +921,9 @@ test "defers run LIFO at scope ends; errdefers only on an error return" {
     x.f.bodies.fns.items[x.id("d").int()].func = try b.finish();
 
     // Success: defers 3 then 1; the errdefer is discarded.
-    const good = try x.run("d", &.{.boolean(false)});
-    try testing.expectEqual(0, good.data.variant.index);
-    try testing.expect(good.data.variant.payload[0].eql(x.int(u32_t, 31)));
-    // Error: the `.err` value was computed before the defers ran.
-    const bad = try x.run("d", &.{.boolean(true)});
-    try testing.expectEqual(1, bad.data.variant.index);
-    try testing.expect(bad.data.variant.payload[0].eql(x.int(u32_t, 0)));
+    try testing.expect((try x.run("outer", &.{.boolean(false)})).eql(x.int(u32_t, 31)));
+    // Error: 3, the errdefer 2, then 1, seen by the caller through `mut acc`.
+    try testing.expect((try x.run("outer", &.{.boolean(true)})).eql(x.int(u32_t, 321)));
 }
 
 test "unsupported operations stop the evaluation without a diagnostic" {
