@@ -40,6 +40,7 @@ const Ast = @import("../ast/Ast.zig");
 const lexer = @import("../lex/lexer.zig");
 const parallel = @import("../lex/parallel.zig");
 const Parser = @import("../parse/Parser.zig");
+const check = @import("../parse/check.zig");
 
 const Compilation = @This();
 
@@ -212,13 +213,15 @@ fn lexAll(comp: *Compilation) !void {
     }.lex);
 }
 
-/// Stage 2, in parallel over files.
+/// Stage 2, in parallel over files: parsing and the post-parse syntactic
+/// checks (`parse/check.zig`).
 fn parseAll(comp: *Compilation) !void {
     try comp.forEachFile(struct {
         fn parse(c: *Compilation, f: *File) !void {
             const tokens = f.ast.tokens;
             f.ast.tokens = .empty; // `Parser.parse` owns them now, even on failure
             f.ast = try Parser.parse(c.gpa, f.ast.source, tokens, f.id, &c.sink);
+            try check.checkFile(c.gpa, &f.ast, f.id, &c.sink);
         }
     }.parse);
 }
