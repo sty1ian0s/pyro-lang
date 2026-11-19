@@ -319,7 +319,7 @@ graph TD
   - Blocked by: T022
   - Blocks: T037, T093, T161, T162, T210, T214
   - Conflicts: Each later command owns its own `stage0/src/cli/cmd_*.zig`; only this task edits dispatch tables (others append one line).
-- [ ] **T025** Parser: statements and blocks **[CRITICAL]**
+- [x] **T025** Parser: statements and blocks **[CRITICAL]**
   - Spec: §3.5
   - Deliverable: `stage0/src/parse/stmt.zig`: let/const/guard let/defer/errdefer/return tail/break/continue labels/spawn/launch (contextual gpu/cpu, over)/nursery/loops/parallel_for/`_ = e`/block-expr statements/assignments. E0208, E0209.
   - Acceptance: Golden per form; `a = b = c` and `if a = b` are syntax errors; fail case E0208, E0209.
@@ -409,7 +409,7 @@ graph TD
   - Size: M · Parallel: W06
   - Blocked by: T020, T022, T031
   - Blocks: T038, T093
-- [ ] **T037** std/ skeleton: prelude export list and core declarations
+- [x] **T037** std/ skeleton: prelude export list and core declarations
   - Spec: §14.1, §14.1.1, §14.1.3, §14.2
   - Deliverable: `std/prelude.pr`, `std/core/{option,result,range,protocols}.pr`, `std/gpu/stub.pr`: declarations only (Option/Result enums, Range types, Indexable/IndexableMut/From/Display/Debug/Order/Hash protocol decls, gpu builtin type names); core-prelude subset for no_std.
   - Acceptance: Files parse with `--stop-after parse`; export list matches §14.1 and §14.1.1 (checked by a test).
@@ -1314,7 +1314,7 @@ graph TD
   - Size: L · Parallel: W05
   - Blocked by: T159
   - Blocks: T161, T163, T164
-- [ ] **T161** pyro add/remove/update/fetch
+- [x] **T161** pyro add/remove/update/fetch
   - Spec: §13.8, §13.4
   - Deliverable: `stage0/src/cli/cmd_deps.zig`.
   - Acceptance: add then remove byte-identical; update touches only dep subgraph; offline cold fetch fails clearly.
