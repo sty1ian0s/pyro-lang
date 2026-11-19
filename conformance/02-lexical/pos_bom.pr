@@ -1,4 +1,3 @@
 ﻿// BOM line
-//@ expected-fail: T011 (source loading); runs once T024 wires `pyro check`
 // This file starts with a UTF-8 byte-order mark, which is ignored.
 const A: u32 = 1;

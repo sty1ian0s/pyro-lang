@@ -1,4 +1,3 @@
-//@ expected-fail: T020
 // §3.4: `self` only as the first parameter of a member function; never `comptime self`.
 fn free(self) {} //~ E0205
 

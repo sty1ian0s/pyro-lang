@@ -1,3 +1,2 @@
-//@ expected-fail: T011 (source loading); runs once T024 wires `pyro check`
 const A: u32 = 1;
 //~ E0101 the file ends inside a three-byte sequence: â‚

@@ -1,5 +1,4 @@
 //@ covers: E0109
-//@ expected-fail: T013 (literal lexer); runs once T024 wires `pyro check`
 const A: str = "\n \r \t \0 \\ \' \"";
 const B: str = "\x00 \x41 \x7F";
 const C: str = "\u{0} \u{41} \u{D7FF} \u{E000} \u{10FFFF} \u{1F600} \u{000041}";

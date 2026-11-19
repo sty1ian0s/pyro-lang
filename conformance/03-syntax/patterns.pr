@@ -1,4 +1,3 @@
-//@ expected-fail: T021
 // §3.7: every pattern form, in `let`, `match`, `for`, `if let`, `while let` and `guard let`.
 enum Shape { circle(f32), rect(f32, f32), point }
 

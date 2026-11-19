@@ -1,5 +1,4 @@
 //@ covers: E0110
-//@ expected-fail: T012 (lexer core); runs once T024 wires `pyro check`
 // A lone @ in a comment is fine: @
 @inline
 fn f() -> usize { @size_of(u32) }

@@ -1,4 +1,3 @@
-//@ expected-fail: T013 (literal lexer); runs once T024 wires `pyro check`
 const A: str = "\x80"; //~ E0109
 const B: str = "\xFF"; //~ E0109
 const C: str = "\u{D800}"; //~ E0109

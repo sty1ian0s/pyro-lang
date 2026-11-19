@@ -1,5 +1,4 @@
 //@ covers: E0215
-//@ expected-fail: T023
 // §3.8: all-named and all-positional `.{…}` literals, the rest marker, empty literals.
 fn f(x: i32, y: i32) {
     let a = .{ x: 1, y: 2 };

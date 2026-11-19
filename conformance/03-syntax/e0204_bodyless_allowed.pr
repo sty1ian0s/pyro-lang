@@ -1,5 +1,4 @@
 //@ covers: E0204
-//@ expected-fail: T020
 // §3.4: required protocol methods and extern functions have no body.
 protocol Shape {
     fn area(self) -> f64;

@@ -1,5 +1,4 @@
 //@ stop-after: parse
-//@ expected-fail: T023 (expression parser); runs once T024 wires `pyro check`
 // `1.` and `.5` are not floats, so `0..10` is a range.
 const R = 0..10;
 const S = 1..=5;

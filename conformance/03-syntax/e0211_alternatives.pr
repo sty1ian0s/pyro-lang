@@ -1,5 +1,4 @@
 //@ covers: E0211
-//@ expected-fail: T026
 // §3.7: alternatives binding the same names, or none.
 enum Shape { circle(f32), square(f32), point, origin }
 

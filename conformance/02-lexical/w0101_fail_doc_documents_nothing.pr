@@ -1,5 +1,4 @@
 //@ stop-after: parse
-//@ expected-fail: T020 (item parser); runs once T024 wires `pyro check`
 struct Point {
     x: i32,
     /// Nothing follows this doc comment inside the struct.

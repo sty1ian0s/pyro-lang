@@ -1,5 +1,4 @@
 //@ covers: E0501
-//@ expected-fail: T026
 // §3.5: `spawn` directly in a `nursery` and in blocks nested inside it.
 fn work() {}
 

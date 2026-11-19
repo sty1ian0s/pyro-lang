@@ -1,5 +1,4 @@
 //@ covers: E0208
-//@ expected-fail: T025
 // §3.5: function and method calls after `spawn`, `launch` and `return tail`.
 fn work(n: u32) {}
 

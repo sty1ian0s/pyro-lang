@@ -1,4 +1,3 @@
-//@ expected-fail: T020
 // §3.4: a `fn` ending in `;` outside a protocol.
 fn missing_body(x: i32) -> i32; //~ E0204
 

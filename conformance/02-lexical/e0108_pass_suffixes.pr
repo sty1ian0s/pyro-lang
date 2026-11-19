@@ -1,5 +1,4 @@
 //@ covers: E0108
-//@ expected-fail: T013 (literal lexer); runs once T024 wires `pyro check`
 const A: u8 = 255u8;
 const B: u3 = 5u3;
 const C: u1 = 1u1;

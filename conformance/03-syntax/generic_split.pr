@@ -1,4 +1,3 @@
-//@ expected-fail: T021
 // §3.1: `>>` closes two generic argument lists in a type context;
 // §3.6: after `as`, a path takes no `<…>`, so `<`, `>` and `>>` stay operators.
 struct Pool<T> { items: []T }

@@ -1,2 +1,1 @@
-//@ expected-fail: T013 (literal lexer); runs once T024 wires `pyro check`
 const A: u64 = 18446744073709551616u64; //~ E0108

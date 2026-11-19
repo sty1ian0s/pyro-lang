@@ -1,5 +1,4 @@
 //@ covers: E0209
-//@ expected-fail: T025
 // §3.5, §2.4.1: `gpu` and `cpu` after `launch`; elsewhere they and `over` are identifiers.
 fn kernel(mut xs: []f32) {}
 

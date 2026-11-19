@@ -1,6 +1,5 @@
 //@ covers: W0101
 //@ stop-after: parse
-//@ expected-fail: T020 (item parser); runs once T024 wires `pyro check`
 //! Module documentation at the start of the file.
 
 /// Documents the struct.

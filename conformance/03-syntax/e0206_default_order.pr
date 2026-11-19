@@ -1,4 +1,3 @@
-//@ expected-fail: T020
 // §3.4: default values only on trailing parameters.
 fn f(a: i32 = 1, b: i32) {} //~ E0206
 

@@ -1,5 +1,4 @@
 //@ covers: E0210
-//@ expected-fail: T026
 // §3.5: labelled `for`, `while` and `loop`, used from nested loops.
 fn find(grid: [][]u32, target: u32) -> bool {
     let mut found = false;

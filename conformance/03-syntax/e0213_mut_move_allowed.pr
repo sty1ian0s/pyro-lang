@@ -1,5 +1,4 @@
 //@ covers: E0213
-//@ expected-fail: T026
 // §3.8.2: `mut` as a call-argument mode, `move` in each allowed position, and
 // `mut` as a binding form and parameter mode (not E0213).
 struct Holder { r: Res }

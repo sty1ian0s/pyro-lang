@@ -1,5 +1,4 @@
 //@ covers: E0201
-//@ expected-fail: T020
 // §3.2: `pub` is accepted on every other item kind, and on members and fields.
 pub use std.math;
 pub const LIMIT: u32 = 10;

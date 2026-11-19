@@ -1,4 +1,3 @@
-//@ expected-fail: T013 (literal lexer); runs once T024 wires `pyro check`
 const USAGE: str =
     \\usage: pyro build [options]
     // an ordinary comment between lines is allowed

@@ -1,5 +1,4 @@
 //@ stop-after: parse
-//@ expected-fail: T025 (statement parser); runs once T024 wires `pyro check`
 // Maximal munch: `<<=` `>>=` `..=` `.{` `==` `->` are single tokens.
 struct P { x: u32, y: u32 }
 fn f(mut a: u32, b: u32) -> bool {
