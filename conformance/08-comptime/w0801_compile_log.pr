@@ -1,4 +1,4 @@
-//@ expected-fail: T061
+//@ expected-fail: T069
 // §8.5: a build that contains `@compile_log` gets W0801.
 
 struct Particle { x: f32, y: f32 }

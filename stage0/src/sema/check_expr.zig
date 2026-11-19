@@ -28,6 +28,7 @@ const builtins = @import("builtins.zig");
 const patterns = @import("patterns.zig");
 const unsafe = @import("unsafe.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
+const comptime_flow = @import("comptime_flow.zig");
 const tir = @import("../tir/tir.zig");
 const interp_expr = @import("../comptime/interp_expr.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
@@ -76,6 +77,8 @@ const handlers = blk: {
         .{ .match, patterns.matchExpr },
         .{ .unsafe_block, unsafe.block },
         .{ .comptime_block, comptime_ctx.expr },
+        .{ .comptime_if, comptime_flow.comptimeIf },
+        .{ .for_inline, comptime_flow.inlineFor },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -83,9 +86,8 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .comptime_if => "`comptime if` (T061)",
         .lambda => "lambdas (T074)",
-        .@"for", .for_inline => "`for` loops (T076)",
+        .@"for" => "`for` loops (T076)",
         .try_op, .array_comp => "`?` and comprehensions (T077)",
         .ml_string => "multi-line strings (T112)",
         else => "this expression (a later task)",

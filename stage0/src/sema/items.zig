@@ -236,6 +236,9 @@ const Mod = struct {
     params: std.AutoHashMapUnmanaged(Node.Index, GenericParam) = .empty,
     consts: std.AutoHashMapUnmanaged(Node.Index, struct { state: State, c: Const }) = .empty,
     fns: std.AutoHashMapUnmanaged(Node.Index, Fn) = .empty,
+    /// The type bound to an `inline for` binding while one copy of the
+    /// loop body is checked (`comptime_flow.zig`).
+    bound: std.AutoHashMapUnmanaged(Node.Index, TypeId) = .empty,
 };
 
 /// The checked items of one package. Borrows the `Imports`, `Names` and
@@ -568,6 +571,7 @@ pub const Items = struct {
                     if (c.value == .type) return c.value.type;
                     if (c.type == .err) return .err;
                 },
+                .pat_bind => if (it.mods[m].bound.get(l)) |t| return t,
                 else => {},
             },
             .global => |t| switch (t) {

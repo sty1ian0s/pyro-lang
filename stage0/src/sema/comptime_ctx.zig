@@ -52,6 +52,7 @@ const EvalArena = @import("../comptime/arena.zig").EvalArena;
 const embed = @import("../comptime/embed.zig");
 const interp_ctrl = @import("../comptime/interp_ctrl.zig");
 const limits = @import("../comptime/limits.zig");
+const comptime_flow = @import("comptime_flow.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -84,6 +85,8 @@ pub const Ctx = struct {
     own: ?Bodies = null,
     /// The bodies of the running `checkBodies`, which evaluation fills.
     shared: ?*Bodies = null,
+    /// Where `@compile_log` prints when it is evaluated (§8.5); null drops it.
+    log: ?*std.Io.Writer = null,
 
     pub fn init(gpa: Allocator) Ctx {
         return .{ .gpa = gpa, .values = .init(gpa), .ev = .init(gpa) };
@@ -159,7 +162,7 @@ pub const Ctx = struct {
             .bodies = bs,
             .sink = it.sink,
             .outer = &outer,
-            .hooks = .{ .ctx = cx, .resolve = resolve, .stop = stop },
+            .hooks = .{ .ctx = cx, .resolve = resolve, .stop = stop, .builtin = comptime_flow.evalBuiltin },
         };
         defer mach.deinit();
         ev.attach(&mach);
