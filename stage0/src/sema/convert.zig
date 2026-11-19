@@ -33,25 +33,24 @@ pub const Rational = struct {
         r.den.deinit();
     }
 
-    /// Takes ownership of `num` and `den` (also on error). Asserts `den != 0`.
-    fn init(num: BigInt, den: BigInt) Allocator.Error!Rational {
-        var r: Rational = .{ .num = num, .den = den };
-        errdefer r.deinit();
-        std.debug.assert(!r.den.eqlZero());
-        if (!r.den.isPositive()) {
-            r.den.negate();
-            r.num.negate();
+    /// Normalizes `num / den` in place and moves both into the result. On
+    /// error the caller still owns them (possibly modified). Asserts `den != 0`.
+    fn init(num: *BigInt, den: *BigInt) Allocator.Error!Rational {
+        std.debug.assert(!den.eqlZero());
+        if (!den.isPositive()) {
+            den.negate();
+            num.negate();
         }
-        if (r.num.eqlZero()) {
-            try r.den.set(1);
-            return r;
+        if (num.eqlZero()) {
+            try den.set(1);
+        } else {
+            var g = try BigInt.init(num.allocator);
+            defer g.deinit();
+            try g.gcd(num, den);
+            try divTruncInPlace(num, &g);
+            try divTruncInPlace(den, &g);
         }
-        var g = try BigInt.init(r.num.allocator);
-        defer g.deinit();
-        try g.gcd(&r.num, &r.den);
-        try divTruncInPlace(&r.num, &g);
-        try divTruncInPlace(&r.den, &g);
-        return r;
+        return .{ .num = num.*, .den = den.* };
     }
 };
 
@@ -139,7 +138,7 @@ pub fn parseFloat(gpa: Allocator, text: []const u8) error{ OutOfMemory, TooLarge
     defer pow.deinit();
     try pow.pow(&pow, @intCast(@abs(exp)));
     if (exp > 0) try num.mul(&num, &pow) else try den.copy(pow.toConst());
-    return .{ .float = try .init(num, den) };
+    return .{ .float = try .init(&num, &den) };
 }
 
 /// Binary operators that fold on untyped constants.
@@ -375,7 +374,7 @@ pub const Cast = enum {
 pub fn cast(types: *Types, from: TypeId, to: TypeId, enum_backing: TypeId) ?Cast {
     if (from == to or from == .err or to == .err or from == .noreturn) return .identity;
     if (isUntyped(from)) return .constant;
-    if (enum_backing != .none) return if (enum_backing == to or intWidens(types, enum_backing, to)) .enum_to_int else null;
+    if (enum_backing != .none) return if (enum_backing == to or intWidens(types, enum_backing, to) or backingFitsPtr(types, enum_backing, to)) .enum_to_int else null;
     const from_key = types.get(from);
     const to_key = types.get(to);
     if (from_key == .nominal and from_key.nominal.underlying == to) return .distinct;
@@ -418,6 +417,21 @@ fn intWidens(types: *Types, from: TypeId, to: TypeId) bool {
     if (a != .int or b != .int) return false;
     if (b.int.bits <= a.int.bits) return false;
     return a.int.signedness == b.int.signedness or a.int.signedness == .unsigned;
+}
+
+/// `usize`/`isize` are at least 32 bits (§4.2.2), so a `uN` with N <= 32
+/// widens to `usize`, and a `uN` with N < 32 or an `iN` with N <= 32
+/// widens to `isize`.
+fn backingFitsPtr(types: *Types, from: TypeId, to: TypeId) bool {
+    const a = switch (types.get(from)) {
+        .int => |i| i,
+        else => return false,
+    };
+    return switch (to) {
+        .usize => a.signedness == .unsigned and a.bits <= 32,
+        .isize => if (a.signedness == .unsigned) a.bits < 32 else a.bits <= 32,
+        else => false,
+    };
 }
 
 const IntInfo = struct { signedness: std.builtin.Signedness, bits: u8 };
@@ -538,13 +552,14 @@ fn ratBinary(gpa: Allocator, op: BinOp, x: *const Rational, y: *const Rational) 
             try q.den.set(1);
             var p = try ratBinary(gpa, .mul, &q, y);
             defer p.deinit();
+            const r = try ratBinary(gpa, .sub, x, &p);
             num.deinit();
             den.deinit();
-            return ratBinary(gpa, .sub, x, &p);
+            return r;
         },
         else => unreachable,
     }
-    return Rational.init(num, den);
+    return Rational.init(&num, &den);
 }
 
 /// The value of `r` in float type `F`, rounded to nearest even (§4.2.3);
@@ -825,6 +840,21 @@ test "fold: arbitrary precision, truncating division, rationals" {
     try testing.expectError(error.TooLarge, parseFloat(gpa, "1e999999"));
 }
 
+fn foldFloatsOom(gpa: Allocator) !void {
+    var a = try parseFloat(gpa, "5.5");
+    defer a.deinit();
+    var b = try parseFloat(gpa, "2.25");
+    defer b.deinit();
+    for ([_]BinOp{ .add, .div, .rem }) |op| {
+        var r = try binary(gpa, op, a, b);
+        r.deinit();
+    }
+}
+
+test "fold: no leak or double free on allocation failure" {
+    try testing.checkAllAllocationFailures(testing.allocator, foldFloatsOom, .{});
+}
+
 test "coerce: rules 1-9" {
     var f: Fixture = undefined;
     try f.init();
@@ -898,6 +928,13 @@ test "as table: legal casts and E0307" {
     try testing.expectEqual(.enum_to_int, cast(t, op, u32_, u8_));
     try testing.expectEqual(null, cast(t, op, u8_, .int(.unsigned, 16))); // narrower than backing
     try testing.expectEqual(null, cast(t, op, u8_, .none)); // payload enum
+    try testing.expectEqual(.enum_to_int, cast(t, op, .usize, u8_));
+    try testing.expectEqual(.enum_to_int, cast(t, op, .usize, u32_));
+    try testing.expectEqual(.enum_to_int, cast(t, op, .isize, u8_));
+    try testing.expectEqual(null, cast(t, op, .isize, u32_)); // u32 may not fit a 32-bit isize
+    try testing.expectEqual(.enum_to_int, cast(t, op, .isize, i32_));
+    try testing.expectEqual(null, cast(t, op, .usize, i32_));
+    try testing.expectEqual(null, cast(t, op, .usize, .int(.unsigned, 64)));
 
     const meters = try t.intern(.{ .nominal = .{ .decl = .{ .package = app, .index = 1 }, .kind = .distinct, .name = try f.strings.intern("Meters"), .underlying = .f32 } });
     try testing.expectEqual(.distinct, cast(t, meters, .f32, .none));
