@@ -9,7 +9,7 @@
 //! [[package]]
 //! name = "util"
 //! version = "1.0.0"
-//! source = "registry"          # or "registry+<name>", "git+<url>#<commit>", "path+<dir>"
+//! source = "registry"          # or "registry+<name>", "git+<url>[?<ref>]#<commit>", "path+<dir>"
 //! sha256 = "<64 lowercase hex digits>"
 //! ```
 //!
@@ -30,8 +30,10 @@ pub const Hash = [32]u8;
 pub const Source = union(enum) {
     /// A registry archive; null is the default registry.
     registry: ?[]const u8,
-    /// A git checkout at an exact commit.
-    git: struct { url: []const u8, rev: []const u8 },
+    /// A git checkout at an exact commit. `ref` is the manifest reference the
+    /// commit was locked for (`tag=v1`, `branch=main`, `rev=abc`; empty for the
+    /// default branch), so a changed reference changes the lock.
+    git: struct { url: []const u8, rev: []const u8, ref: []const u8 = "" },
     /// A local directory, relative to the root manifest's directory.
     path: []const u8,
 };
@@ -201,7 +203,16 @@ fn parseSource(s: []const u8) ?Source {
     if (std.mem.startsWith(u8, s, "git+")) {
         const hash = std.mem.lastIndexOfScalar(u8, s, '#') orelse return null;
         if (hash <= "git+".len or hash + 1 == s.len) return null;
-        return .{ .git = .{ .url = s["git+".len..hash], .rev = s[hash + 1 ..] } };
+        var url = s["git+".len..hash];
+        var ref: []const u8 = "";
+        if (std.mem.lastIndexOfScalar(u8, url, '?')) |q| for ([_][]const u8{ "tag=", "branch=", "rev=" }) |k| {
+            if (std.mem.startsWith(u8, url[q + 1 ..], k)) {
+                ref = url[q + 1 ..];
+                url = url[0..q];
+                break;
+            }
+        };
+        return .{ .git = .{ .url = url, .rev = s[hash + 1 ..], .ref = ref } };
     }
     return null;
 }
@@ -238,7 +249,7 @@ pub fn write(gpa: std.mem.Allocator, packages: []const Package, w: *std.Io.Write
         defer buf.deinit();
         switch (p.source) {
             .registry => |r| if (r) |name| try buf.writer.print("registry+{s}", .{name}) else try buf.writer.writeAll("registry"),
-            .git => |g| try buf.writer.print("git+{s}#{s}", .{ g.url, g.rev }),
+            .git => |g| try buf.writer.print("git+{s}{s}{s}#{s}", .{ g.url, if (g.ref.len == 0) "" else "?", g.ref, g.rev }),
             .path => |d| try buf.writer.print("path+{s}", .{d}),
         }
         try toml.writeValue(.{ .string = buf.written() }, w);
@@ -431,7 +442,7 @@ fn hashOf(byte: u8) Hash {
 
 const sample = [_]Package{
     .{ .name = "util", .version = ver("1.0.0"), .source = .{ .path = "../util" }, .sha256 = hashOf(0xab) },
-    .{ .name = "gfx", .version = ver("2.0.1"), .source = .{ .git = .{ .url = "https://example.com/gfx.git", .rev = "0123abcd" } }, .sha256 = hashOf(0x01) },
+    .{ .name = "gfx", .version = ver("2.0.1"), .source = .{ .git = .{ .url = "https://example.com/gfx.git", .rev = "0123abcd", .ref = "tag=v2.0.1" } }, .sha256 = hashOf(0x01) },
     .{ .name = "math", .version = ver("1.9.0-rc.1+b7"), .source = .{ .registry = null }, .sha256 = hashOf(0x10) },
     .{ .name = "math", .version = ver("0.4.2"), .source = .{ .registry = "internal" }, .sha256 = hashOf(0xff) },
 };
@@ -448,6 +459,8 @@ test "round-trip: render, parse, render is byte-identical and sorted" {
     try testing.expectEqual(4, lock.packages.len);
     try testing.expectEqualStrings("gfx", lock.packages[0].name);
     try testing.expectEqualStrings("0123abcd", lock.packages[0].source.git.rev);
+    try testing.expectEqualStrings("https://example.com/gfx.git", lock.packages[0].source.git.url);
+    try testing.expectEqualStrings("tag=v2.0.1", lock.packages[0].source.git.ref);
     try testing.expectEqual(ver("0.4.2"), lock.packages[1].version);
     try testing.expectEqualStrings("internal", lock.packages[1].source.registry.?);
     try testing.expectEqualStrings("b7", lock.packages[2].version.build);

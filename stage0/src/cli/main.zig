@@ -30,6 +30,9 @@ const Compilation = @import("../driver/Compilation.zig");
 const render_json = @import("../diag/render_json.zig");
 const render_human = @import("../diag/render_human.zig");
 const ast_dump = @import("../ast/dump.zig");
+const diag = @import("../diag/diag.zig");
+const SourceMap = @import("../source/SourceMap.zig");
+const cmd_deps = @import("cmd_deps.zig");
 
 /// Exit statuses (§13.8).
 pub const Exit = enum(u8) { ok = 0, failed = 1, usage = 2, internal = 3 };
@@ -48,10 +51,10 @@ const commands = std.enums.EnumArray(Command, *const fn (*Ctx) anyerror!Exit).in
     .doc = notImplemented,
     .lsp = notImplemented,
     .profile = notImplemented,
-    .add = notImplemented,
-    .remove = notImplemented,
-    .update = notImplemented,
-    .fetch = notImplemented,
+    .add = cmd_deps.run,
+    .remove = cmd_deps.run,
+    .update = cmd_deps.run,
+    .fetch = cmd_deps.run,
     .publish = notImplemented,
     .clean = notImplemented,
 });
@@ -83,7 +86,7 @@ pub const usage_text =
     \\
     \\debug: --dump-tokens  --dump-ast  --stop-after lex|parse
     \\
-    \\stage 0: only `pyro check file.pr...` is implemented.
+    \\stage 0: only `pyro check file.pr...`, add, remove, update and fetch are implemented.
     \\
 ;
 
@@ -106,6 +109,8 @@ pub const Ctx = struct {
     gpa: Allocator,
     /// The process I/O implementation.
     io: Io,
+    /// The process environment (`std.process.Init.environ_map`).
+    environ: *const std.process.Environ.Map,
     /// The parsed command line; slices live until the command returns.
     opts: Options,
     /// Where the command writes; `main` flushes both streams afterwards.
@@ -134,7 +139,7 @@ pub fn main(init: std.process.Init) u8 {
     var stdout = Io.File.stdout().writer(init.io, &out_buf);
     var stderr = Io.File.stderr().writer(init.io, &err_buf);
     const streams: Streams = .{ .stdout = &stdout.interface, .stderr = &stderr.interface, .stderr_file = .stderr() };
-    const status = run(init.gpa, init.io, if (argv.len > 0) argv[1..] else &.{}, streams) catch |err| {
+    const status = run(init.gpa, init.io, init.environ_map, if (argv.len > 0) argv[1..] else &.{}, streams) catch |err| {
         stdout.interface.flush() catch {};
         stderr.interface.flush() catch {};
         return internalError(@errorName(err));
@@ -162,7 +167,7 @@ fn internalError(what: []const u8) u8 {
 
 /// Runs the command line `args` (without the program name). Returns an error
 /// only for internal failures, which the caller reports as status 3.
-pub fn run(gpa: Allocator, io: Io, args: []const []const u8, out: Streams) !Exit {
+pub fn run(gpa: Allocator, io: Io, environ: *const std.process.Environ.Map, args: []const []const u8, out: Streams) !Exit {
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -183,7 +188,7 @@ pub fn run(gpa: Allocator, io: Io, args: []const []const u8, out: Streams) !Exit
         error.OutOfMemory => return error.OutOfMemory,
     };
     if (opts.debug_ice) @panic("forced by --debug-ice");
-    var ctx: Ctx = .{ .gpa = gpa, .io = io, .opts = opts, .out = out };
+    var ctx: Ctx = .{ .gpa = gpa, .io = io, .environ = environ, .opts = opts, .out = out };
     return commands.get(opts.command)(&ctx);
 }
 
@@ -224,15 +229,7 @@ fn check(ctx: *Ctx) !Exit {
     try comp.run();
 
     const ds = comp.sink.finish();
-    switch (o.message_format) {
-        .json => try render_json.renderAll(ctx.out.stdout, &comp.sources, ds),
-        .human => {
-            const mode: Io.Terminal.Mode = if (ctx.out.stderr_file) |f|
-                try render_human.colorMode(ctx.io, f, o.color)
-            else if (o.color == .always) .escape_codes else .no_color;
-            try render_human.renderAll(.{ .writer = ctx.out.stderr, .mode = mode }, &comp.sources, ds);
-        },
-    }
+    try renderDiagnostics(ctx, &comp.sources, ds);
     for (comp.files.items) |*f| {
         if (f.poisoned) continue;
         if (o.dump_tokens) try dumpTokens(ctx.out.stdout, &comp, f);
@@ -246,6 +243,20 @@ fn check(ctx: *Ctx) !Exit {
         return .internal;
     }
     return .ok;
+}
+
+/// Writes `ds` per `--message-format`: human text to stderr, or one JSON
+/// object per line to stdout.
+pub fn renderDiagnostics(ctx: *Ctx, sm: *const SourceMap, ds: []const diag.Diagnostic) !void {
+    switch (ctx.opts.message_format) {
+        .json => try render_json.renderAll(ctx.out.stdout, sm, ds),
+        .human => {
+            const mode: Io.Terminal.Mode = if (ctx.out.stderr_file) |f|
+                try render_human.colorMode(ctx.io, f, ctx.opts.color)
+            else if (ctx.opts.color == .always) .escape_codes else .no_color;
+            try render_human.renderAll(.{ .writer = ctx.out.stderr, .mode = mode }, sm, ds);
+        },
+    }
 }
 
 /// Whether both a stage-3 (resolve) and a stage-4 (check) hook (B.1) are
@@ -280,7 +291,8 @@ const Captured = struct {
     fn init(args: []const []const u8) !Captured {
         var c: Captured = .{ .exit = undefined, .stdout = .init(testing.allocator), .stderr = .init(testing.allocator) };
         errdefer c.deinit();
-        c.exit = try run(testing.allocator, testing.io, args, .{ .stdout = &c.stdout.writer, .stderr = &c.stderr.writer });
+        const env: std.process.Environ.Map = .init(testing.allocator);
+        c.exit = try run(testing.allocator, testing.io, &env, args, .{ .stdout = &c.stdout.writer, .stderr = &c.stderr.writer });
         return c;
     }
 
@@ -316,7 +328,10 @@ test "unknown flag and unknown command exit 2" {
 
 test "every command dispatches; stubs report not implemented" {
     for (std.enums.values(Command)) |cmd| {
-        if (cmd == .check) continue;
+        switch (cmd) {
+            .check, .add, .remove, .update, .fetch => continue,
+            else => {},
+        }
         var c: Captured = try .init(&.{@tagName(cmd)});
         defer c.deinit();
         try testing.expectEqual(Exit.internal, c.exit);
