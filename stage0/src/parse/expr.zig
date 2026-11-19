@@ -394,10 +394,17 @@ fn parseAnonLit(p: *Parser) Error!Node.Index {
 }
 
 /// `array_lit`: empty, a list, `[value; count]` or a comprehension.
+/// `[N]T` and `[]T` in expression position are types (`const Quad = [4]f32;`,
+/// §3.6 `type_only`): no expression can follow `[...]` with a type's first
+/// token, so the parser backs up and reads a type.
 fn parseArray(p: *Parser) Error!Node.Index {
     const lb = p.next();
-    if (p.eat(.r_bracket) != null) return p.addNode(lb, .{ .array_lit = .{ .elems = &.{} } });
+    if (p.eat(.r_bracket) != null) {
+        if (startsArrayElemType(p.peek(0))) return reparseAsType(p, lb);
+        return p.addNode(lb, .{ .array_lit = .{ .elems = &.{} } });
+    }
     const first = try parseExpr(p);
+    if (p.peek(0) == .r_bracket and startsArrayElemType(p.peek(1))) return reparseAsType(p, lb);
     switch (p.peek(0)) {
         .semicolon => {
             _ = p.next();
@@ -429,6 +436,18 @@ fn parseArray(p: *Parser) Error!Node.Index {
             return p.addNode(lb, .{ .array_lit = .{ .elems = p.scratch.items[top..] } });
         },
     }
+}
+
+fn startsArrayElemType(k: TokenKind) bool {
+    return switch (k) {
+        .ident, .kw_fn, .kw_Self, .kw_type => true,
+        else => false,
+    };
+}
+
+fn reparseAsType(p: *Parser, lb: TokenIndex) Error!Node.Index {
+    p.tok_i = lb;
+    return types.parseType(p);
 }
 
 /// `"|" lambda_param,* "|" expr` or `"||" expr`; the body keeps `ns`.
@@ -789,6 +808,10 @@ test "every primary form" {
     try expectTree("(a, b, c,)", "tuple(ident:a ident:b ident:c)");
     try expectTree("[]", "array_lit:[");
     try expectTree("[1, 2,]", "array_lit(int_lit:1 int_lit:2)");
+    // `[N]T` / `[]T` after `=` are types (`const Quad = [4]f32;`).
+    try expectTree("[4]f32", "array_type(int_lit:4 path:f32)");
+    try expectTree("[]u8", "slice_type(path:u8)");
+    try expectTree("[1][0]", "index(array_lit(int_lit:1) int_lit:0)");
     try expectTree("[0; 16]", "array_repeat(int_lit:0 int_lit:16)");
     try expectTree("[x for x in xs]", "array_comp(ident:x pat_bind:x _ ident:xs _)");
     try expectTree("[x for x, i in xs where i > 2]", "array_comp(ident:x pat_bind:x pat_bind:i ident:xs binary(ident:i int_lit:2))");
