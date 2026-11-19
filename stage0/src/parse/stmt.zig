@@ -436,6 +436,26 @@ test "statement recovery keeps the rest of the block" {
     try testing.expectEqual(2, sink.finish().len);
 }
 
+test "statement recovery stops at the block's `}` inside an unclosed bracket" {
+    try expectFail("{ let x = (1 + ; y(); }", "expected an expression, found `;`");
+    try expectFail("{ let x = [1, ; y(); }", "expected an expression, found `;`");
+    try expectFail("{ g(1, 2; h(); }", "expected `)`, found `;`");
+    try expectFail("{ g(1 2 }", "expected `)`, found `2`");
+    // Braces opened inside the broken statement still close it.
+    try expectFail("{ f(|| { x y }); g(); }", "expected `;`, found `y`");
+    var sink: diag.Sink = .init(testing.allocator, testing.io);
+    defer sink.deinit();
+    const src = "{ let x = (1 + ; y(); }";
+    const tokens = try lexer.tokenize(testing.allocator, src, @fromBackingInt(0), &sink, .{ .scan_literal = literals.scan });
+    var p: Parser = .init(testing.allocator, src, tokens, @fromBackingInt(0), &sink);
+    defer p.deinit();
+    const blk = p.ast.data(try parseBlock(&p)).block;
+    try testing.expectEqual(.eof, p.peek(0));
+    try testing.expectEqual(2, blk.stmts.len);
+    try testing.expectEqual(.invalid, p.ast.kind(blk.stmts[0]));
+    try testing.expectEqual(.call, p.ast.kind(blk.stmts[1]));
+}
+
 test "E0208: spawn, launch and return tail need a call" {
     // Acceptance.
     try expectCodes("{ nursery { spawn work(1); spawn w.run(2); } }", "");

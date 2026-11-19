@@ -277,6 +277,10 @@ pub fn recover(p: *Parser, sync: Sync, start: TokenIndex) Allocator.Error!Node.I
     const n = try p.addNode(at, .{ .invalid = .{} });
     try p.sink.poison(.{ .file = p.file, .node = n.int() });
 
+    if (sync == .stmt) {
+        try p.skipStmt(start);
+        return n;
+    }
     const kinds = p.ast.tokens.items(.kind);
     var depth: u32 = 0;
     for (kinds[start..at]) |k| {
@@ -290,11 +294,11 @@ pub fn recover(p: *Parser, sync: Sync, start: TokenIndex) Allocator.Error!Node.I
         } else if (isCloser(k)) {
             if (depth == 0) switch (sync) {
                 .item => {}, // stray closer: skip it
-                .stmt => if (k == .r_brace) break,
+                .stmt => unreachable,
                 .delimiter => break,
             } else {
                 depth -= 1;
-                if (depth == 0 and k == .r_brace and sync != .delimiter) {
+                if (depth == 0 and k == .r_brace and sync == .item) {
                     _ = p.next();
                     break;
                 }
@@ -312,6 +316,50 @@ pub fn recover(p: *Parser, sync: Sync, start: TokenIndex) Allocator.Error!Node.I
         _ = p.next();
     }
     return n;
+}
+
+/// `.stmt` recovery. Braces are matched apart from parentheses and brackets:
+/// a `}` with no `{` open since `start` closes the enclosing block and stays,
+/// even inside an unclosed `(` or `[`, and a `;` with no `{` open ends the
+/// statement, abandoning unclosed `(` and `[`. A `}` that closes everything
+/// opened since `start` ends recovery after it.
+/// shortcut: an array repeat `[v; n]` broken before its `;` ends there (a
+/// second error at `n]`); track a repeat `;` per `[` if that shows up.
+fn skipStmt(p: *Parser, start: TokenIndex) Allocator.Error!void {
+    // Open brackets since `start`, innermost last: true for `{` or `.{`.
+    var open: std.ArrayList(bool) = .empty;
+    defer open.deinit(p.gpa);
+    var braces: u32 = 0;
+    const kinds = p.ast.tokens.items(.kind);
+    var i = start;
+    while (true) : (i += 1) {
+        const k = kinds[i];
+        const scanning = i < p.tok_i; // brackets opened before the error count
+        if (!scanning) {
+            if (k == .eof) return;
+            if (braces == 0 and k == .r_brace) return;
+            if (braces == 0 and k == .semicolon) {
+                _ = p.next();
+                return;
+            }
+        }
+        if (isOpener(k)) {
+            const brace = k == .l_brace or k == .dot_l_brace;
+            try open.append(p.gpa, brace);
+            if (brace) braces += 1;
+        } else if (k == .r_brace) {
+            while (open.items.len > 0 and !open.pop().?) {}
+            braces -|= 1;
+            if (!scanning and open.items.len == 0) {
+                _ = p.next();
+                return;
+            }
+        } else if (isCloser(k)) {
+            // A stray `)` or `]`, or one that does not match, is skipped.
+            if (open.items.len > 0 and !open.items[open.items.len - 1]) _ = open.pop();
+        }
+        if (!scanning) _ = p.next();
+    }
 }
 
 /// Balanced skip for grammar stubs: consumes tokens until, at nesting depth
@@ -614,6 +662,17 @@ test "statement and delimiter recovery stop points" {
     _ = try q.recover(.stmt, 0);
     try testing.expectEqual(.ident, q.peek(0));
     try testing.expectEqual(6, q.tok_i);
+}
+
+test "an unclosed `(` in a statement does not swallow the next items" {
+    var r: Parsed = undefined;
+    try r.init("fn f() {\n    g(1, 2;\n    h();\n}\n\nfn k() {\n    let x = 1;\n}\n\nfn m() -> u32 { 3 }\n");
+    defer r.deinit();
+    const ds = r.sink.finish();
+    try testing.expectEqual(1, ds.len);
+    try testing.expectEqualStrings("expected `)`, found `;`", ds[0].message);
+    var buf: [4]Ast.NodeKind = undefined;
+    try testing.expectEqualSlices(Ast.NodeKind, &.{ .fn_decl, .fn_decl, .fn_decl }, r.itemKinds(&buf));
 }
 
 test "no parse error is reported at a token the lexer rejected" {
