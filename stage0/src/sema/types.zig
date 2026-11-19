@@ -65,6 +65,21 @@ pub const TypeId = enum(u32) {
         const base: u32 = if (signedness == .signed) first_int + 64 else first_int;
         return @fromBackingInt(base + bits - 1);
     }
+
+    /// Whether `t` is a fixed id (a simple type, `uN` or `iN`): its key
+    /// needs no lookup and it is never `distinct`.
+    pub inline fn isFixed(t: TypeId) bool {
+        return @backingInt(t) < first_interned;
+    }
+
+    /// The signedness and width of `uN` / `iN`; null for other types,
+    /// `usize` and `isize` included.
+    pub inline fn fixedInt(t: TypeId) ?@FieldType(Key, "int") {
+        const i = @backingInt(t);
+        if (i < first_int or i >= first_interned) return null;
+        const k = i - first_int;
+        return .{ .signedness = if (k >= 64) .signed else .unsigned, .bits = @intCast(k % 64 + 1) };
+    }
 };
 
 /// Package identity for nominal keys (§13.4): incompatible lines of one

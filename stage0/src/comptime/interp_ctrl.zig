@@ -123,18 +123,31 @@ const Resume = struct { block: tir.Block, pc: u32 };
 const Frame = struct {
     id: tir.FnId,
     func: *const tir.Func,
+    /// `func`'s instructions decoded once (`Machine.decode`) and their types.
+    code: []const tir.Data,
+    tys: []const TypeId,
+    /// The kinds of `func`'s locals.
+    kinds: []const tir.LocalKind,
     /// One per instruction of `func`.
     regs: []Reg,
     /// One per local of `func`; parameters first.
     locals: []Reg,
     block: tir.Block = .from(0),
+    /// The instructions of `block`.
+    insts: []const Ref,
     /// Index of the current instruction in `block`.
     pc: u32 = 0,
     pending: std.ArrayList(Pending) = .empty,
     resume_at: std.ArrayList(Resume) = .empty,
 
-    fn at(f: *const Frame) Ref {
-        return f.func.blockInsts(f.block)[f.pc];
+    inline fn at(f: *const Frame) Ref {
+        return f.insts[f.pc];
+    }
+
+    fn goto(f: *Frame, b: tir.Block, pc: u32) void {
+        f.block = b;
+        f.insts = f.func.blockInsts(b);
+        f.pc = pc;
     }
 };
 
@@ -170,11 +183,16 @@ pub const Machine = struct {
     hooks: ?Hooks = null,
     frames: std.ArrayList(*Frame) = .empty,
     scratch: std.ArrayList(Reg) = .empty,
+    /// The decoded instructions of each function called so far.
+    decoded: std.AutoHashMapUnmanaged(tir.FnId, []tir.Data) = .empty,
 
     pub fn deinit(m: *Machine) void {
         while (m.frames.items.len > 0) m.pop();
         m.frames.deinit(m.gpa);
         m.scratch.deinit(m.gpa);
+        var it = m.decoded.valueIterator();
+        while (it.next()) |c| m.gpa.free(c.*);
+        m.decoded.deinit(m.gpa);
         m.* = undefined;
     }
 
@@ -188,8 +206,8 @@ pub const Machine = struct {
         const base = m.frames.items.len;
         errdefer while (m.frames.items.len > base) m.pop();
         try m.push(callee, regs);
+        var f = m.frames.getLast();
         while (true) {
-            const f = m.frames.getLast();
             const r = f.at();
             const next = m.step(f, r) catch |e| switch (e) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -202,16 +220,16 @@ pub const Machine = struct {
             };
             switch (next) {
                 .next => f.pc += 1,
-                .moved => {},
+                .moved => f = m.frames.items[m.frames.items.len - 1],
                 .ret => |res| {
                     m.pop();
                     if (m.frames.items.len == base) return switch (res) {
                         .value => |v| v,
                         else => m.fail("views returned by a comptime evaluation"),
                     };
-                    const caller = m.frames.getLast();
-                    caller.regs[caller.at().int()] = res;
-                    caller.pc += 1;
+                    f = m.frames.getLast();
+                    f.regs[f.at().int()] = res;
+                    f.pc += 1;
                 },
             }
         }
@@ -230,7 +248,7 @@ pub const Machine = struct {
     }
 
     /// Spends one step of the budget.
-    fn tick(m: *Machine) (Allocator.Error || error{OverBudget})!void {
+    inline fn tick(m: *Machine) (Allocator.Error || error{OverBudget})!void {
         const b = m.budget orelse return;
         if (b.* == 0) {
             if (m.hooks) |h| try h.stop(h.ctx, m, .budget);
@@ -254,6 +272,7 @@ pub const Machine = struct {
 
     fn push(m: *Machine, id: tir.FnId, args: []const Reg) (Allocator.Error || error{Unsupported})!void {
         const func = if (m.bodies.fns.items[id.int()].func) |*fx| fx else return m.fail(unchecked_callee);
+        const code = try m.decode(id, func);
         const f = try m.gpa.create(Frame);
         errdefer m.gpa.destroy(f);
         const regs = try m.gpa.alloc(Reg, func.insts.len);
@@ -263,8 +282,20 @@ pub const Machine = struct {
         @memset(regs, .none);
         @memset(locals, .none);
         @memcpy(locals[0..args.len], args);
-        f.* = .{ .id = id, .func = func, .regs = regs, .locals = locals };
+        f.* = .{ .id = id, .func = func, .code = code, .tys = func.insts.items(.ty), .kinds = func.locals.items(.kind), .regs = regs, .locals = locals, .insts = func.blockInsts(.from(0)) };
         try m.frames.append(m.gpa, f);
+    }
+
+    /// The instructions of `func` (function `id`) decoded, so that a step
+    /// does not decode its instruction again.
+    fn decode(m: *Machine, id: tir.FnId, func: *const tir.Func) Allocator.Error![]const tir.Data {
+        const gop = try m.decoded.getOrPut(m.gpa, id);
+        if (gop.found_existing) return gop.value_ptr.*;
+        errdefer m.decoded.removeByPtr(gop.key_ptr);
+        const code = try m.gpa.alloc(tir.Data, func.insts.len);
+        for (code, 0..) |*c, i| c.* = func.data(.from(i));
+        gop.value_ptr.* = code;
+        return code;
     }
 
     fn pop(m: *Machine) void {
@@ -293,16 +324,16 @@ pub const Machine = struct {
     // -----------------------------------------------------------------------
     // Places
 
-    fn val(f: *const Frame, r: Ref) Value {
+    inline fn val(f: *const Frame, r: Ref) Value {
         return f.regs[r.int()].value;
     }
 
-    fn placeOf(f: *const Frame, r: Ref) Place {
+    inline fn placeOf(f: *const Frame, r: Ref) Place {
         return f.regs[r.int()].place;
     }
 
     /// The register stored at `p`, sharing its storage.
-    fn load(p: Place) Reg {
+    inline fn load(p: Place) Reg {
         if (p.path.len == 0) return p.root.*;
         var v = p.root.value;
         for (p.path) |s| v = switch (s) {
@@ -326,9 +357,17 @@ pub const Machine = struct {
 
     /// A copy of the register stored at `p` that later stores leave alone.
     fn read(m: *Machine, p: Place) Allocator.Error!Reg {
-        return switch (load(p)) {
-            .value => |v| .{ .value = try m.own(v) },
-            else => |r| r,
+        return m.copy(load(p));
+    }
+
+    /// `r` with its value `own`ed.
+    inline fn copy(m: *Machine, r: Reg) Allocator.Error!Reg {
+        return switch (r) {
+            .value => |v| switch (v.data) {
+                .aggregate, .variant => .{ .value = try m.own(v) },
+                else => r, // nothing to copy
+            },
+            else => r,
         };
     }
 
@@ -350,10 +389,7 @@ pub const Machine = struct {
 
     /// Writes `r` at `p`: the one member at its path, in place.
     fn store(m: *Machine, p: Place, r: Reg) Allocator.Error!void {
-        const new: Reg = switch (r) {
-            .value => |v| .{ .value = try m.own(v) },
-            else => r,
-        };
+        const new = try m.copy(r);
         if (p.path.len == 0) {
             p.root.* = new;
             return;
@@ -398,14 +434,39 @@ pub const Machine = struct {
     // -----------------------------------------------------------------------
     // Instructions
 
+    /// Executes instruction `r` of `f`. The instructions loops run most
+    /// are here; the rest are `stepAny`'s, whose stack frame is large in a
+    /// debug build.
     fn step(m: *Machine, f: *Frame, r: Ref) StepError!Next {
+        const ri = r.int();
+        const out = &f.regs[ri];
+        switch (f.code[ri]) {
+            .int => |x| out.* = .{ .value = .{ .ty = f.tys[ri], .data = .{ .scalar = x.value } } },
+            .block_param => {},
+            .local => |x| {
+                const slot = &f.locals[x.local.int()];
+                out.* = if (f.kinds[x.local.int()] == .param_mut) slot.* else .{ .place = .{ .root = slot } };
+            },
+            inline .load, .move => |x| out.* = try m.read(placeOf(f, x.place)),
+            .store => |x| try m.store(placeOf(f, x.place), f.regs[x.value.int()]),
+            inline .add, .sub, .mul, .div, .rem, .bit_and, .bit_or, .bit_xor, .shl, .shr, .eq, .ne, .lt, .le, .gt, .ge => |x, op| out.* = .{ .value = try m.in.binary(op, f.tys[ri], val(f, x.lhs), val(f, x.rhs)) },
+            .br => |x| return m.branch(f, x.target, x.args),
+            .cond_br => |x| return m.branch(f, if (val(f, x.cond).data.scalar != 0) x.then else x.@"else", &.{}),
+            .scope_end => |x| return m.scopeEnd(f, x.scope),
+            else => return m.stepAny(f, r),
+        }
+        return .next;
+    }
+
+    fn stepAny(m: *Machine, f: *Frame, r: Ref) StepError!Next {
         const func = f.func;
-        const ty = func.typeOf(r);
+        const ri = r.int();
+        const ty = f.tys[ri];
         const in = &m.in;
-        const out = &f.regs[r.int()];
-        const d = func.data(r);
+        const out = &f.regs[ri];
+        const d = f.code[ri];
         const v: Value = switch (d) {
-            .int => |x| .{ .ty = ty, .data = .{ .scalar = x.value } },
+            .int, .block_param, .local, .load, .move, .store, .add, .sub, .mul, .div, .rem, .bit_and, .bit_or, .bit_xor, .shl, .shr, .eq, .ne, .lt, .le, .gt, .ge, .br, .cond_br, .scope_end => unreachable, // `step`'s
             .float => |x| if (in.base(ty) == .f32)
                 .{ .ty = ty, .data = Value.float(.f32, @bitCast(x.bits)).data }
             else
@@ -416,15 +477,9 @@ pub const Machine = struct {
                 const b = m.bodies.fns.items[x.func.int()];
                 break :blk .{ .ty = ty, .data = .{ .fn_ref = .{ .module = b.module, .node = b.node } } };
             },
-            .block_param => return .next,
             // `unsafe.block` marks each `unsafe` block's entry with a scope.
             .scope_begin => return if (m.isUnsafe(f, r)) m.forbid("`unsafe` blocks") else .next,
 
-            .local => |x| {
-                const slot = &f.locals[x.local.int()];
-                out.* = if (func.local(x.local).kind == .param_mut) slot.* else .{ .place = .{ .root = slot } };
-                return .next;
-            },
             .deref => |x| switch (f.regs[x.ptr.int()]) {
                 .place => {
                     out.* = f.regs[x.ptr.int()];
@@ -447,10 +502,6 @@ pub const Machine = struct {
                 out.* = .{ .place = try m.sub(placeOf(f, x.base), .{ .payload = x.index }) };
                 return .next;
             },
-            inline .load, .move => |x| {
-                out.* = try m.read(placeOf(f, x.place));
-                return .next;
-            },
             .view => |x| blk: {
                 const p = placeOf(f, x.place);
                 // A view shares the storage: §5.4.2 forbids writes to it while the view lives.
@@ -463,13 +514,8 @@ pub const Machine = struct {
                 out.* = f.regs[x.place.int()];
                 return .next;
             },
-            .store => |x| {
-                try m.store(placeOf(f, x.place), f.regs[x.value.int()]);
-                return .next;
-            },
 
-            inline .add, .sub, .mul, .div, .rem, .bit_and, .bit_or, .bit_xor, .shl, .shr, .eq, .ne, .lt, .le, .gt, .ge => |x| try in.binary(func.op(r), ty, val(f, x.lhs), val(f, x.rhs)),
-            inline .neg, .bit_not, .not => |x| try in.unary(func.op(r), val(f, x.operand)),
+            inline .neg, .bit_not, .not => |x| try in.unary(d, val(f, x.operand)),
             .splat => |x| try in.splat(ty, val(f, x.scalar)),
             .swizzle => |x| try in.swizzle(ty, val(f, x.vec), x.lanes),
             .cast => |x| blk: {
@@ -510,16 +556,12 @@ pub const Machine = struct {
 
             .@"defer" => |x| return m.register(f, x.scope, x.body, false),
             .@"errdefer" => |x| return m.register(f, x.scope, x.body, true),
-            .scope_end => |x| return m.scopeEnd(f, x.scope),
             .defer_end => {
                 const at = f.resume_at.pop().?;
-                f.block = at.block;
-                f.pc = at.pc;
+                f.goto(at.block, at.pc);
                 return .moved;
             },
 
-            .br => |x| return m.branch(f, x.target, x.args),
-            .cond_br => |x| return m.branch(f, if (val(f, x.cond).data.scalar != 0) x.then else x.@"else", &.{}),
             .switch_br => |x| {
                 const key = val(f, x.value).data.scalar;
                 for (x.cases) |c| if (c.key() == key) return m.branch(f, c.block, &.{});
@@ -559,10 +601,10 @@ pub const Machine = struct {
     /// to an earlier block (a loop's back edge) spends budget.
     fn branch(m: *Machine, f: *Frame, target: tir.Block, args: []const Ref) StepError!Next {
         if (target.int() <= f.block.int()) try m.tick();
+        f.goto(target, 0);
+        if (args.len == 0) return .moved;
         const regs = try m.gather(f, args);
-        for (regs, f.func.blockInsts(target)[0..regs.len]) |a, p| f.regs[p.int()] = a;
-        f.block = target;
-        f.pc = 0;
+        for (regs, f.insts[0..regs.len]) |a, p| f.regs[p.int()] = a;
         return .moved;
     }
 
@@ -597,8 +639,7 @@ pub const Machine = struct {
             const p = f.pending.pop().?;
             if (p.err_only and !m.errorRoute(f)) continue;
             try f.resume_at.append(m.gpa, .{ .block = f.block, .pc = f.pc });
-            f.block = p.body;
-            f.pc = 0;
+            f.goto(p.body, 0);
             return .moved;
         }
         return .next;

@@ -88,13 +88,24 @@ pub fn report(m: *Machine, why: Stop) Allocator.Error!void {
     };
     defer m.gpa.free(msg);
     const help: []const []const u8 = if (why == .budget) &.{"raise it with `@set_eval_quota(n)` inside the evaluation"} else &.{};
+    // §8.6: E0808 is reported at the evaluation, the outermost frame; the
+    // step that ran out leads the trace instead.
+    var at = tr.span;
+    var trace = tr.frames;
+    if (why == .budget and trace.len > 0) {
+        trace = try m.gpa.alloc(diag.TraceFrame, tr.frames.len);
+        trace[0] = .{ .span = tr.span, .note = "the budget ran out here" };
+        @memcpy(trace[1..], tr.frames[0 .. tr.frames.len - 1]);
+        at = tr.frames[tr.frames.len - 1].span;
+    }
+    defer if (trace.ptr != tr.frames.ptr) m.gpa.free(trace);
     try m.sink.emit(.{
         .code = code,
         .severity = .of(code),
         .message = msg,
-        .spans = &.{.{ .span = tr.span, .primary = true }},
+        .spans = &.{.{ .span = at, .primary = true }},
         .help = help,
-        .trace = tr.frames,
+        .trace = trace,
     });
 }
 
@@ -180,11 +191,18 @@ test "an infinite loop is E0808 with the comptime trace" {
         \\fn top() -> u64 { forever() }
     );
     defer x.deinit();
+    // The evaluation site, as the driver passes it: here the name `top`.
+    const src = x.f.p.asts[0].source;
+    const site: u32 = @intCast(std.mem.indexOf(u8, src, "top").?);
+    x.m.outer = &.{.{ .span = .{ .file = @fromBackingInt(0), .start = site, .end = site + 3 }, .note = "in this comptime evaluation" }};
     const r, const ev = try x.eval(1000, "top", &.{});
     try testing.expectError(error.OverBudget, r);
     try testing.expect(ev.reported);
-    try x.expectDiag(.E0808, "comptime evaluation exceeded its budget of 1000 backward branches and calls", "loop", &.{"in call to `forever`"});
-    try testing.expectEqualStrings("raise it with `@set_eval_quota(n)` inside the evaluation", x.sink.finish()[0].help[0]);
+    // Reported at the evaluation; the trace starts where the budget ran out.
+    try x.expectDiag(.E0808, "comptime evaluation exceeded its budget of 1000 backward branches and calls", "top", &.{ "the budget ran out here", "in call to `forever`" });
+    const d = x.sink.finish()[0];
+    try testing.expectEqualStrings("loop", src[d.trace[0].span.start..d.trace[0].span.end]);
+    try testing.expectEqualStrings("raise it with `@set_eval_quota(n)` inside the evaluation", d.help[0]);
 }
 
 test "@set_eval_quota raises the budget of its evaluation and never lowers it" {
