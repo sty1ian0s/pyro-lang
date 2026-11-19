@@ -1,4 +1,3 @@
-//@ expected-fail: T051
 // §12.1, §12.2, §8.7: each unsafe operation outside `unsafe`. The body of an `@unsafe`
 // function is not implicitly an `unsafe` block.
 

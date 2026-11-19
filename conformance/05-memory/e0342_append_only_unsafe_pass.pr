@@ -1,4 +1,3 @@
-//@ expected-fail: T082
 //@ covers: E0342
 // §5.4.2: an `@append_only` method whose body contains an `unsafe` block.
 

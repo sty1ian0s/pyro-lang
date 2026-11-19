@@ -1,6 +1,5 @@
 //@ stop-after: check
 //@ covers: E0207
-//@ expected-fail: T055
 // §3.5, §1.6: assignments to resolved places type-check without E0207.
 struct Point { x: i32, y: i32 }
 

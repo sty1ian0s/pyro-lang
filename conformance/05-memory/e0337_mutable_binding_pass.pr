@@ -1,4 +1,3 @@
-//@ expected-fail: T055
 //@ covers: E0337
 // §5.5.1: `let mut` allows writes; an immutable binding may be shadowed by a
 // new one.

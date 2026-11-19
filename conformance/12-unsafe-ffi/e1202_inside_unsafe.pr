@@ -1,5 +1,4 @@
 //@ covers: E1202
-//@ expected-fail: T051
 // §12.1, §12.2, §8.7: raw-pointer operations, `extern` calls, `@unsafe` calls and
 // `@bit_cast` to a type with invalid bit patterns inside `unsafe`; pointer-to-integer
 // conversion, pointer comparison and `@bit_cast` to a type without invalid bit

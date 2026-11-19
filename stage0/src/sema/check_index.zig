@@ -13,6 +13,8 @@ const Types = @import("types.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_call = @import("check_call.zig");
+const unsafe = @import("unsafe.zig");
+const builtins = @import("builtins.zig");
 const tir = @import("../tir/tir.zig");
 
 const Node = Ast.Node;
@@ -32,6 +34,8 @@ pub const Place = struct {
     root: tir.Local = .none,
     /// Whether the storage may be written (§5.5.1, §6.5.4).
     mutable: bool = false,
+    /// An element `p[i]` of a raw pointer (§12.2).
+    through_ptr: bool = false,
 
     fn bad(p: Place) bool {
         return p.ty == .err or p.ty == .noreturn;
@@ -133,6 +137,10 @@ pub fn writable(c: *Checker, n: Node.Index) Error!?Place {
     while (c.ast.kind(root) == .index or c.ast.kind(root) == .paren)
         root = if (c.ast.kind(root) == .index) c.ast.data(root).index.lhs else c.ast.data(root).paren.inner;
     const tok = c.ast.mainToken(root);
+    if (p.through_ptr) {
+        try c.reportAt(tok, .E0337, &.{"use a `*T` pointer to write through it"}, "cannot write through a `*const {s}` pointer", .{try c.tyName(p.ty)});
+        return null;
+    }
     if (p.root != .none) {
         const info = c.b.locals.get(p.root.int());
         const name = c.types.strings.get(info.name);
@@ -202,6 +210,7 @@ fn elemPlace(c: *Checker, n: Node.Index) Error!Place {
     const u = c.underlying(base.ty);
     const elem: TypeId = if (u == .str) .int(.unsigned, 8) else switch (c.types.get(u)) {
         inline .array, .soa_array, .slice, .soa_slice, .vec => |x| x.elem,
+        .ptr => |x| return ptrElem(c, n, base, x.elem, !x.is_const),
         else => return notIndexable(c, n, base.ty, "indexed"),
     };
     const i = try check_expr.checkAs(c, d.index, .usize);
@@ -212,6 +221,22 @@ fn elemPlace(c: *Checker, n: Node.Index) Error!Place {
         .root = base.root,
         .mutable = base.mutable and u != .str,
     };
+}
+
+/// `p[i]` for a raw pointer `p` (§12.2): `*@ptr_add(p, i)`, unchecked,
+/// only inside `unsafe`.
+fn ptrElem(c: *Checker, n: Node.Index, base: Place, elem: TypeId, mutable: bool) Error!Place {
+    const ok = try unsafe.require(c, n, "indexing a raw pointer");
+    const i = try check_expr.checkAs(c, c.ast.data(n).index.index, .isize);
+    if (i.ty == .err or i.ty == .noreturn) return .{ .ty = i.ty };
+    if (!ok) {
+        c.failed = true;
+        return .{ .ty = .err };
+    }
+    const p = try c.emit(base.ty, .{ .load = .{ .place = base.ref } });
+    const args = try c.arena.dupe(tir.Ref, &.{ p, i.ref });
+    const moved = try c.emit(base.ty, .{ .builtin = .{ .builtin = builtins.Builtin.ptr_add.id(), .args = args } });
+    return .{ .ref = try c.emit(elem, .{ .deref = .{ .ptr = moved } }), .ty = elem, .mutable = mutable, .through_ptr = true };
 }
 
 const Slice = struct { value: Typed, base: Place };
@@ -255,6 +280,16 @@ fn notIndexable(c: *Checker, n: Node.Index, ty: TypeId, what: []const u8) Error!
 
 const testing = std.testing;
 const Fixture = emit_tir.Fixture;
+
+test "§12.2 `p[i]` on a raw pointer: unsafe only, writable through `*T` only" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn ok(p: *u32, q: *const u32) -> u32 { unsafe { p[1] = 2; p[0] + q[1] } }
+        \\fn bad(p: *u32, q: *const u32) -> u32 { unsafe { q[0] = 3; } p[0] }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ .E0337, "q" }, .{ .E1202, "[" } });
+}
 
 test "`s[0]` on `str` is `u8`; elements of arrays, slices and `vec`s" {
     var f: Fixture = undefined;
