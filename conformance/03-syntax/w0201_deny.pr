@@ -1,0 +1,13 @@
+//@ covers: W0201
+// A.2, §8.8: `@deny(W0201)` reports the warning as an error; inner items may override.
+@deny(W0201)
+struct S {
+    fn f(a: u32, b: u32) -> u32 {
+        a << 1 + b //~ W0201
+    }
+
+    @allow(W0201)
+    fn g(a: u32, b: u32) -> u32 {
+        a << 1 + b
+    }
+}
