@@ -24,6 +24,7 @@ const check_literals = @import("check_literals.zig");
 const check_call = @import("check_call.zig");
 const builtins = @import("builtins.zig");
 const tir = @import("../tir/tir.zig");
+const interp_expr = @import("../comptime/interp_expr.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
 const Node = Ast.Node;
@@ -399,8 +400,16 @@ fn fold(c: *Checker, n: Node.Index, op: TokenKind, class: Class, l: convert.Cons
     const k = convert.binary(c.arena, bop, l, r) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidOperand => return notDefined(c, n, l.typeOf()),
-        // Constant traps are the comptime evaluator's (§8.6).
-        error.DivisionByZero, error.TooLarge => return c.unsupported(n, "constant expressions that trap (T057)"),
+        // A trap in a constant expression is a compile error (§8.6); A.3 has
+        // no code for it (spec gap, as in `interp_expr.report`).
+        error.DivisionByZero => {
+            try c.report(n, null, "comptime evaluation traps: {s}", .{interp_expr.message(error.DivisionByZero)});
+            return .err;
+        },
+        error.TooLarge => {
+            try c.report(n, null, "constant expression is too large: shift amount or exponent above {d}", .{convert.max_magnitude});
+            return .err;
+        },
     };
     return .{ .ty = k.typeOf(), .konst = k };
 }
@@ -607,13 +616,16 @@ test "operator errors: E0310, E0306, E0307" {
         \\    let k = 300 as u8;
         \\    let sh = x << 1;
         \\    let ok: bool = c < c && c == c;
+        \\    let z: u8 = 1 / 0;
+        \\    let huge: u8 = 1 << 100000;
         \\}
         \\fn fine(c: Color, s: Shape) -> bool { (c as u8) < 2 && s == s }
     );
     defer f.deinit();
     try f.expectDiags(&.{
         .{ .E0310, "+" },  .{ .E0310, "&" },  .{ .E0306, "256" }, .{ .E0310, "<" },
-        .{ .E0307, "as" }, .{ .E0306, "as" }, .{ .E0310, "<<" },
+        .{ .E0307, "as" }, .{ .E0306, "as" }, .{ .E0310, "<<" },  .{ null, "/" },
+        .{ null, "<<" },
     });
     _ = try f.func("fine");
 }

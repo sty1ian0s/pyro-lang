@@ -17,6 +17,15 @@
 //!   which NaN comes out, and x86-64 and aarch64 differ there, so NaNs are
 //!   computed explicitly: a NaN operand propagates quieted (the left one
 //!   first), and an invalid operation yields the positive quiet NaN.
+//!   Interpretation of §8.6 "as on the target": the NaN policy is one
+//!   canonical choice for every target, not the target's own (x86-64 SSE's
+//!   default NaN is negative; aarch64 favours a signalling operand), so a
+//!   NaN's bits may differ from the same operation at runtime. `Items.Options`
+//!   carries no target arch to choose by.
+//! - The arithmetic itself uses the host's IEEE operations, not soft-float:
+//!   Zig's strict float mode with default rounding and no flush-to-zero
+//!   gives the correctly rounded IEEE result on any conforming host, and the
+//!   tests pass on x86-64 and aarch64.
 //! - Aggregates (structs, tuples, arrays, `vec`, `mask`), slices, `str` and
 //!   enums are `Value` members (`value.zig`); bounds are checked (§6.5.3).
 //!
@@ -211,7 +220,7 @@ pub const Interp = struct {
                     break :blk fit(info, -intOf(info, x)) orelse return error.IntegerOverflow;
                 },
             },
-            .bit_not => wrap(in.intInfo(bt).?, ~x),
+            .bit_not => if (bt == .bool) x ^ 1 else wrap(in.intInfo(bt).?, ~x),
             else => unreachable,
         };
         return .{ .ty = a.ty, .data = .{ .scalar = bits } };
@@ -728,6 +737,7 @@ test "vectors are lane-wise; aggregates, slices and str are bounds-checked" {
     try testing.expectError(error.IntegerOverflow, in.binary(.add, v3, x, y)); // lane 2
     const lt = try in.binary(.lt, m3, x, y);
     try testing.expect(lt.eql(try in.aggregate(m3, &.{ .boolean(true), .boolean(true), .boolean(false) })));
+    try testing.expect((try in.unary(.bit_not, lt)).eql(try in.aggregate(m3, &.{ .boolean(false), .boolean(false), .boolean(true) })));
     try testing.expect((try in.unary(.not, lt)).eql(try in.aggregate(m3, &.{ .boolean(false), .boolean(false), .boolean(true) })));
     try testing.expect((try in.swizzle(v3, x, &.{ 2, 0, 0 })).eql(try in.aggregate(v3, &.{ f.int(u8_t, 250), f.int(u8_t, 1), f.int(u8_t, 1) })));
 
@@ -763,6 +773,10 @@ test "vectors are lane-wise; aggregates, slices and str are bounds-checked" {
 }
 
 test "a trap is a compile error carrying the comptime trace" {
+    var f: Fixture = undefined;
+    try f.init(64, "");
+    defer f.deinit();
+    const in = f.interp();
     var sink: diag.Sink = .init(testing.allocator, testing.io);
     defer sink.deinit();
     const file: diag.FileId = @fromBackingInt(0);
@@ -770,7 +784,11 @@ test "a trap is a compile error carrying the comptime trace" {
         .{ .span = .{ .file = file, .start = 40, .end = 48 }, .note = "in call to `grow`" },
         .{ .span = .{ .file = file, .start = 0, .end = 20 }, .note = "in the initializer of `N`" },
     };
-    try report(&sink, error.IntegerOverflow, .{ .file = file, .start = 60, .end = 65 }, &trace);
+    const span: diag.Span = .{ .file = file, .start = 60, .end = 65 };
+    _ = in.binary(.add, u8_t, f.int(u8_t, 200), f.int(u8_t, 56)) catch |e| switch (e) {
+        error.OutOfMemory => return e,
+        else => |t| try report(&sink, t, span, &trace),
+    };
     try testing.expect(sink.hasErrors());
     const ds = sink.finish();
     try testing.expectEqual(@as(usize, 1), ds.len);
