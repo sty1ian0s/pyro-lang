@@ -16,14 +16,13 @@ a `pyro.toml`. Conventions these cases rely on:
   `pyro.toml` (`[package]`). E0901/E0904 point at line 1 of the misnamed module.
 - Dependencies are `path` dependencies (`../<name>`), so no registry or network
   is needed. Fixtures with dependencies carry no `pyro.lock`, except the E0911
-  ones. If `pyro check` writes a lock file, T159 commits the generated files.
-- E0911 assumes the lock records a SHA-256 for path dependencies too, with keys
-  `name`, `version`, `source`, `sha256` in `[[package]]`. §13.4 only requires
-  hashes of source archives and git trees, so both E0911 cases are
-  placeholders. T159 must replace both: the fail case with a tampered cached
-  registry or git source (its "tampered cache E0911" acceptance), and
-  `e0911_ok_no_dependencies/` with a pass case that has a dependency whose
-  lock hash is real.
+  ones. If `pyro check` writes a lock file, T163 commits the generated files.
+- E0911: the lock records a SHA-256 for path dependencies too (`hashTree` in
+  `stage0/src/pkg/lock.zig`), with keys `name`, `version`, `source`, `sha256`
+  in `[[package]]`. `e0911_ok_locked/app/pyro.lock` holds the real digest of
+  `e0911_ok_locked/util/`, so editing any file there means regenerating it.
+  The cases wait on T163, which wires the lock into the driver. A fail case
+  with a tampered cached registry or git source waits on T160 (fetch/cache).
 - E0907 assumes `pyro check` runs build scripts (their generated modules are
   needed for name resolution).
 
@@ -34,7 +33,7 @@ a `pyro.toml`. Conventions these cases rely on:
 | E0908 | `e0908_both_roots/`, `e0908_no_root/` | `e0908_ok_library/` (and every executable fixture) |
 | E0909 | `e0909_unknown_keys/` | `e0909_ok_full_manifest/` |
 | E0910 | `e0910_unsatisfiable/` | `e0910_ok_satisfied/` |
-| E0911 | `e0911_lock_hash_mismatch/` | `e0911_ok_no_dependencies/` |
+| E0911 | `e0911_lock_hash_mismatch/` | `e0911_ok_locked/`, `e0911_ok_no_dependencies/` |
 | E0912 | `e0912_no_std_imports/` | `e0912_ok_core_only/` |
 | E0913 | `e0913_std_build_in_src/` | `e0913_ok_build_script/` |
 

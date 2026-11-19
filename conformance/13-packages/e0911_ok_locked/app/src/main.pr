@@ -1,0 +1,8 @@
+//@ covers: E0911
+//@ expected-fail: T163
+// pyro.lock records the real hashTree digest of `util` (§13.4).
+use util;
+
+pub fn main() {
+    _ = util.answer();
+}

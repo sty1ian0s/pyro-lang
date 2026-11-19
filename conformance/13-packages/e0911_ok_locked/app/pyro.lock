@@ -1,0 +1,7 @@
+# Conformance fixture: the util hash below is its real hashTree digest (§13.4).
+
+[[package]]
+name = "util"
+version = "1.0.0"
+source = "path+../util"
+sha256 = "418bef3b0e2361b2721f220bf2bff865466e1e72fede318faeefcc2dda612bbf"
