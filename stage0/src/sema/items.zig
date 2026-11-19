@@ -174,6 +174,9 @@ pub const Enum = struct {
     /// The discriminant type: the explicit `: B`, else the smallest of
     /// `u8`/`u16`/`u32` that holds every discriminant (§4.11.4).
     backing: TypeId,
+    /// The backing type was written (`enum E: u8`); such an enum is never a
+    /// bit field (§4.11.2).
+    explicit_backing: bool = false,
     has_payload: bool,
     variants: []const Variant,
     consts: []const Const,
@@ -812,6 +815,7 @@ pub const Items = struct {
                 try it.report(m, a.mainToken(b), null, &.{}, "enum backing type must be an integer type, found `{s}`", .{try it.tyName(t)});
             } else backing = t;
         }
+        const explicit_backing = backing != .none;
 
         // Discriminants (§4.11.4): explicit ones are comptime integers;
         // the others continue from the previous one.
@@ -867,6 +871,7 @@ pub const Items = struct {
             .type = self_ty,
             .generics = try it.genericTypes(m, d.generics),
             .backing = backing,
+            .explicit_backing = explicit_backing,
             .has_payload = has_payload,
             .variants = variants,
             .consts = members.consts,
@@ -1325,7 +1330,7 @@ pub const Items = struct {
     /// `ty` with the type parameters of `owner` replaced by `args`. Only the
     /// constructors that hold values inline are rebuilt: a parameter behind
     /// a pointer, slice or handle never matters for containment.
-    fn subst(it: *Items, ty: TypeId, owner: Types.Decl, args: []const Types.Arg) Error!TypeId {
+    pub fn subst(it: *Items, ty: TypeId, owner: Types.Decl, args: []const Types.Arg) Error!TypeId {
         switch (it.types.get(ty)) {
             .param => |p| return if (std.meta.eql(p.owner, owner) and p.index < args.len and args[p.index] == .type) args[p.index].type else ty,
             .array => |x| return it.types.intern(.{ .array = .{ .len = x.len, .elem = try it.subst(x.elem, owner, args) } }),
