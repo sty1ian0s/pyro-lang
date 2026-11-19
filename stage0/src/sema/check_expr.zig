@@ -23,6 +23,7 @@ const check_stmt = @import("check_stmt.zig");
 const check_literals = @import("check_literals.zig");
 const check_call = @import("check_call.zig");
 const check_member = @import("check_member.zig");
+const check_index = @import("check_index.zig");
 const builtins = @import("builtins.zig");
 const tir = @import("../tir/tir.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
@@ -54,6 +55,8 @@ const handlers = blk: {
         .{ .cast, cast },
         .{ .call, check_call.call },
         .{ .field_access, check_member.fieldAccess },
+        .{ .index, check_index.index },
+        .{ .range, check_index.range },
         .{ .struct_lit, check_literals.structLit },
         .{ .anon_lit, check_literals.anonLit },
         .{ .inferred_member, check_literals.inferredMember },
@@ -73,7 +76,6 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .index, .range => "indexing and ranges (T051)",
         .match, .let_cond => "`match` (T052)",
         .unsafe_block => "`unsafe` blocks (T054)",
         .comptime_block, .comptime_if => "comptime evaluation (T060)",

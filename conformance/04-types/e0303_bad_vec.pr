@@ -1,4 +1,3 @@
-//@ expected-fail: T051
 // §4.3.1: `vec<N, T>` needs 1 <= N <= 64 and an integer, `f32`, `f64` or
 // `bool` element type.
 

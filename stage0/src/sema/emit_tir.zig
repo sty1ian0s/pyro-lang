@@ -281,13 +281,14 @@ pub const Checker = struct {
             c.failed = true; // reported with the value or the type
             return .err;
         }
-        switch (convert.coerce(c.types, v.ty, to, .{})) {
+        // A loaded place can be viewed as a slice (§4.9.1).
+        switch (convert.coerce(c.types, v.ty, to, .{ .place = v.ref != .none and c.b.data(v.ref) == .load })) {
             .identity => return .{ .ty = to, .ref = v.ref },
             .never => return v,
             .constant => return c.constTo(v.konst.?, to, at),
             .int_widen, .float_widen, .ptr_to_const => return .{ .ty = to, .ref = try c.emit(to, .{ .coerce = .{ .value = v.ref } }) },
             .wrap_some => return @import("check_literals.zig").wrapSome(c, v, to, at),
-            .array_to_slice, .soa_array_to_soa_slice => return c.unsupported(at, "array-to-slice views (T051)"),
+            .array_to_slice, .soa_array_to_soa_slice => return @import("check_index.zig").arrayToSlice(c, v, to),
             .lambda_to_fn_ptr => return c.unsupported(at, "lambdas (T074)"),
             .fn_ref => return c.unsupported(at, "`FnRef` values (T071)"),
             .none => {

@@ -32,6 +32,7 @@ const kinds = @import("kinds.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_literals = @import("check_literals.zig");
+const check_index = @import("check_index.zig");
 const builtins = @import("builtins.zig");
 const check_member = @import("check_member.zig");
 const check_stmt = @import("check_stmt.zig");
@@ -230,6 +231,7 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
             return .err;
         }
         const place = try mutPlace(c, a, value) orelse return .err;
+        if (place.ty == .noreturn) return .never;
         if (place.ty == .err or p.type == .err) return .err;
         if (place.ty != p.type) {
             try c.mismatch(value, p.type, place.ty);
@@ -295,24 +297,26 @@ pub fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
 }
 
 /// The mutable place `value` of `mut` argument `a` names (§5.5.2): a
-/// `let mut` binding, a `mut` parameter or `mut self`, or a field of one;
-/// E0336 otherwise.
-fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?check_stmt.Place {
+/// `let mut` binding, a `mut` parameter or `mut self`, or a field or
+/// element of one (§5.5.2, §6.5.4); E0336 otherwise.
+fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?check_index.Place {
     const ast = c.ast;
+    if (check_stmt.mixedPlace(c, value)) {
+        _ = c.unsupported(value, "places mixing fields and elements (W13 follow-up)");
+        return null;
+    }
     var v = value;
+    var fields = false;
     // The root of a field chain decides mutability (§5.5.2).
     while (true) switch (ast.kind(v)) {
         .paren => v = ast.data(v).paren.inner,
         .field_access => if (c.items.names.get(c.m, v) == null) {
+            fields = true;
             v = ast.data(v).field_access.lhs;
         } else break,
         else => break,
     };
     switch (ast.kind(v)) {
-        .index => {
-            _ = c.unsupported(v, "`mut` arguments of elements (T051)");
-            return null;
-        },
         // `*p` names a place through a raw pointer; other prefix forms are values.
         .prefix => if (ast.tokens.items(.kind)[ast.mainToken(v)] == .star) {
             _ = c.unsupported(v, "raw pointer operations (T054)");
@@ -325,21 +329,42 @@ fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?check_stmt.Pla
         else => {},
     }
     const help: []const []const u8 = &.{"pass a `let mut` binding, a `mut` parameter, or a field or element of one"};
-    const l = localOf(c, v) orelse {
-        try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
-        return null;
-    };
-    const info = c.b.locals.get(l.int());
-    switch (info.kind) {
-        .let_mut, .param_mut, .temp => return try check_member.place(c, value, .write) orelse {
+    if (fields) {
+        const l = localOf(c, v) orelse {
             try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
             return null;
-        },
-        .let, .param, .param_move => {
+        };
+        const info = c.b.locals.get(l.int());
+        switch (info.kind) {
+            .let_mut, .param_mut, .temp => {
+                const p = try check_member.place(c, value, .write) orelse {
+                    try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
+                    return null;
+                };
+                return .{ .ref = p.ref, .ty = p.ty, .root = l, .mutable = true };
+            },
+            .let, .param, .param_move => {
+                try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place: `{s}` is not mutable", .{c.types.strings.get(info.name)});
+                return null;
+            },
+        }
+    }
+    if (ast.kind(v) != .index and localOf(c, v) == null) {
+        try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
+        return null;
+    }
+    const p = try check_index.place(c, v);
+    if (p.ty == .err) return null;
+    if (p.mutable or p.ty == .noreturn) return p;
+    if (p.root != .none) {
+        const info = c.b.locals.get(p.root.int());
+        if (info.kind == .let or info.kind == .param or info.kind == .param_move) {
             try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place: `{s}` is not mutable", .{c.types.strings.get(info.name)});
             return null;
-        },
+        }
     }
+    try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
+    return null;
 }
 
 /// Default value `v` of a parameter of type `ty` at call `n` (§7.2.3).

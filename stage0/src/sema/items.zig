@@ -592,10 +592,10 @@ pub const Items = struct {
                 const len = try it.genericArg(m, given[0], .int(.unsigned, 32), self_ty) orelse return .err;
                 const l: u32 = @intCast(len.value.bits);
                 if (name.len == 4) return it.types.intern(.{ .mask = .{ .len = l } });
-                return it.types.intern(.{ .vec = .{ .len = l, .elem = try it.resolveType(m, given[1], self_ty) } });
+                return it.vecType(m, n, l, try it.resolveType(m, given[1], self_ty));
             }
             const elem = try it.resolveType(m, given[0], self_ty);
-            if (name[0] == 'v') return it.types.intern(.{ .vec = .{ .len = name[3] - '0', .elem = elem } });
+            if (name[0] == 'v') return it.vecType(m, n, name[3] - '0', elem);
             if (name[0] == 'H') return it.types.intern(.{ .handle = .{ .elem = elem } });
             return it.types.intern(.{ .field_id = .{ .owner = elem } });
         }
@@ -620,6 +620,39 @@ pub const Items = struct {
         return .err;
     }
 
+    /// `vec<len, elem>` written at `n`, or E0303 (§4.3.1): `elem` is an
+    /// integer of at most 8 bytes, `f32`, `f64` or `bool`, and `1 <= len <= 64`.
+    fn vecType(it: *Items, m: ModuleId, n: Node.Index, len: u32, elem: TypeId) Error!TypeId {
+        if (elem == .err) return .err;
+        const elem_ok = switch (elem) {
+            .f32, .f64, .bool, .usize, .isize => true,
+            else => switch (it.types.get(elem)) {
+                .int => |i| i.bits <= 64,
+                .param => true, // checked when instantiated
+                else => false,
+            },
+        };
+        const tok = it.ast(m).mainToken(n);
+        if (!elem_ok) {
+            try it.report(m, tok, .E0303, &.{"use an integer of at most 64 bits, `f32`, `f64` or `bool`"}, "invalid `vec` element type `{s}`", .{try it.tyName(elem)});
+            return .err;
+        }
+        if (len < 1 or len > 64) {
+            try it.report(m, tok, .E0303, &.{"a `vec` has 1 to 64 lanes"}, "invalid `vec` length {d}", .{len});
+            return .err;
+        }
+        return it.types.intern(.{ .vec = .{ .len = len, .elem = elem } });
+    }
+
+    /// The prelude type `name` (§14.1) applied to `args`: the type that
+    /// `name<args>` written in source names.
+    pub fn preludeInstance(it: *Items, name: []const u8, args: []const Types.Arg) Error!TypeId {
+        for (prelude.entries, 0..) |entry, i| {
+            if (std.mem.eql(u8, entry.name, name)) return it.stdInstance(@intCast(i), name, entry.kind == .protocol, args);
+        }
+        unreachable; // `name` is a prelude type
+    }
+
     /// A type named by a path into `std` or a dependency (`std.fs.File`).
     fn stdType(it: *Items, m: ModuleId, path: []const u8, args: ?[]const Node.Index, self_ty: TypeId) Error!TypeId {
         // shortcut: other packages are not loaded (T163): the type is keyed by
@@ -632,6 +665,10 @@ pub const Items = struct {
     fn stdNominal(it: *Items, m: ModuleId, index: u32, name: []const u8, is_protocol: bool, args: []const Node.Index, self_ty: TypeId) Error!TypeId {
         const out = try it.alloc().alloc(Types.Arg, args.len);
         for (args, out) |arg, *o| o.* = try it.genericArg(m, arg, .none, self_ty) orelse return .err;
+        return it.stdInstance(index, name, is_protocol, out);
+    }
+
+    fn stdInstance(it: *Items, index: u32, name: []const u8, is_protocol: bool, out: []const Types.Arg) Error!TypeId {
         const langs = std.StaticStringMap(Types.Lang).initComptime(.{
             .{ "Option", .option }, .{ "Result", .result }, .{ "Atomic", .atomic }, .{ "Channel", .channel },
         });

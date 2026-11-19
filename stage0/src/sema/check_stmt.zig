@@ -114,13 +114,41 @@ fn let(c: *Checker, s: Node.Index) Error!bool {
     return v.ty == .noreturn;
 }
 
+/// Whether place expression `n` has both a field (not a module member)
+/// and an element (not a slice) in its chain. `check_member.place` and
+/// `check_index.place` each handle one kind only.
+// shortcut: such places are unsupported until the two walkers compose.
+pub fn mixedPlace(c: *Checker, n: Node.Index) bool {
+    var fields = false;
+    var elems = false;
+    var v = n;
+    while (true) switch (c.ast.kind(v)) {
+        .paren => v = c.ast.data(v).paren.inner,
+        .field_access => {
+            if (c.items.names.get(c.m, v) != null) break;
+            fields = true;
+            v = c.ast.data(v).field_access.lhs;
+        },
+        .index => {
+            elems = true;
+            v = c.ast.data(v).index.lhs;
+        },
+        else => break,
+    };
+    return fields and elems;
+}
+
 /// An assignment target: its place instruction and type.
 pub const Place = struct { ref: tir.Ref, ty: TypeId };
 
 /// The storage assignment target `n` names (§3.5, §1.6), or null after a
-/// diagnostic. Fields are `check_member`'s; index and dereference targets
-/// are T051's and T054's.
+/// diagnostic. Fields are `check_member`'s, elements `check_index`'s;
+/// dereference targets are T054's.
 fn place(c: *Checker, n: Node.Index) Error!?Place {
+    if (mixedPlace(c, n)) {
+        _ = c.unsupported(n, "places mixing fields and elements (W13 follow-up)");
+        return null;
+    }
     switch (c.ast.kind(n)) {
         .ident => {},
         // A module member (`geo.origin`) is a name like an `ident`.
@@ -130,8 +158,12 @@ fn place(c: *Checker, n: Node.Index) Error!?Place {
             if (c.self_local == .none) return null;
             return try localPlace(c, n, c.self_local);
         },
+        .index => {
+            const p = try @import("check_index.zig").writable(c, n) orelse return null;
+            return .{ .ref = p.ref, .ty = p.ty };
+        },
         else => {
-            _ = c.unsupported(n, "assignment to elements and dereferences (T051, T054)");
+            _ = c.unsupported(n, "assignment to dereferences (T054)");
             return null;
         },
     }
@@ -202,6 +234,10 @@ fn assign(c: *Checker, s: Node.Index) Error!bool {
         _ = try check_expr.check(c, d.rhs, .none);
         return false;
     };
+    if (p.ty == .noreturn) { // the target diverges, e.g. `a[die()] = x`
+        _ = try check_expr.check(c, d.rhs, .none);
+        return true;
+    }
     var v: Typed = undefined;
     if (op == .eq) {
         v = try check_expr.checkAs(c, d.rhs, p.ty);
