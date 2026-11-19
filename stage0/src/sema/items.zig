@@ -42,6 +42,7 @@ const imports = @import("../resolve/imports.zig");
 const names_mod = @import("../resolve/names.zig");
 const prelude = @import("../resolve/prelude.zig");
 const attr_table = @import("../attr_table.zig");
+const type_kinds = @import("kinds.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -245,6 +246,8 @@ pub const Items = struct {
     std_pkg: Types.Package,
     /// The entry point, if the package is an executable with a valid one.
     main: ?Main = null,
+    /// Memoized type kinds, owned by `kinds.zig` (arena-backed).
+    kinds: type_kinds.Cache = .{},
 
     pub fn deinit(it: *Items) void {
         const gpa = it.arena.child_allocator;
@@ -329,7 +332,7 @@ pub const Items = struct {
     }
 
     /// Reports at token `t`. `code` is null only for rules without an A.3 code.
-    fn report(it: *Items, m: ModuleId, t: Ast.TokenIndex, code: ?diag.DiagCode, help: []const []const u8, comptime fmt: []const u8, args: anytype) Error!void {
+    pub fn report(it: *Items, m: ModuleId, t: Ast.TokenIndex, code: ?diag.DiagCode, help: []const []const u8, comptime fmt: []const u8, args: anytype) Error!void {
         try it.sink.emit(.{
             .code = code,
             .severity = if (code) |c| .of(c) else .@"error",
@@ -339,7 +342,8 @@ pub const Items = struct {
         });
     }
 
-    fn tyName(it: *Items, ty: TypeId) Error![]const u8 {
+    /// `ty` printed into the items arena, for diagnostics.
+    pub fn tyName(it: *Items, ty: TypeId) Error![]const u8 {
         return it.types.allocPrint(it.alloc(), ty, .{});
     }
 
@@ -1219,46 +1223,15 @@ pub const Items = struct {
         }
         return switch (it.types.get(ty)) {
             .field_id => true,
-            .slice => |s| it.isPlain(s.elem, 0),
-            .soa_slice => |s| it.isPlain(s.elem, 0),
-            else => it.isPlain(ty, 0),
+            .slice => |s| it.isPlain(s.elem),
+            .soa_slice => |s| it.isPlain(s.elem),
+            else => it.isPlain(ty),
         };
     }
 
     /// Whether `ty` contains no resource, shared cell or view (§5.1, §5.2).
-    // shortcut: a local predicate for E0341; kinds.zig (T042) owns type kinds.
-    fn isPlain(it: *Items, ty: TypeId, depth: u32) Error!bool {
-        if (depth > 64) return true; // recursive types are E0376
-        if (ty == .str) return false;
-        const elems: []const TypeId = switch (it.types.get(ty)) {
-            .array => |x| &.{x.elem},
-            .soa_array => |x| &.{x.elem},
-            .tuple => |x| x.elems,
-            .slice, .soa_slice, .mut_view => return false,
-            .nominal => |n| blk: {
-                if (n.kind == .distinct) break :blk &.{n.underlying};
-                if (std.meta.eql(n.decl.package, it.std_pkg)) {
-                    if (n.lang == .atomic or isStdHeap(it.types.strings.get(n.name))) return false;
-                    for (n.args) |arg| if (arg == .type and !try it.isPlain(arg.type, depth + 1)) return false;
-                    return true;
-                }
-                const ref = it.declRef(ty) orelse return true;
-                switch ((try it.ensure(ref.module, ref.item)).*) {
-                    .@"struct" => |s| {
-                        if (hasAttr(it.ast(ref.module), s.attrs, .resource)) return false;
-                        for (s.fields) |f| if (!try it.isPlain(f.type, depth + 1)) return false;
-                    },
-                    .@"enum" => |e| for (e.variants) |v| for (v.payload) |p| {
-                        if (!try it.isPlain(p, depth + 1)) return false;
-                    },
-                    else => {}, // protocols; declarations on a cycle
-                }
-                return true;
-            },
-            else => return true,
-        };
-        for (elems) |e| if (!try it.isPlain(e, depth + 1)) return false;
-        return true;
+    fn isPlain(it: *Items, ty: TypeId) Error!bool {
+        return (try type_kinds.kind(it, ty)) == .plain;
     }
 
     // -----------------------------------------------------------------------
@@ -1493,7 +1466,8 @@ fn generics(a: *const Ast, n: Node.Index) ?[]const Node.Index {
     };
 }
 
-fn hasAttr(a: *const Ast, attrs: []const Node.Index, attr: attr_table.Attr) bool {
+/// Whether `attrs` (attribute nodes of `a`) include `attr`.
+pub fn hasAttr(a: *const Ast, attrs: []const Node.Index, attr: attr_table.Attr) bool {
     for (attrs) |n| {
         const text = a.tokenSlice(a.mainToken(n));
         if (attr_table.lookup(if (std.mem.startsWith(u8, text, "@")) text[1..] else text) == attr) return true;
@@ -1520,7 +1494,7 @@ fn pathText(a: *const Ast, n: Node.Index) []const u8 {
 }
 
 /// The token to report a type expression at: its name, not the `<` of `G<T>`.
-fn typeToken(a: *const Ast, n: Node.Index) Ast.TokenIndex {
+pub fn typeToken(a: *const Ast, n: Node.Index) Ast.TokenIndex {
     return a.mainToken(if (a.kind(n) == .generic_inst) a.data(n).generic_inst.base else n);
 }
 
