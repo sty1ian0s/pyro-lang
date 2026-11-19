@@ -12,9 +12,9 @@
 //! Layout depends only on the type's structure and the target's pointer
 //! width, never on `TypeId` order, so it is deterministic (§4.11).
 //!
-//! `@packed`, `@c_layout` and SoA types are `layout_soa.zig`'s (T045); this
-//! file gives them no layout (`null`), like comptime-only types, generic
-//! parameters and std types not loaded yet.
+//! `@packed`, `@c_layout` and SoA layouts are `layout_soa.zig`'s; comptime-only
+//! types, generic parameters and std types not loaded yet have no layout
+//! (`null`).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -25,6 +25,7 @@ const module_graph = @import("../resolve/module_graph.zig");
 const collect = @import("../resolve/collect.zig");
 const Types = @import("types.zig");
 const items_mod = @import("items.zig");
+const soa = @import("layout_soa.zig");
 
 const Items = items_mod.Items;
 const TypeId = Types.TypeId;
@@ -93,8 +94,8 @@ pub const Engine = struct {
     }
 
     /// The layout of `ty`, or null if it has none here: comptime-only types,
-    /// parameters, protocols, `@packed`/`@c_layout`/SoA types (T045), types
-    /// of packages not loaded, and types that contain themselves (E0376).
+    /// parameters, protocols, SoA types of non-structs (E0305), types of
+    /// packages not loaded, and types that contain themselves (E0376).
     /// Sizes saturate, so an oversized type is `tooLarge`, never wrapped.
     pub fn layoutOf(e: *Engine, ty: TypeId) Error!?Layout {
         if (e.cache.get(ty)) |entry| return switch (entry) {
@@ -123,16 +124,18 @@ pub const Engine = struct {
             .vec => |v| if (try e.layoutOf(v.elem)) |l| vector(v.len, l.size) else null,
             // shortcut: `mask<N>` layout is implementation-defined (§4.3.2); stored like `vec<N, bool>`.
             .mask => |m| vector(m.len, 1),
-            .array => |a| if (try e.layoutOf(a.elem)) |l|
+            .array => |a| if (soa.isSoa(e, a.elem))
+                try soa.soaArray(e, a.len, a.elem)
+            else if (try e.layoutOf(a.elem)) |l|
                 .{ .size = a.len *| alignUp(l.size, l.@"align"), .@"align" = l.@"align" }
             else
                 null,
             .tuple => |t| e.record(t.elems, null, 1),
             .handle => .{ .size = 8, .@"align" = 8 },
             .ptr, .fn_ptr, .mut_view => .{ .size = ptr, .@"align" = ptr },
-            .slice => .{ .size = 2 * ptr, .@"align" = ptr },
-            // shortcut: SoA layout is T045's (layout_soa.zig).
-            .soa_array, .soa_slice => null,
+            .slice => |s| if (soa.isSoa(e, s.elem)) try soa.soaSlice(e, s.elem) else .{ .size = 2 * ptr, .@"align" = ptr },
+            .soa_array => |a| try soa.soaArray(e, a.len, a.elem),
+            .soa_slice => |s| try soa.soaSlice(e, s.elem),
             .field_id, .param => null,
             .nominal => |n| e.nominal(ty, n),
         };
@@ -162,14 +165,16 @@ pub const Engine = struct {
             .@"struct" => {
                 const s = e.items.structOf(ty) orelse return null;
                 const m = e.items.declRef(ty).?.module;
-                if (e.attr(m, s.attrs, .@"packed") != null or e.attr(m, s.attrs, .c_layout) != null) return null; // T045
                 const tys = try e.alloc().alloc(TypeId, s.fields.len);
                 const aligns = try e.alloc().alloc(u32, s.fields.len);
                 for (s.fields, tys, aligns) |f, *t, *al| {
                     t.* = try e.items.subst(f.type, n.decl, n.args);
                     al.* = try e.alignAttr(m, f.attrs);
                 }
-                return e.record(tys, aligns, try e.alignAttr(m, s.attrs));
+                const min_align = try e.alignAttr(m, s.attrs);
+                if (e.attr(m, s.attrs, .@"packed") != null) return soa.ordered(e, tys, aligns, min_align, .@"packed");
+                if (e.attr(m, s.attrs, .c_layout) != null) return soa.ordered(e, tys, aligns, min_align, .c);
+                return e.record(tys, aligns, min_align);
             },
             .@"enum" => {
                 const en = e.items.enumOf(ty) orelse return null;
@@ -285,7 +290,7 @@ pub const Engine = struct {
     }
 
     /// The attribute node `which` among `attrs` of module `m`.
-    fn attr(e: *Engine, m: ModuleId, attrs: []const Node.Index, which: attr_table.Attr) ?Node.Index {
+    pub fn attr(e: *Engine, m: ModuleId, attrs: []const Node.Index, which: attr_table.Attr) ?Node.Index {
         const a = e.ast(m);
         for (attrs) |n| {
             const text = a.tokenSlice(a.mainToken(n));
@@ -344,8 +349,9 @@ pub const Engine = struct {
     }
 
     /// Lays out every non-generic struct, enum, alias and distinct type of
-    /// the package and reports types over the size limit (E0311) and
-    /// invalid `@align(n)` arguments. A type that is too large because a
+    /// the package and reports types over the size limit (E0311), invalid
+    /// `@align(n)` arguments and `@c_layout` fields without a C
+    /// representation (E1201). A type that is too large because a
     /// declared non-generic type it contains is, is not reported again.
     pub fn check(e: *Engine) Error!void {
         for (e.items.im.graph.modules, 0..) |mod, mi| for (mod.items, 0..) |item, i| {
@@ -355,6 +361,7 @@ pub const Engine = struct {
             switch (info.*) {
                 .@"struct" => |s| {
                     try e.checkAlign(m, s.attrs);
+                    if (e.attr(m, s.attrs, .c_layout) != null) try soa.checkCFields(e, m, s);
                     for (s.fields) |f| {
                         try e.checkAlign(m, f.attrs);
                         try parts.append(e.alloc(), f.type);
@@ -412,7 +419,7 @@ fn validAlign(v: u64) bool {
 
 /// Storage size of `uN`/`iN` (§4.2.2), also the size of a unit of `bits`
 /// bits (§4.11.2 `size_for`).
-fn storage(bits: u32) Layout {
+pub fn storage(bits: u32) Layout {
     const size: u32 = if (bits <= 8) 1 else if (bits <= 16) 2 else if (bits <= 32) 4 else 8;
     return .{ .size = size, .@"align" = size };
 }
@@ -431,7 +438,7 @@ fn vector(len: u32, elem_size: u64) Layout {
     return .{ .size = size, .@"align" = @intCast(@min(size, 64)) };
 }
 
-fn alignUp(x: u64, a: u64) u64 {
+pub fn alignUp(x: u64, a: u64) u64 {
     return (x +| (a - 1)) & ~(a - 1);
 }
 
@@ -470,7 +477,7 @@ const names_mod = @import("../resolve/names.zig");
 const ctype = @import("ctype.zig");
 
 /// A checked one-module test package with a layout engine.
-const Fixture = struct {
+pub const Fixture = struct {
     p: module_graph.TestPackage,
     g: module_graph.Graph,
     im: imports.Imports,
@@ -480,7 +487,7 @@ const Fixture = struct {
     items: Items,
     e: Engine,
 
-    fn init(f: *Fixture, src: []const u8) !void {
+    pub fn init(f: *Fixture, src: []const u8) !void {
         f.p = try .init(&.{.{ "a", src }});
         f.g = try f.p.graph(.{ .kind = .exe });
         f.im = try imports.resolve(testing.allocator, &f.p.sink, &f.g, .{});
@@ -493,7 +500,7 @@ const Fixture = struct {
         try f.e.check();
     }
 
-    fn deinit(f: *Fixture) void {
+    pub fn deinit(f: *Fixture) void {
         f.e.deinit();
         f.items.deinit();
         f.types.deinit();
@@ -504,12 +511,12 @@ const Fixture = struct {
         f.p.deinit();
     }
 
-    fn info(f: *Fixture, name: []const u8) !*const items_mod.Info {
+    pub fn info(f: *Fixture, name: []const u8) !*const items_mod.Info {
         return f.items.info(.{ .module = 0, .item = f.g.modules[0].names.get(name).? });
     }
 
     /// The type declared by struct or enum `name`.
-    fn typeOf(f: *Fixture, name: []const u8) !TypeId {
+    pub fn typeOf(f: *Fixture, name: []const u8) !TypeId {
         return switch ((try f.info(name)).*) {
             .@"struct" => |s| s.type,
             .@"enum" => |en| en.type,
@@ -518,12 +525,12 @@ const Fixture = struct {
     }
 
     /// The layout of struct or enum `name`.
-    fn of(f: *Fixture, name: []const u8) !Layout {
+    pub fn of(f: *Fixture, name: []const u8) !Layout {
         return (try f.e.layoutOf(try f.typeOf(name))).?;
     }
 
     /// The layout of the type of field `field` of struct `name`.
-    fn field(f: *Fixture, name: []const u8, field_name: []const u8) !Layout {
+    pub fn field(f: *Fixture, name: []const u8, field_name: []const u8) !Layout {
         for ((try f.info(name)).@"struct".fields) |fl| {
             if (std.mem.eql(u8, fl.name, field_name)) return (try f.e.layoutOf(fl.type)).?;
         }
@@ -531,7 +538,7 @@ const Fixture = struct {
     }
 
     /// Checks the reported codes and the source text at each primary span.
-    fn expectDiags(f: *Fixture, want: []const struct { ?diag.DiagCode, []const u8 }) !void {
+    pub fn expectDiags(f: *Fixture, want: []const struct { ?diag.DiagCode, []const u8 }) !void {
         const ds = f.p.sink.finish();
         errdefer for (ds) |d| std.debug.print("got {?t}: {s}\n", .{ d.code, d.message });
         try testing.expectEqual(want.len, ds.len);
@@ -543,7 +550,7 @@ const Fixture = struct {
     }
 };
 
-fn expectLayout(size: u64, @"align": u32, l: Layout) !void {
+pub fn expectLayout(size: u64, @"align": u32, l: Layout) !void {
     try testing.expectEqual(size, l.size);
     try testing.expectEqual(@"align", l.@"align");
 }
@@ -751,15 +758,13 @@ test "E0311: types over 2^48 - 1 bytes, reported once" {
     try testing.expect((try f.of("Outer")).tooLarge());
 }
 
-test "recursive containment and @c_layout have no layout here" {
+test "recursive containment has no layout" {
     var f: Fixture = undefined;
     try f.init(
         \\struct Node { value: u32, next: Node }
-        \\@c_layout struct C { x: i32 }
     );
     defer f.deinit();
     try testing.expectEqual(@as(?Layout, null), try f.e.layoutOf(try f.typeOf("Node")));
-    try testing.expectEqual(@as(?Layout, null), try f.e.layoutOf(try f.typeOf("C")));
 }
 
 test "ctype decls contract: isCLayout, enumBacking" {

@@ -1,4 +1,3 @@
-//@ expected-fail: T045
 // §4.11.3, §12.5: a `@c_layout` struct may contain only fields with a defined C
 // representation.
 
