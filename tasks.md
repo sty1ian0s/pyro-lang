@@ -1317,7 +1317,7 @@ graph TD
 - [x] **T161** pyro add/remove/update/fetch
   - Spec: §13.8, §13.4
   - Deliverable: `stage0/src/cli/cmd_deps.zig`.
-  - Acceptance: add then remove byte-identical; update touches only dep subgraph; offline cold fetch fails clearly.
+  - Acceptance: add then remove byte-identical when the target table exists (remove never deletes a table header, so a header `add` created stays: principle 6, never destroy user-written text); update touches only dep subgraph; offline cold fetch fails clearly.
   - Size: M · Parallel: W07
   - Blocked by: T024, T158, T160
   - Blocks: T223
