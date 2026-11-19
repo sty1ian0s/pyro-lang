@@ -506,35 +506,35 @@ graph TD
   - Size: S · Parallel: W12
   - Blocked by: T043
   - Blocks: T139, T140
-- [ ] **T050** Field access, method resolution, UFCS
+- [x] **T050** Field access, method resolution, UFCS
   - Spec: §6.3.2, §6.3.3, §7.2.2, §7.9, §4.4.2, §4.4.3, E0355
   - Deliverable: `stage0/src/sema/check_member.zig`.
   - Acceptance: UFCS to `mut` first param w/o marker; type member beats UFCS; two impls E0355 resolved by `Protocol.m`; private field rejected; soa `a.f : []F`.
   - Size: M · Parallel: W13
   - Blocked by: T043, T044, T045
   - Blocks: T055, T091, T128
-- [ ] **T051** Indexing, slicing, ranges, vec/mask typing
+- [x] **T051** Indexing, slicing, ranges, vec/mask typing
   - Spec: §6.5.1, §6.5.2, §6.5.4, §4.3.1, §4.3.2, §4.4.2, §4.5.4, E0303
   - Deliverable: `stage0/src/sema/check_index.zig`.
   - Acceptance: vec<65,f32> E0303; `s[0]` on str is u8; `0..10` is Range<usize>; open range outside brackets rejected; slice of immutable place read-only.
   - Size: M · Parallel: W13
   - Blocked by: T037, T043, T045
   - Blocks: T076, T123
-- [ ] **T052** Patterns, exhaustiveness, binding modes
+- [x] **T052** Patterns, exhaustiveness, binding modes
   - Spec: §6.6.2, §6.6.3, §6.2.6, §5.3.3, B.4, E0356, E0357, W0302
   - Deliverable: `stage0/src/sema/{patterns,exhaustive}.zig`.
   - Acceptance: Missing variant E0357 lists it; u2 with 4 arms exhaustive; u8 w/o `_` E0357; arm after `_` W0302; guard let non-diverging else E0356; `match move` binds File by move.
   - Size: L · Parallel: W13
   - Blocked by: T043, T046
   - Blocks: T076, T080
-- [ ] **T053** Builtins in expression scope: wrap/sat/checked, enum, SIMD ctors
+- [x] **T053** Builtins in expression scope: wrap/sat/checked, enum, SIMD ctors
   - Spec: §6.4.2, §7.4, §4.3.1, §4.3.2, §4.9.2
   - Deliverable: `stage0/src/sema/builtins_expr.zig`.
   - Acceptance: `@enum_from_int(Opcode, 3)` : Option<Opcode>; `@add_checked` on u8 : Option<u8>; vec2/3/4 infer T.
   - Size: S · Parallel: W13
   - Blocked by: T048
   - Blocks: T090, T126
-- [ ] **T054** Unsafe blocks and @unsafe functions
+- [x] **T054** Unsafe blocks and @unsafe functions
   - Spec: §12.1, §6.11, §8.6, E1202
   - Deliverable: `stage0/src/sema/unsafe.zig`: lexical unsafe context; E1202 for raw ops, extern calls, @unsafe calls, invalid-bit-pattern @bit_cast; no unsafe in comptime.
   - Acceptance: Pass+fail per operation class; @unsafe fn body w/o inner unsafe fails; comptime unsafe rejected.
@@ -558,7 +558,7 @@ graph TD
   - Size: M · Parallel: W12
   - Blocked by: T032, T041
   - Blocks: T057, T073, T091
-- [ ] **T057** Comptime interpreter A: values, arithmetic, strict IEEE **[CRITICAL]**
+- [x] **T057** Comptime interpreter A: values, arithmetic, strict IEEE **[CRITICAL]**
   - Spec: §8.1, §8.6, §6.4.2, §6.4.4, B.4
   - Deliverable: `stage0/src/comptime/interp_expr.zig`: target-width int ops with checked traps, strict f32/f64 via explicit soft ops (no host contraction), aggregates, slices, enums.
   - Acceptance: Bit-identical float results incl. NaN/subnormals on x86-64 and aarch64 hosts; overflow -> compile error w/ comptime trace.
