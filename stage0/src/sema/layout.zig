@@ -26,6 +26,7 @@ const collect = @import("../resolve/collect.zig");
 const Types = @import("types.zig");
 const items_mod = @import("items.zig");
 const soa = @import("layout_soa.zig");
+const attrs_mod = @import("attrs.zig");
 
 const Items = items_mod.Items;
 const TypeId = Types.TypeId;
@@ -36,7 +37,7 @@ const Error = Allocator.Error;
 /// Maximum type size in bytes (§4.12).
 pub const max_size: u64 = (1 << 48) - 1;
 /// Maximum `@align(n)` (§8.8).
-pub const max_align = 4096;
+pub const max_align = attrs_mod.max_align;
 
 /// Where a field (or tuple element) is stored.
 pub const Place = struct {
@@ -303,39 +304,15 @@ pub const Engine = struct {
 
     /// The argument of `@align(n)` among `attrs`, if written.
     fn alignArg(e: *Engine, m: ModuleId, attrs: []const Node.Index) ?Node.Index {
-        const a = e.ast(m);
-        const n = e.attr(m, attrs, .@"align") orelse return null;
-        const args = a.data(n).attribute.args orelse return null;
-        if (args.len == 0) return null;
-        return if (a.kind(args[0]) == .named_arg) a.data(args[0]).named_arg.value else args[0];
-    }
-
-    /// The value of `@align` argument `arg`, or null if it is not a comptime
-    /// integer constant. Names does not resolve attribute arguments, so a
-    /// bare identifier is looked up among the module's items here.
-    fn alignValue(e: *Engine, m: ModuleId, arg: Node.Index) Error!?u64 {
-        const a = e.ast(m);
-        const v = if (a.kind(arg) == .ident) blk: {
-            const mod = e.items.im.graph.modules[m];
-            const i = mod.names.get(a.tokenSlice(a.mainToken(arg))) orelse return null;
-            if (mod.items[i].kind != .@"const") return null;
-            break :blk (try e.items.constValue(m, mod.items[i].node, .none)).value;
-        } else try e.items.evalConst(m, arg, .none);
-        return switch (v) {
-            .untyped => |c| if (c == .int) c.int.toInt(u64) catch std.math.maxInt(u64) else null,
-            .scalar => |s| switch (e.items.types.get(s.type)) {
-                .int => s.bits,
-                .simple => |k| if (k == .usize or k == .isize) s.bits else null,
-                else => null,
-            },
-            else => null,
-        };
+        return attrs_mod.arg(e.ast(m), e.attr(m, attrs, .@"align") orelse return null, "n");
     }
 
     /// `@align(n)` among `attrs`, or 0 if absent or invalid.
     fn alignAttr(e: *Engine, m: ModuleId, attrs: []const Node.Index) Error!u32 {
-        const v = try e.alignValue(m, e.alignArg(m, attrs) orelse return 0) orelse return 0;
-        return if (validAlign(v)) @intCast(v) else 0;
+        const arg = e.alignArg(m, attrs) orelse return 0;
+        // Invalid arguments are reported by `attrs.zig`.
+        const v = attrs_mod.intValue(e.items, try attrs_mod.argValue(e.items, m, arg)) orelse return 0;
+        return if (attrs_mod.validAlign(v)) @intCast(v) else 0;
     }
 
     fn report(e: *Engine, m: ModuleId, t: Ast.TokenIndex, code: ?diag.DiagCode, comptime fmt: []const u8, args: anytype) Error!void {
@@ -351,8 +328,7 @@ pub const Engine = struct {
     }
 
     /// Lays out every non-generic struct, enum, alias and distinct type of
-    /// the package and reports types over the size limit (E0311), invalid
-    /// `@align(n)` arguments and `@c_layout` fields without a C
+    /// the package and reports types over the size limit (E0311) and `@c_layout` fields without a C
     /// representation (E1201). A type that is too large because a
     /// declared non-generic type it contains is, is not reported again.
     pub fn check(e: *Engine) Error!void {
@@ -362,13 +338,9 @@ pub const Engine = struct {
             var parts: std.ArrayList(TypeId) = .empty;
             switch (info.*) {
                 .@"struct" => |s| {
-                    try e.checkAlign(m, s.attrs);
                     // Generic fields are judged at instantiation.
                     if (s.generics.len == 0 and e.attr(m, s.attrs, .c_layout) != null) try soa.checkCFields(e, m, s);
-                    for (s.fields) |f| {
-                        try e.checkAlign(m, f.attrs);
-                        try parts.append(e.alloc(), f.type);
-                    }
+                    for (s.fields) |f| try parts.append(e.alloc(), f.type);
                     if (s.generics.len == 0) try e.checkSize(m, item, s.type, parts.items);
                 },
                 .@"enum" => |en| {
@@ -380,14 +352,6 @@ pub const Engine = struct {
                 else => {},
             }
         };
-    }
-
-    fn checkAlign(e: *Engine, m: ModuleId, attrs: []const Node.Index) Error!void {
-        const arg = e.alignArg(m, attrs) orelse return;
-        const tok = e.ast(m).mainToken(e.attr(m, attrs, .@"align").?);
-        const v = try e.alignValue(m, arg) orelse
-            return e.report(m, tok, null, "`@align` argument must be a comptime integer constant", .{});
-        if (!validAlign(v)) try e.report(m, tok, null, "`@align({d})`: the alignment must be a power of two no greater than {d}", .{ v, max_align });
     }
 
     fn checkSize(e: *Engine, m: ModuleId, item: collect.Item, ty: TypeId, parts: []const TypeId) Error!void {
@@ -415,10 +379,6 @@ pub const Engine = struct {
         return false;
     }
 };
-
-fn validAlign(v: u64) bool {
-    return v > 0 and v <= max_align and std.math.isPowerOfTwo(v);
-}
 
 /// Storage size of `uN`/`iN` (§4.2.2), also the size of a unit of `bits`
 /// bits (§4.11.2 `size_for`).
@@ -676,9 +636,8 @@ test "stable alignment sort, tuples, @align" {
         \\@align(Nope) struct Unknown {}
     );
     defer f.deinit();
-    try f.expectDiags(&.{ .{ null, "@align" }, .{ null, "@align" }, .{ null, "@align" }, .{ null, "@align" }, .{ null, "@align" } });
-    for (f.p.sink.finish()[1..], [_][]const u8{ "power of two", "comptime integer", "comptime integer", "comptime integer" }) |d, want|
-        try testing.expect(std.mem.indexOf(u8, d.message, want) != null);
+    // Invalid `@align` arguments are reported by `attrs.zig`, not here.
+    try f.expectDiags(&.{});
     try expectLayout(32, 32, try f.of("ByName"));
     const m = try f.of("M");
     try expectLayout(32, 8, m);

@@ -1,4 +1,3 @@
-//@ expected-fail: T062
 // §8.8, A.2: using a `@deprecated` item warns; `@deny(W0802)` makes that use an
 // error with the same code.
 
