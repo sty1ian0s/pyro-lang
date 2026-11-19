@@ -1,4 +1,4 @@
-//@ expected-fail: T047
+//@ expected-fail: T051
 //@ covers: E0336
 // §5.5.2: mutable locals, their fields and elements, and `mut` parameters are
 // mutable places.

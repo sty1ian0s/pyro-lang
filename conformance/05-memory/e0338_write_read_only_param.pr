@@ -1,4 +1,4 @@
-//@ expected-fail: T047
+//@ expected-fail: T050
 // §5.5.2: a parameter not declared `mut` cannot be written.
 
 struct Point {
