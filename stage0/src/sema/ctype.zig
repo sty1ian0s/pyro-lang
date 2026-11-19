@@ -31,10 +31,17 @@ pub const Site = struct {
 /// Reports whether `id`, written at `site`, is C-compatible (§12.5).
 ///
 /// `decls` answers for nominal types, which the type table does not
-/// describe: `decls.isCLayout(id) bool` must return true exactly for
-/// `@c_layout` structs and payload-free `@c_layout` enums with an explicit
-/// `: iN`/`uN` backing. The fields of such a struct are checked at its
-/// declaration, not here.
+/// describe:
+/// - `decls.isCLayout(id) bool` must return true exactly for `@c_layout`
+///   structs and payload-free `@c_layout` enums with an explicit `: iN`/`uN`
+///   backing. The fields of such a struct are checked at its declaration,
+///   not here.
+/// - `decls.enumBacking(id) TypeId` returns the backing integer of such an
+///   enum. The enum maps to that integer (§12.5), so it follows the integer
+///   rule: a sub-byte backing is allowed only at a field site.
+///
+/// Language-defined nominals (`Option`, `Result`, ...) are rejected here,
+/// whatever `decls` says.
 ///
 /// `.err` counts as compatible, so a failed type gives no cascade E1201.
 pub fn isCompatible(types: *Types, id: TypeId, site: Site, decls: anytype) bool {
@@ -55,7 +62,11 @@ pub fn isCompatible(types: *Types, id: TypeId, site: Site, decls: anytype) bool 
             for (f.params) |p| {
                 if (p.mode != .value or !isCompatible(types, p.type, .{ .pos = .param, .in_extern = true }, decls)) break false;
             } else true,
-        .nominal => |n| (n.kind == .@"struct" or n.kind == .@"enum") and decls.isCLayout(id),
+        .nominal => |n| n.lang == .none and switch (n.kind) {
+            .@"struct" => decls.isCLayout(id),
+            .@"enum" => decls.isCLayout(id) and isCompatible(types, decls.enumBacking(id), site, decls),
+            else => false,
+        },
         .vec, .mask, .soa_array, .slice, .soa_slice, .tuple, .handle, .mut_view, .field_id, .param => false,
     };
 }
@@ -66,9 +77,15 @@ const Interner = @import("../base/Interner.zig");
 /// Test `decls`: a fixed set of `@c_layout` declarations.
 const CLayouts = struct {
     ids: []const TypeId,
+    /// Backing of each enum in `ids`, by `ids` index.
+    backing: []const TypeId,
 
     pub fn isCLayout(c: CLayouts, id: TypeId) bool {
         return std.mem.indexOfScalar(TypeId, c.ids, id) != null;
+    }
+
+    pub fn enumBacking(c: CLayouts, id: TypeId) TypeId {
+        return c.backing[std.mem.indexOfScalar(TypeId, c.ids, id).?];
     }
 };
 
@@ -92,7 +109,12 @@ test "C-compatible type table (§12.5)" {
     const plain = try nominal(t, &strings, app, 2, .@"struct", "Plain", .none, &.{});
     const option = try nominal(t, &strings, app, 3, .@"enum", "Option", .option, &.{.{ .type = try t.intern(.{ .ptr = .{ .elem = u8_, .is_const = false } }) }});
     const meters = try t.intern(.{ .nominal = .{ .decl = .{ .package = app, .index = 4 }, .kind = .distinct, .name = try strings.intern("Meters"), .underlying = .f32 } });
-    const decls: CLayouts = .{ .ids = &.{ vec2, mode, meters } };
+    const flags = try nominal(t, &strings, app, 5, .@"enum", "Flags", .none, &.{}); // @c_layout enum: u3
+    // `option` and `meters` are listed to prove the predicate rejects them itself.
+    const decls: CLayouts = .{
+        .ids = &.{ vec2, mode, meters, option, flags },
+        .backing = &.{ .err, u8_, .err, u8_, TypeId.int(.unsigned, 3) },
+    };
 
     const ptr_const_u8 = try t.intern(.{ .ptr = .{ .elem = u8_, .is_const = true } });
     const cmp: Types.Key = .{ .fn_ptr = .{ .params = &.{ .{ .type = ptr_const_u8 }, .{ .type = ptr_const_u8 } }, .ret = i32_ } };
@@ -146,6 +168,9 @@ test "C-compatible type table (§12.5)" {
         .{ .{ .simple = mode }, ret, true },
         .{ .{ .simple = vec2 }, field, true },
         .{ .{ .simple = plain }, param, false },
+        .{ .{ .simple = flags }, field, true },
+        .{ .{ .simple = flags }, param, false },
+        .{ .{ .simple = flags }, ret, false },
         .{ .{ .simple = option }, param, false },
         .{ .{ .simple = option }, field, false },
         .{ .{ .simple = meters }, param, false },
