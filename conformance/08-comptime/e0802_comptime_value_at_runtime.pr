@@ -1,4 +1,4 @@
-//@ expected-fail: T056
+//@ expected-fail: T060
 // §8.3, §8.6: `type` and `FieldId<T>` values exist only at comptime.
 
 struct Point { x: f32, y: f32 }
