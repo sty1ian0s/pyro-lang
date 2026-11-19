@@ -47,7 +47,7 @@ file: diag.FileId,
 sink: *diag.Sink,
 /// Current token.
 tok_i: TokenIndex = 0,
-/// Bytes of the current token already consumed by a `>>`/`>>=`/`>=` split.
+/// Bytes of the current token already consumed by a `>>`/`>>=` split (0 or 1).
 split: u8 = 0,
 /// Shared stack for building node lists: push above the current length, pass
 /// `scratch.items[top..]` to `addNode` (which copies it), then shrink back.
@@ -57,7 +57,10 @@ pub const Error = error{ OutOfMemory, ParseError };
 
 /// Lexes `source` (file `file`, BOM stripped) with the parallel lexer and
 /// parses it. Never fails on bad input: diagnostics go to `sink` and broken
-/// parts become poisoned `invalid` nodes.
+/// parts become poisoned `invalid` nodes. Inherits `parallel.tokenize`'s
+/// contract: never call it from inside a `pool` job or concurrently on the
+/// same pool. To parse many files in parallel, lex each one sequentially
+/// inside its job (`lexer.tokenize` with `literals.scan`) and call `parse`.
 pub fn parseFile(
     gpa: Allocator,
     pool: *Pool,
@@ -146,22 +149,30 @@ pub fn expect(p: *Parser, kind: TokenKind) Error!TokenIndex {
     return p.eat(kind) orelse p.failExpected(describe(kind));
 }
 
+/// A `>` consumed by `eatGenericClose`.
+pub const GenericClose = struct {
+    /// The token it came from; for a split, the whole `>>` or `>>=`.
+    token: TokenIndex,
+    /// Exactly the consumed `>`.
+    span: diag.Span,
+};
+
 /// Consumes one `>` closing generic arguments (type context only, §3.1): a
-/// `>>`, `>>=` or `>=` is split, its first `>` consumed and the rest left as
-/// the current token. Everywhere else `>>` stays one shift token.
-pub fn eatGenericClose(p: *Parser) ?TokenIndex {
-    switch (p.peek(0)) {
-        .gt => return p.next(),
-        .shr, .shr_eq, .gt_eq => {
-            p.split += 1;
-            return p.tok_i;
-        },
-        else => return null,
-    }
+/// `>>` is split into `>` `>` and a `>>=` into `>` `>=`, the first `>`
+/// consumed and the rest left as the current token. Everywhere else `>>`
+/// stays one shift token. §3.1 lists only these two splits, so `>=` is never
+/// split: `A<B>= 1` does not close `A<B>`.
+pub fn eatGenericClose(p: *Parser) ?GenericClose {
+    const k = p.peek(0);
+    if (k != .gt and k != .shr and k != .shr_eq) return null;
+    const start = p.tokenSpan(p.tok_i).start;
+    const close: GenericClose = .{ .token = p.tok_i, .span = .{ .file = p.file, .start = start, .end = start + 1 } };
+    if (k == .gt) _ = p.next() else p.split = 1;
+    return close;
 }
 
 /// `eatGenericClose`, reporting "expected `>`" if there is none.
-pub fn expectGenericClose(p: *Parser) Error!TokenIndex {
+pub fn expectGenericClose(p: *Parser) Error!GenericClose {
     return p.eatGenericClose() orelse p.failExpected(describe(.gt));
 }
 
@@ -170,8 +181,7 @@ fn remainder(kind: TokenKind, split: u8) TokenKind {
     if (split == 0) return kind;
     return switch (kind) {
         .shr => .gt,
-        .shr_eq => if (split == 1) .gt_eq else .eq,
-        .gt_eq => .eq,
+        .shr_eq => .gt_eq,
         else => unreachable,
     };
 }
@@ -247,8 +257,8 @@ pub fn stub(p: *Parser, at: TokenIndex) Allocator.Error!Node.Index {
 
 /// Where `recover` stops skipping.
 pub const Sync = enum {
-    /// After a `;` or the `}` closing the broken item, or before the keyword
-    /// of the next item.
+    /// After a `;` or the `}` closing the broken item, or before the next
+    /// item (its keyword, doc comment or attributes).
     item,
     /// After a `;` or the `}` closing the broken statement, or before the `}`
     /// closing the enclosing block.
@@ -295,7 +305,9 @@ pub fn recover(p: *Parser, sync: Sync, start: TokenIndex) Allocator.Error!Node.I
                 break;
             },
             .comma => if (sync == .delimiter) break,
-            else => if (sync == .item and p.tok_i != at and isItemKeyword(k)) break,
+            // Progress counts from `start`: an item that broke at the next
+            // item's first token leaves that item whole.
+            else => if (sync == .item and p.tok_i != start and startsItem(kinds, p.tok_i)) break,
         };
         _ = p.next();
     }
@@ -316,8 +328,7 @@ pub fn skipBalanced(p: *Parser, stop: []const TokenKind, angles: bool) bool {
         if (k == .eof) break;
         if (depth == 0) {
             if (angles and isGtLike(k)) {
-                if (angle == 0) break;
-                _ = p.eatGenericClose();
+                if (angle == 0 or p.eatGenericClose() == null) break;
                 angle -= 1;
                 continue;
             }
@@ -348,6 +359,29 @@ fn isCloser(k: TokenKind) bool {
 
 fn isGtLike(k: TokenKind) bool {
     return k == .gt or k == .shr or k == .shr_eq or k == .gt_eq;
+}
+
+/// Whether an item (§3.2) starts at token `i`: an item keyword, possibly
+/// after attributes (`BUILTIN ( "(" ... ")" )?`). A builtin not followed by
+/// an item is an expression, not a sync point.
+fn startsItem(kinds: []const TokenKind, i: TokenIndex) bool {
+    var j = i;
+    while (kinds[j] == .builtin) {
+        j += 1;
+        if (kinds[j] != .l_paren) continue;
+        var depth: u32 = 0;
+        while (kinds[j] != .eof) : (j += 1) {
+            if (isOpener(kinds[j])) {
+                depth += 1;
+            } else if (isCloser(kinds[j])) {
+                depth -|= 1;
+                if (depth == 0) break;
+            }
+        }
+        if (kinds[j] == .eof) return false;
+        j += 1;
+    }
+    return isItemKeyword(kinds[j]);
 }
 
 /// Keywords that start an item (§3.2), where item recovery resumes.
@@ -446,18 +480,17 @@ test "`>>` is split only in type context" {
     defer p.deinit();
     for (0..5) |_| _ = p.next();
     try testing.expectEqual(.shr, p.peek(0));
-    try testing.expectEqual(5, p.eatGenericClose());
+    // Each close carries the span of exactly the `>` it consumed.
+    try testing.expectEqual(GenericClose{ .token = 5, .span = .{ .file = test_file, .start = 11, .end = 12 } }, p.eatGenericClose());
     try testing.expectEqual(.gt, p.peek(0));
     try testing.expectEqual(.shr_eq, p.peek(1));
     try testing.expectEqual(diag.Span{ .file = test_file, .start = 12, .end = 13 }, p.tokenSpan(5));
-    try testing.expectEqual(5, try p.expectGenericClose());
-    // `>>=` splits into `>` and `>=`, and `>=` into `>` and `=`.
-    try testing.expectEqual(6, p.eatGenericClose());
+    try testing.expectEqual(GenericClose{ .token = 5, .span = .{ .file = test_file, .start = 12, .end = 13 } }, try p.expectGenericClose());
+    // `>>=` splits into `>` and `>=`; `>=` is not split (§3.1).
+    try testing.expectEqual(GenericClose{ .token = 6, .span = .{ .file = test_file, .start = 14, .end = 15 } }, p.eatGenericClose());
     try testing.expectEqual(.gt_eq, p.peek(0));
-    try testing.expectEqual(6, p.eatGenericClose());
-    try testing.expectEqual(.eq, p.peek(0));
     try testing.expectEqual(null, p.eatGenericClose());
-    try testing.expectEqual(6, p.eat(.eq));
+    try testing.expectEqual(6, p.eat(.gt_eq));
     try testing.expectEqual(.ident, p.peek(0));
 
     // Expression context: `a >> b` keeps its shift token.
@@ -483,6 +516,17 @@ test "split in a stubbed item: nested generics close without error" {
     try testing.expectEqualSlices(Ast.NodeKind, &.{ .invalid, .const_decl }, r.itemKinds(&buf));
 }
 
+test "`>=` does not close generic arguments" {
+    for ([_][]const u8{ "fn f<T>= () {}\n", "fn f<T: A<B>>= () {}\n" }) |src| {
+        var r: Parsed = undefined;
+        try r.init(src);
+        defer r.deinit();
+        const ds = r.sink.finish();
+        try testing.expectEqual(1, ds.len);
+        try testing.expectEqualStrings("expected `>`, found `>=`", ds[0].message);
+    }
+}
+
 test "broken item recovers with one error" {
     const cases = [_][]const u8{
         "fn a() {}\nconst = 1;\nfn b() {}\n",
@@ -490,6 +534,13 @@ test "broken item recovers with one error" {
         "fn a() {}\nstruct S { x: i32 } }\nfn b() {}\n",
         "fn a() {}\nconst x: = 1;\nfn b() {}\n",
         "fn a() {}\ntype T = ;\nfn b() {}\n",
+        // Broken right at the next item's keyword: that item survives.
+        "fn a() {}\nconst fn b() {}\n",
+        // The next item's attributes are not skipped as garbage.
+        "fn a() {}\n42 + 1 @inline fn b() {}\n",
+        "fn a() {}\n42 + 1 @extern(\"C\", x: (1)) pub fn b() {}\n",
+        // A builtin call is not an item start.
+        "fn a() {}\nconst x: = @sizeOf(i32);\nfn b() {}\n",
     };
     for (cases) |src| {
         var r: Parsed = undefined;
@@ -500,6 +551,10 @@ test "broken item recovers with one error" {
         const ks = r.itemKinds(&buf);
         try testing.expectEqual(.fn_decl, ks[0]);
         try testing.expectEqual(.fn_decl, ks[ks.len - 1]);
+        // `itemKinds` looks through `attributed`; check the wrapper is kept.
+        const its = r.ast.data(.from(0)).root.items;
+        const attributed = std.mem.indexOf(u8, src, "@inline") != null or std.mem.indexOf(u8, src, "@extern") != null;
+        try testing.expectEqual(attributed, r.ast.kind(its[its.len - 1]) == .attributed);
         // The broken item is one poisoned `invalid` node.
         var invalid: usize = 0;
         for (r.ast.data(.from(0)).root.items) |n| if (r.ast.kind(n) == .invalid) {
