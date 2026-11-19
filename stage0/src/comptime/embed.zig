@@ -7,7 +7,10 @@
 //!   the target's layout (`sema/layout.zig`) and byte order, with
 //!   `usize`/`isize` at the target width. A `str` or slice becomes a
 //!   pointer-and-length pair whose pointer slot is a relocation to another
-//!   blob holding the elements. `decode` reads an image back.
+//!   blob holding the elements; a function pointer is a slot relocated to
+//!   the function's symbol. `decode` reads an image back.
+//! - Images and decoded values are built in an arena: they share and
+//!   drop allocations, so free them only by resetting that arena.
 //! - `addGlobal` emits a blob as a read-only P-IR global (rodata).
 
 const std = @import("std");
@@ -21,7 +24,9 @@ const layout = @import("../sema/layout.zig");
 const convert = @import("../sema/convert.zig");
 const ir = @import("../pir/ir.zig");
 const ModuleId = @import("../resolve/module_graph.zig").ModuleId;
-const Value = @import("value.zig").Value;
+const value_mod = @import("value.zig");
+const Value = value_mod.Value;
+const FnRef = value_mod.FnRef;
 
 const Items = items_mod.Items;
 const TypeId = Types.TypeId;
@@ -30,13 +35,22 @@ const Layout = layout.Layout;
 const Place = layout.Place;
 
 /// `Unsupported`: the type has no layout here (`@packed`, `@c_layout` and
-/// SoA types, T045) or holds pointers, which comptime cannot create (§8.6).
+/// SoA types, T045) or holds raw pointers or views, which comptime cannot
+/// create (§8.6).
 pub const Error = Allocator.Error || error{Unsupported};
 
-/// A pointer-sized slot of a blob that holds the address of another blob.
+/// A pointer-sized slot of a blob that holds the address of another blob
+/// or of a function.
 pub const Reloc = struct {
     offset: u64,
-    blob: u32,
+    target: Target,
+
+    pub const Target = union(enum) {
+        /// Index of a blob in the same image.
+        blob: u32,
+        /// A function, for a function-pointer value.
+        func: FnRef,
+    };
 };
 
 /// The bytes of one constant object.
@@ -110,29 +124,30 @@ fn comptimeOnly(it: *Items, seen: *std.AutoHashMapUnmanaged(TypeId, void), ty: T
 }
 
 /// Encodes `v` in the target layout of `e` (its `ptr_bits`) and byte order
-/// `endian`. `v` must be embeddable (`checkRuntime`). The image lives in
-/// `gpa`.
-pub fn encode(gpa: Allocator, e: *Engine, endian: Endian, v: Value) Error!Image {
-    var c: Codec = .{ .gpa = gpa, .e = e, .endian = endian };
+/// `endian`. `v` must be embeddable (`checkRuntime`). `arena` must be an
+/// arena: the image and scratch data live in it and are not freed singly.
+pub fn encode(arena: Allocator, e: *Engine, endian: Endian, v: Value) Error!Image {
+    var c: Codec = .{ .gpa = arena, .e = e, .endian = endian };
     const l = try c.layoutOf(v.ty);
     const b = try c.newBlob(l.size, l.@"align");
     try c.write(b, 0, v);
-    const blobs = try gpa.alloc(Blob, c.blobs.items.len);
+    const blobs = try arena.alloc(Blob, c.blobs.items.len);
     for (blobs, c.blobs.items) |*o, *w| o.* = .{ .bytes = w.bytes, .@"align" = w.@"align", .relocs = w.relocs.items };
     return .{ .blobs = blobs };
 }
 
 /// Reads back a value of type `ty` from an image made by `encode` with the
-/// same engine and byte order. The value lives in `gpa`.
-pub fn decode(gpa: Allocator, e: *Engine, endian: Endian, image: Image, ty: TypeId) Error!Value {
-    var c: Codec = .{ .gpa = gpa, .e = e, .endian = endian, .image = image };
+/// same engine and byte order. `arena` must be an arena, as for `encode`;
+/// the value lives in it. A `[N]u8` array decodes to `bytes`.
+pub fn decode(arena: Allocator, e: *Engine, endian: Endian, image: Image, ty: TypeId) Error!Value {
+    var c: Codec = .{ .gpa = arena, .e = e, .endian = endian, .image = image };
     return c.read(0, 0, ty);
 }
 
 /// Adds `blob` to `m` as the read-only global `@name`. P-IR initializers
 /// have no relocations, so the blob must have none.
 pub fn addGlobal(m: *ir.Module, name: []const u8, blob: Blob) Allocator.Error!void {
-    // shortcut: relocated blobs (strings, slices) need P-IR relocations; T091 emits them.
+    // shortcut: relocated blobs (strings, slices, function pointers) need P-IR relocations; T091 emits them.
     std.debug.assert(blob.relocs.len == 0);
     try m.addGlobal(.{ .name = name, .ty = .of(.i8), .init = .{ .bytes = blob.bytes }, .@"align" = blob.@"align", .readonly = true });
 }
@@ -145,6 +160,7 @@ const Variant = struct {
 };
 
 const Codec = struct {
+    /// An arena (see `encode`).
     gpa: Allocator,
     e: *Engine,
     endian: Endian,
@@ -272,6 +288,7 @@ const Codec = struct {
 
     fn write(c: *Codec, b: u32, off: u64, v: Value) Error!void {
         const ty = v.ty;
+        if (v.data == .bytes) return @memcpy(c.bytesOf(b)[off..][0..v.data.bytes.len], v.data.bytes);
         if (c.elems(ty)) |el| {
             const st = try c.stride(el[0]);
             for (v.data.aggregate, 0..) |x, i| try c.write(b, off + i * st, x);
@@ -285,6 +302,7 @@ const Codec = struct {
             },
             .int, .handle => c.putInt(b, off, (try c.layoutOf(ty)).size, v.data.scalar),
             .slice => |s| try c.writeSlice(b, off, s.elem, v.data.slice.len, .{ .values = v.data.slice }),
+            .fn_ptr => try c.blobs.items[b].relocs.append(c.gpa, .{ .offset = off, .target = .{ .func = v.data.fn_ref } }),
             .tuple => try c.writeRecord(b, off, (try c.layoutOf(ty)).fields, v.data.aggregate),
             .nominal => |n| {
                 if (n.kind == .distinct) return c.write(b, off, .{ .ty = n.underlying, .data = v.data });
@@ -329,7 +347,7 @@ const Codec = struct {
             .str => |s| @memcpy(c.blobs.items[target].bytes, s),
             .values => |vs| for (vs, 0..) |x, i| try c.write(target, i * st, x),
         }
-        try c.blobs.items[b].relocs.append(c.gpa, .{ .offset = off, .blob = target });
+        try c.blobs.items[b].relocs.append(c.gpa, .{ .offset = off, .target = .{ .blob = target } });
         c.putInt(b, off + c.ptrBytes(), c.ptrBytes(), len);
     }
 
@@ -337,6 +355,8 @@ const Codec = struct {
 
     fn read(c: *Codec, b: u32, off: u64, ty: TypeId) Error!Value {
         if (c.elems(ty)) |el| {
+            if (c.types().get(ty) == .array and el[0] == TypeId.int(.unsigned, 8))
+                return .{ .ty = ty, .data = .{ .bytes = try c.gpa.dupe(u8, c.bytesOf(b)[off..][0..el[1]]) } };
             const st = try c.stride(el[0]);
             const out = try c.gpa.alloc(Value, el[1]);
             for (out, 0..) |*o, i| o.* = try c.read(b, off + i * st, el[0]);
@@ -356,6 +376,10 @@ const Codec = struct {
                 for (out, 0..) |*o, i| o.* = try c.read(target, i * st, s.elem);
                 break :blk .{ .slice = out };
             },
+            .fn_ptr => .{ .fn_ref = switch (try c.reloc(b, off)) {
+                .func => |f| f,
+                .blob => return error.Unsupported,
+            } },
             .tuple => .{ .aggregate = try c.readRecord(b, off, (try c.layoutOf(ty)).fields, try c.fieldTypes(ty)) },
             .nominal => |n| blk: {
                 if (n.kind == .distinct) break :blk (try c.read(b, off, n.underlying)).data;
@@ -396,10 +420,18 @@ const Codec = struct {
         return out;
     }
 
+    /// The target of the pointer slot at `off` of blob `b`.
+    fn reloc(c: *Codec, b: u32, off: u64) Error!Reloc.Target {
+        for (c.image.blobs[b].relocs) |r| if (r.offset == off) return r.target;
+        return error.Unsupported;
+    }
+
     /// The blob that the pointer slot at `off` of blob `b` points to.
     fn slot(c: *Codec, b: u32, off: u64) Error!u32 {
-        for (c.image.blobs[b].relocs) |r| if (r.offset == off) return r.blob;
-        return error.Unsupported;
+        return switch (try c.reloc(b, off)) {
+            .blob => |x| x,
+            .func => error.Unsupported,
+        };
     }
 };
 
@@ -577,7 +609,7 @@ test "usize width follows the target; str and slices relocate their elements" {
 
         const name = try f.roundTrip(.little, .{ .ty = .str, .data = .{ .str = "table" } });
         try testing.expectEqual(@as(usize, 2 * ptr), name.blobs[0].bytes.len);
-        try testing.expectEqualSlices(Reloc, &.{.{ .offset = 0, .blob = 1 }}, name.blobs[0].relocs);
+        try testing.expectEqualSlices(Reloc, &.{.{ .offset = 0, .target = .{ .blob = 1 } }}, name.blobs[0].relocs);
         try testing.expectEqual(@as(u8, 5), name.blobs[0].bytes[ptr]);
         try testing.expectEqualStrings("table", name.blobs[1].bytes);
 
@@ -588,6 +620,29 @@ test "usize width follows the target; str and slices relocate their elements" {
         try testing.expectEqualSlices(u8, &.{ 0, 1, 0, 2, 0, 3 }, img.blobs[1].bytes);
         try testing.expectEqual(@as(u32, 2), img.blobs[1].@"align");
     }
+}
+
+test "byte arrays are compact; function pointers relocate to their function" {
+    var f: Fixture = undefined;
+    try f.init(64, "");
+    defer f.deinit();
+    const u8_t: TypeId = .int(.unsigned, 8);
+    const bytes_t = try f.intern(.{ .array = .{ .len = 3, .elem = u8_t } });
+    const img = try f.roundTrip(.big, .{ .ty = bytes_t, .data = .{ .bytes = "abc" } });
+    try testing.expectEqualStrings("abc", img.blobs[0].bytes);
+    // The element-wise form encodes the same bytes.
+    const agg = try f.agg(bytes_t, &.{ f.int(u8_t, 'a'), f.int(u8_t, 'b'), f.int(u8_t, 'c') });
+    try testing.expectEqualStrings("abc", (try encode(f.arena.allocator(), &f.e, .little, agg)).blobs[0].bytes);
+
+    // `[2]fn(i32) -> i32`: each slot is a relocation to its function.
+    const fp_t = try f.intern(.{ .fn_ptr = .{ .params = &.{.{ .type = .int(.signed, 32) }}, .ret = .int(.signed, 32) } });
+    const table_t = try f.intern(.{ .array = .{ .len = 2, .elem = fp_t } });
+    const fa: FnRef = .{ .module = 0, .node = @fromBackingInt(@intCast(1)) };
+    const fb: FnRef = .{ .module = 0, .node = @fromBackingInt(@intCast(2)) };
+    const table = try f.agg(table_t, &.{ .{ .ty = fp_t, .data = .{ .fn_ref = fa } }, .{ .ty = fp_t, .data = .{ .fn_ref = fb } } });
+    const timg = try f.roundTrip(.little, table);
+    try testing.expectEqual(@as(usize, 16), timg.blobs[0].bytes.len);
+    try testing.expectEqualDeep(@as([]const Reloc, &.{ .{ .offset = 0, .target = .{ .func = fa } }, .{ .offset = 8, .target = .{ .func = fb } } }), timg.blobs[0].relocs);
 }
 
 test "E0802: type, FnRef, FieldId and non-plain values do not reach runtime" {

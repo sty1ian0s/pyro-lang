@@ -44,7 +44,8 @@ pub const Value = struct {
         str: []const u8,
         /// A value of type `type` (§8.3).
         type: TypeId,
-        /// A value of type `FnRef` (§8.4.1).
+        /// A value of type `FnRef` (§8.4.1), or of a function-pointer type
+        /// (§8.2): the function it names.
         fn_ref: FnRef,
         /// A value of type `FieldId<T>` (§8.4.2): the field's index in
         /// declaration order.
@@ -56,6 +57,10 @@ pub const Value = struct {
         variant: Variant,
         /// The elements of a slice value.
         slice: []const Value,
+        /// The elements of a `[N]u8` array, one byte each. A compact form
+        /// of `aggregate` for large byte arrays (`@embed_file`); either
+        /// form is valid, and `embed.decode` returns this one.
+        bytes: []const u8,
     };
 
     /// A variant of an enum with payloads: its index in declaration order
@@ -111,6 +116,7 @@ pub const Value = struct {
     pub fn dupe(v: Value, gpa: Allocator) Allocator.Error!Value {
         return .{ .ty = v.ty, .data = switch (v.data) {
             .str => |s| .{ .str = try gpa.dupe(u8, s) },
+            .bytes => |s| .{ .bytes = try gpa.dupe(u8, s) },
             .aggregate => |vs| .{ .aggregate = try dupeAll(gpa, vs) },
             .slice => |vs| .{ .slice = try dupeAll(gpa, vs) },
             .variant => |x| .{ .variant = .{ .index = x.index, .payload = try dupeAll(gpa, x.payload) } },
@@ -123,6 +129,7 @@ pub const Value = struct {
         if (a.ty != b.ty or std.meta.activeTag(a.data) != std.meta.activeTag(b.data)) return false;
         return switch (a.data) {
             .str => |s| std.mem.eql(u8, s, b.data.str),
+            .bytes => |s| std.mem.eql(u8, s, b.data.bytes),
             .aggregate => |vs| eqlAll(vs, b.data.aggregate),
             .slice => |vs| eqlAll(vs, b.data.slice),
             .variant => |x| x.index == b.data.variant.index and eqlAll(x.payload, b.data.variant.payload),
