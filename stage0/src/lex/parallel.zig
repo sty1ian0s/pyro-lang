@@ -32,7 +32,9 @@ pub const Options = struct {
 /// Lexes all of `src` (the text of file `file`, BOM already stripped) into a
 /// new buffer ending with one `eof` token at `src.len`: the same tokens, and
 /// the same diagnostics on `sink`, as `lexer.tokenize`. `gpa` must be
-/// thread-safe; it allocates the per-piece buffers on pool workers.
+/// thread-safe; it allocates the per-piece buffers on pool workers. It calls
+/// `Pool.run`, so never call it from inside a `pool` job or concurrently on
+/// the same pool.
 pub fn tokenize(
     gpa: std.mem.Allocator,
     pool: *Pool,
@@ -208,6 +210,8 @@ const fragments = [_][]const u8{
     "# $ ` @ size_of",
     "\"unterminated string",
     "let r#type = r#_;",
+    "let await = yield;",
+    "let " ++ @as([lexer.max_ident_len + 45]u8, @splat('a')) ++ " = 1;",
     "@size_of(T) // trailing comment ünïcödé",
     "let ü = 1;",
     "a\x00b // NUL \x00 in comment",
