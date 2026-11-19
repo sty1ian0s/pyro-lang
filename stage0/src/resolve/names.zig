@@ -16,7 +16,9 @@
 //!
 //! Names that resolve to nothing are left out of the result, for type
 //! checking (T043) to report. Attribute arguments (`@allow(W0301)`) are not
-//! names and are skipped.
+//! names and are skipped, except contract conditions (`@requires`,
+//! `@ensures`, `@invariant`, §9.5): they are resolved in the scope of their
+//! declaration's generics and parameters, with `result` bound in `@ensures`.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -27,6 +29,7 @@ const collect = @import("collect.zig");
 const module_graph = @import("module_graph.zig");
 const imports = @import("imports.zig");
 const prelude = @import("prelude.zig");
+const attr_table = @import("../attr_table.zig");
 
 const Node = Ast.Node;
 const ModuleId = module_graph.ModuleId;
@@ -36,9 +39,12 @@ const Imports = imports.Imports;
 /// What a name use denotes.
 pub const Resolution = union(enum) {
     /// A local binding: the `pat_bind`, `pat_bind_mut`, `field_pat`,
-    /// `field_pat_mut`, `param`, `generic_param` or block `const_decl` node.
+    /// `field_pat_mut`, `param`, `generic_param` or block `const_decl` node,
+    /// or the `@ensures` `attribute` node for `result` (§9.5).
     local: Node.Index,
-    /// A module-level name, or a member of a module (`math.sqrt`).
+    /// A module-level name, or a member of a module (`math.sqrt`). An
+    /// `external` member path (`std.math.sqrt`) assumes every external
+    /// prefix is a module: see `Walker.member`.
     global: Target,
 };
 
@@ -127,14 +133,16 @@ const Walker = struct {
     fn node(w: *Walker, n: Node.Index) Error!void {
         switch (w.ast.kind(n)) {
             .use, .use_list, .invalid => {},
-            // Attribute arguments are not names in scope (`@allow(W0301)`).
-            .attributed => try w.node(w.ast.data(n).attributed.inner),
-            .fn_decl, .struct_decl, .enum_decl, .protocol_decl, .impl_decl, .type_alias, .type_distinct, .lambda => {
-                const mark = w.locals.items.len;
-                defer w.locals.shrinkRetainingCapacity(mark);
-                if (generics(w.ast, n)) |gs| for (gs) |g| try w.declare(w.ast.mainToken(g), g);
-                try w.children(n); // `param` nodes declare themselves after their type and default
+            // Attribute arguments are not names in scope (`@allow(W0301)`),
+            // except contract conditions, resolved in the declaration's scope.
+            .attributed => {
+                const d = w.ast.data(n).attributed;
+                switch (w.ast.kind(d.inner)) {
+                    .fn_decl, .struct_decl => try w.decl(d.inner, d.attrs),
+                    else => try w.node(d.inner),
+                }
             },
+            .fn_decl, .struct_decl, .enum_decl, .protocol_decl, .impl_decl, .type_alias, .type_distinct, .lambda => try w.decl(n, &.{}),
             .param => {
                 try w.children(n);
                 const mt = w.ast.mainToken(n);
@@ -184,6 +192,29 @@ const Walker = struct {
                 if (w.lookup(w.identText(w.ast.mainToken(n)))) |r| try w.map.put(w.a, n, .{ .res = r });
             },
             else => try w.children(n),
+        }
+    }
+
+    /// A declaration or lambda `n` in a scope of its generics and parameters,
+    /// then the contract conditions among its `attrs` in that scope (§9.5).
+    fn decl(w: *Walker, n: Node.Index, attrs: []const Node.Index) Error!void {
+        const mark = w.locals.items.len;
+        defer w.locals.shrinkRetainingCapacity(mark);
+        if (generics(w.ast, n)) |gs| for (gs) |g| try w.declare(w.ast.mainToken(g), g);
+        try w.children(n); // `param` nodes declare themselves after their type and default
+        for (attrs) |a| {
+            const text = w.ast.tokenSlice(w.ast.mainToken(a));
+            const attr = attr_table.lookup(if (std.mem.startsWith(u8, text, "@")) text[1..] else text) orelse continue;
+            switch (attr) {
+                .requires, .invariant => try w.children(a),
+                .ensures => {
+                    // `result` is the return value only here (§2.4); no shadowing check.
+                    try w.locals.append(w.a, .{ .name = "result", .node = a });
+                    defer w.locals.items.len -= 1;
+                    try w.children(a);
+                },
+                else => {},
+            }
         }
     }
 
@@ -342,6 +373,9 @@ const Walker = struct {
     fn member(w: *Walker, base: Target, tok: Ast.TokenIndex) Error!?Target {
         const name = w.identText(tok);
         switch (base) {
+            // shortcut: every external target is taken as a module, so
+            // `FixedArena.init` or `PI.x` becomes a bogus member path; fix with
+            // T163, when std is compiled and the external's kind is known.
             .external => |p| return .{ .external = try std.fmt.allocPrint(w.a, "{s}.{s}", .{ p, name }) },
             // The prelude's only module is `std` (§14.1).
             .prelude => |p| return if (std.mem.eql(u8, p, "std")) .{ .external = try std.fmt.allocPrint(w.a, "std.{s}", .{name}) } else null,
@@ -712,6 +746,32 @@ test "module member paths: package modules, privacy, items stay field accesses" 
     try testing.expect(r.entryOf("main", .field_access, "Point", 0) != null);
     try testing.expectEqual(null, r.entryOf("main", .field_access, "origin", 0));
     try testing.expectEqual(null, r.entryOf("main", .field_access, "x", 0));
+}
+
+test "contract conditions resolve in the declaration's scope; other attribute arguments are skipped" {
+    var r: Resolved = undefined;
+    try r.init(&.{.{
+        "main",
+        \\const lo: u32 = 0;
+        \\@requires(a > lo)
+        \\@ensures(result >= a)
+        \\@allow(W0301)
+        \\fn f<T>(a: u32, t: T) -> u32 { a }
+        \\@invariant(lo <= 1)
+        \\struct S { x: u32 }
+        \\fn result() {}
+        \\fn g() -> u32 { result }
+    }}, .{});
+    defer r.deinit();
+    try r.expectDiags(&.{});
+    const ast = r.g.modules[0].ast;
+    try testing.expectEqual(.param, ast.kind(r.entryOf("main", .ident, "a", 0).?.res.local));
+    try testing.expectEqual(.param, ast.kind(r.entryOf("main", .ident, "a", 1).?.res.local));
+    try testing.expectEqual(Target{ .item = .{ .module = 0, .item = 0 } }, r.entryOf("main", .ident, "lo", 0).?.res.global);
+    try testing.expectEqual(Target{ .item = .{ .module = 0, .item = 0 } }, r.entryOf("main", .ident, "lo", 1).?.res.global);
+    // `result` is the return value in `@ensures` only; elsewhere it is an ordinary name.
+    try testing.expectEqual(.attribute, ast.kind(r.entryOf("main", .ident, "result", 0).?.res.local));
+    try testing.expectEqual(Target{ .item = .{ .module = 0, .item = 3 } }, r.entryOf("main", .ident, "result", 1).?.res.global);
 }
 
 test "runFiles: E0301 and W0301 through the resolve stage" {
