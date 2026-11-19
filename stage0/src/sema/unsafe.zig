@@ -8,7 +8,7 @@
 //!   `unsafe`, E0805 in comptime code (`Checker.in_comptime`), which cannot
 //!   use `unsafe` at all (§8.6).
 //! - Raw-pointer operations (§12.2): `deref` (`*p`), `addrOf` (`&x`) and
-//!   `derefPlace` (`*p` as an assignment target or `mut` argument).
+//!   `pointee` (`*p` as a place, for `mutability.operand`).
 //!   Integer-to-pointer `as` casts gate in `check_expr.cast`, pointer
 //!   builtins in `builtins.zig`, pointer indexing in T051's `p[i]`.
 //! - `callee` gates calls of `extern` and `@unsafe` functions.
@@ -27,7 +27,6 @@ const TypeId = Types.TypeId;
 const Checker = emit_tir.Checker;
 const Typed = emit_tir.Typed;
 const Error = emit_tir.Error;
-const Place = check_stmt.Place;
 
 /// `unsafe { ... }` (§6.11, §12.1). E0805 in comptime code (§8.6).
 pub fn block(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
@@ -61,25 +60,16 @@ pub fn callee(c: *Checker, at: Node.Index, ast: *const Ast, sig: items_mod.Fn, i
 
 /// `*p` as a value (§12.2): loads the pointee.
 pub fn deref(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
-    const p = try derefPlace(c, n, false) orelse return .err;
+    const p = try pointee(c, n) orelse return .err;
     return .{ .ty = p.ty, .ref = try c.emit(p.ty, .{ .load = .{ .place = p.ref } }) };
 }
 
-/// `*p` as a place (§12.2); `write` requires `p: *T` (E0337 for `*const T`).
-pub fn derefPlace(c: *Checker, n: Node.Index, write: bool) Error!?Place {
-    const p = try pointee(c, n) orelse return null;
-    if (write and !p.mutable) {
-        try c.reportAt(c.ast.mainToken(n), .E0337, &.{"use a `*T` pointer to write through it"}, "cannot write through a `*const {s}` pointer", .{try c.tyName(p.ty)});
-        return null;
-    }
-    return .{ .ref = p.ref, .ty = p.ty };
-}
-
 /// A place, its type, and whether it may be written.
-const Addressed = struct { ref: tir.Ref, ty: TypeId, mutable: bool };
+pub const Addressed = struct { ref: tir.Ref, ty: TypeId, mutable: bool };
 
-/// The place `*p` names at `n`, or null after a diagnostic.
-fn pointee(c: *Checker, n: Node.Index) Error!?Addressed {
+/// The place `*p` names at `n` (§12.2), writable through `*T` only, or
+/// null after a diagnostic. Writes are checked by `mutability.require`.
+pub fn pointee(c: *Checker, n: Node.Index) Error!?Addressed {
     const ok = try require(c, n, "dereferencing a raw pointer");
     const v = try check_expr.check(c, c.ast.data(n).prefix.operand, .none);
     if (v.ty == .err or v.ty == .noreturn) {

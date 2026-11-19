@@ -32,7 +32,7 @@ const kinds = @import("kinds.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_literals = @import("check_literals.zig");
-const check_index = @import("check_index.zig");
+const mutability = @import("mutability.zig");
 const builtins = @import("builtins.zig");
 const check_member = @import("check_member.zig");
 const check_stmt = @import("check_stmt.zig");
@@ -239,7 +239,7 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
             _ = try check_expr.check(c, value, .none);
             return .err;
         }
-        const place = try mutPlace(c, a, value) orelse return .err;
+        const place = try mutability.mutArg(c, a, value) orelse return .err;
         if (place.ty == .noreturn) return .never;
         if (place.ty == .err or p.type == .err) return .err;
         if (place.ty != p.type) {
@@ -295,7 +295,7 @@ pub fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
             const e = c.items.names.get(c.m, n) orelse return null;
             return switch (e.res) {
                 .local => |l| switch (c.ast.kind(l)) {
-                    .pat_bind, .pat_bind_mut, .param => c.locals.get(l),
+                    .pat_bind, .pat_bind_mut, .field_pat, .field_pat_mut, .param => c.locals.get(l),
                     else => null,
                 },
                 .global => null,
@@ -303,81 +303,6 @@ pub fn localOf(c: *Checker, n: Node.Index) ?tir.Local {
         },
         else => return null,
     }
-}
-
-/// The mutable place `value` of `mut` argument `a` names (§5.5.2): a
-/// `let mut` binding, a `mut` parameter or `mut self`, a field or element
-/// of one (§5.5.2, §6.5.4), or `*p` for `p: *T` (§12.2); E0336 otherwise.
-fn mutPlace(c: *Checker, a: Node.Index, value: Node.Index) Error!?check_index.Place {
-    const ast = c.ast;
-    if (check_stmt.mixedPlace(c, value)) {
-        _ = c.unsupported(value, "places mixing fields and elements (W13 follow-up)");
-        return null;
-    }
-    var v = value;
-    var fields = false;
-    // The root of a field chain decides mutability (§5.5.2).
-    while (true) switch (ast.kind(v)) {
-        .paren => v = ast.data(v).paren.inner,
-        .field_access => if (c.items.names.get(c.m, v) == null) {
-            fields = true;
-            v = ast.data(v).field_access.lhs;
-        } else break,
-        else => break,
-    };
-    switch (ast.kind(v)) {
-        // `*p` names a place through a raw pointer; other prefix forms are values.
-        .prefix => if (ast.tokens.items(.kind)[ast.mainToken(v)] == .star) {
-            if (fields) {
-                _ = c.unsupported(v, "fields through raw pointers (T054)");
-                return null;
-            }
-            const p = try unsafe.derefPlace(c, v, true) orelse return null;
-            return .{ .ref = p.ref, .ty = p.ty, .mutable = true };
-        },
-        .ident => if (c.items.names.get(c.m, v) == null) {
-            _ = try check_expr.check(c, v, .none); // reports the unknown name
-            return null;
-        },
-        else => {},
-    }
-    const help: []const []const u8 = &.{"pass a `let mut` binding, a `mut` parameter, or a field or element of one"};
-    if (fields) {
-        const l = localOf(c, v) orelse {
-            try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
-            return null;
-        };
-        const info = c.b.locals.get(l.int());
-        switch (info.kind) {
-            .let_mut, .param_mut, .temp => {
-                const p = try check_member.place(c, value, .write) orelse {
-                    try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
-                    return null;
-                };
-                return .{ .ref = p.ref, .ty = p.ty, .root = l, .mutable = true };
-            },
-            .let, .param, .param_move => {
-                try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place: `{s}` is not mutable", .{c.types.strings.get(info.name)});
-                return null;
-            },
-        }
-    }
-    if (ast.kind(v) != .index and localOf(c, v) == null) {
-        try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
-        return null;
-    }
-    const p = try check_index.place(c, v);
-    if (p.ty == .err) return null;
-    if (p.mutable or p.ty == .noreturn) return p;
-    if (p.root != .none) {
-        const info = c.b.locals.get(p.root.int());
-        if (info.kind == .let or info.kind == .param or info.kind == .param_move) {
-            try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place: `{s}` is not mutable", .{c.types.strings.get(info.name)});
-            return null;
-        }
-    }
-    try c.reportAt(ast.mainToken(a), .E0336, help, "`mut` argument is not a mutable place", .{});
-    return null;
 }
 
 /// Default value `v` of a parameter of type `ty` at call `n` (§7.2.3).
@@ -577,7 +502,7 @@ test "E0374: positional after named, duplicates; unknown names and arity" {
     });
 }
 
-test "modes: E0334, E0335, E0336; `view_mut` for `mut` arguments" {
+test "modes: E0334, E0335; E0336 for values, E0337/E0338 for immutable roots; `view_mut` for `mut` arguments" {
     var f: Fixture = undefined;
     try f.init(
         \\const LIMIT: u8 = 9;
@@ -603,7 +528,7 @@ test "modes: E0334, E0335, E0336; `view_mut` for `mut` arguments" {
     defer f.deinit();
     try f.expectDiags(&.{
         .{ .E0334, "p" },   .{ .E0335, "mut" }, .{ .E0336, "mut" },
-        .{ .E0336, "mut" }, .{ .E0336, "mut" }, .{ .E0336, "mut" },
+        .{ .E0336, "mut" }, .{ .E0337, "mut" }, .{ .E0338, "mut" },
     });
     try f.expectDump("good",
         \\fn good(l0 mut p: u8) -> void {
@@ -734,10 +659,10 @@ test "`move` arguments are unsupported until T080" {
     }
 }
 
-test "`mut` arguments: parenthesized places, fields of mutable places; values are E0336" {
+test "`mut` arguments: parenthesized places, fields of mutable places; values are E0336, read-only parameters E0338" {
     for ([_]struct { []const u8, ?diag.DiagCode, ?[]const u8 }{
         .{ "heal(mut (p.health), 1);", null, null },
-        .{ "heal(mut r.health, 1);", .E0336, null },
+        .{ "heal(mut r.health, 1);", .E0338, null },
         .{ "heal(mut ((q)), 1);", null, null },
         .{ "heal(mut -q, 1);", .E0336, null },
         .{ "heal(mut (1), 1);", .E0336, null },

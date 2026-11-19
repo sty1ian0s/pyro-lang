@@ -103,6 +103,8 @@ pub fn check(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
 
 /// Checks expression `n` and converts it to `to` (§4.9.1).
 pub fn checkAs(c: *Checker, n: Node.Index, to: TypeId) Error!Typed {
+    // A `mut T` is a view of a mutable place (§5.5.3, §5.5.4).
+    if (to != .none and to != .err and c.types.get(to) == .mut_view) return @import("mutability.zig").viewMut(c, n, to);
     return c.coerce(try check(c, n, to), to, check_stmt.valueNode(c.ast, n));
 }
 

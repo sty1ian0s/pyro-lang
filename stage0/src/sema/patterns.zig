@@ -27,6 +27,7 @@ const convert = @import("convert.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_stmt = @import("check_stmt.zig");
+const mutability = @import("mutability.zig");
 const exhaustive = @import("exhaustive.zig");
 const tir = @import("../tir/tir.zig");
 
@@ -149,7 +150,9 @@ pub fn letPattern(c: *Checker, s: Node.Index) Error!bool {
     const d = c.ast.data(s).let;
     const decl: TypeId = if (d.ty) |t| try c.resolveType(t) else .none;
     if (decl != .none and decl != .err and c.types.get(decl) == .mut_view) {
-        _ = c.unsupported(s, "`mut T` locals (T055)");
+        // §5.5.3: a `mut T` view is bound to one local; parts of it are reached through it.
+        try c.reportAt(c.ast.mainToken(d.pattern), null, &.{"bind the view to a name, then use its fields"}, "a `mut T` view cannot be destructured", .{});
+        _ = try check_expr.check(c, d.init, .none);
         return false;
     }
     const subj = try subject(c, d.init, decl);
@@ -682,22 +685,33 @@ fn bindAll(c: *Checker, subj: Subject, p: Pat, path: []const Step, named: *std.S
 fn bind(c: *Checker, subj: Subject, p: Pat, path: []const Step, named: *std.StringHashMapUnmanaged(tir.Local), match_rules: bool) Error!void {
     const kind = c.ast.kind(p.bind);
     const is_mut = kind == .pat_bind_mut or kind == .field_pat_mut;
+    // `mut x` into a mutable subject place is a `mut` view of that part
+    // (§6.6.3); a `mut T` payload is bound as the view it is (§5.5.3).
+    const view = match_rules and is_mut and subj.mutable and p.ty != .err;
+    const ty = if (view) try c.types.intern(.{ .mut_view = .{ .elem = p.ty } }) else p.ty;
     const name = bindName(c, p.bind);
     const gop = try named.getOrPut(c.arena, name);
     if (!gop.found_existing) gop.value_ptr.* = try c.b.addLocal(.{
-        .ty = p.ty,
+        .ty = ty,
         .name = try c.types.strings.intern(name),
-        .kind = if (is_mut) .let_mut else .let,
+        .kind = if (is_mut and !view) .let_mut else .let,
         .node = p.bind,
     });
     const l = gop.value_ptr.*;
     try c.locals.put(c.arena, p.bind, l);
     if (p.ty == .err) return;
-    if ((match_rules and is_mut and subj.mutable) or c.types.get(p.ty) == .mut_view) {
-        _ = c.unsupported(p.bind, "`mut` views bound by patterns (T055)");
+    const at = try place(c, subj, path);
+    if (view) {
+        // shortcut: enum payload fields are not checked for bit fields (§4.11.2 names struct fields), add them if the layout keeps packing them.
+        for (path, 0..) |s, i| if (s.data == .field and mutability.unaddressableField(c, if (i == 0) subj.value.ty else path[i - 1].ty, s.data.field)) {
+            try c.reportAt(c.ast.mainToken(p.bind), .E0308, &.{"bind it without `mut` and assign the field back (§4.11.2)"}, "a bit field or a field of a `@packed` struct has no address: it cannot be bound as a `mut` view", .{});
+            return;
+        };
+        const v = try c.emit(ty, .{ .view_mut = .{ .place = at } });
+        const slot = try c.emit(ty, .{ .local = .{ .local = l } });
+        _ = try c.emit(.void, .{ .store = .{ .place = slot, .value = v } });
         return;
     }
-    const at = try place(c, subj, path);
     const value = if (try check_stmt.isResource(c, p.ty)) switch (subj.mode) {
         .move => try c.emit(p.ty, .{ .move = .{ .place = at } }),
         .view, .copy => try c.emit(p.ty, .{ .view = .{ .place = at } }),

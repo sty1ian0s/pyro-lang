@@ -286,6 +286,14 @@ pub const Checker = struct {
             c.failed = true; // reported with the value or the type
             return .err;
         }
+        // Reading a `mut T` view where a plain `T` is expected copies it (§4.5.3).
+        if (v.ty != to and v.ty != .noreturn) switch (c.types.get(v.ty)) {
+            .mut_view => |mv| if (try kinds_mod.kind(c.items, mv.elem) == .plain) {
+                const at_ref = try c.emit(mv.elem, .{ .deref = .{ .ptr = v.ref } });
+                return c.coerce(.{ .ty = mv.elem, .ref = try c.emit(mv.elem, .{ .load = .{ .place = at_ref } }) }, to, at);
+            },
+            else => {},
+        };
         // A loaded place can be viewed as a slice (§4.9.1).
         switch (convert.coerce(c.types, v.ty, to, .{ .place = v.ref != .none and c.b.data(v.ref) == .load })) {
             .identity => return .{ .ty = to, .ref = v.ref },

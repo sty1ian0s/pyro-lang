@@ -13,8 +13,8 @@
 //!   receiver is passed by that parameter's mode without a call-site
 //!   marker: `view_mut` of its place for `mut`, a view of a resource place,
 //!   else its value.
-//! - `place` emits the place a field chain names, for reads, assignments
-//!   (E0337/E0338 at its root) and `mut` arguments.
+//! - `fieldPlace` is the field step of `mutability.operand`'s places, for
+//!   reads, assignments and `mut` arguments.
 //!
 //! Swizzles are T128's, methods of built-in and standard library types
 //! T105's, T108's, T110's, T130's and T163's, and generic receivers T068's
@@ -31,6 +31,8 @@ const check_expr = @import("check_expr.zig");
 const check_stmt = @import("check_stmt.zig");
 const check_call = @import("check_call.zig");
 const check_literals = @import("check_literals.zig");
+const check_index = @import("check_index.zig");
+const mutability = @import("mutability.zig");
 const prelude = @import("../resolve/prelude.zig");
 const ModuleId = @import("../resolve/module_graph.zig").ModuleId;
 
@@ -39,15 +41,7 @@ const TypeId = Types.TypeId;
 const Checker = emit_tir.Checker;
 const Typed = emit_tir.Typed;
 const Error = emit_tir.Error;
-const Place = check_stmt.Place;
-
-/// How the root of a place chain is used.
-pub const Access = enum {
-    read,
-    /// Written: the root must be mutable (E0337/E0338) and the fields
-    /// writable here (`pub mut` outside the module, §7.3.3).
-    write,
-};
+const Place = mutability.Place;
 
 // ---------------------------------------------------------------------------
 // Fields (§6.3.2)
@@ -58,69 +52,68 @@ pub fn fieldAccess(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     if (c.items.names.get(c.m, n) != null) return check_expr.ident(c, n, expected);
     const lhs = c.ast.data(n).field_access.lhs;
     if (try typePath(c, lhs)) |ty| return typeMember(c, n, n, ty, null);
-    if (try place(c, n, .read)) |p| {
-        if (p.ty == .err) return .err;
-        return .{ .ty = p.ty, .ref = try c.emit(p.ty, .{ .load = .{ .place = p.ref } }) };
-    }
-    const v = try c.materialize(try check_expr.check(c, lhs, .none), lhs);
+    return switch (try mutability.operand(c, n, .read)) {
+        .place => |p| if (p.bad()) .{ .ty = p.ty } else .{ .ty = p.ty, .ref = try c.emit(p.ty, .{ .load = .{ .place = p.ref } }) },
+        .value => |v| v,
+    };
+}
+
+/// Field `n` (a `field_access`) of place `base`, used by `access`: it keeps
+/// the root, mutability and addressability of `base`, and is not
+/// addressable if it is a bit field or a `@packed` field (§4.11.2,
+/// §4.11.3). A place of type `.err` after a diagnostic.
+pub fn fieldPlace(c: *Checker, n: Node.Index, base: Place, access: mutability.Access) Error!Place {
+    const f = try field(c, n, base.ty, access) orelse return .{ .ty = .err };
+    return .{
+        .ref = try c.emit(f.ty, .{ .field = .{ .base = base.ref, .index = f.index } }),
+        .ty = f.ty,
+        .root = base.root,
+        .mutable = base.mutable,
+        .through_ptr = base.through_ptr,
+        .unaddressable = base.unaddressable or mutability.unaddressableField(c, base.ty, f.index),
+    };
+}
+
+/// Field `n` (a `field_access`) of value `v`, the checked left-hand side:
+/// `extract`ed from it.
+pub fn fieldOfValue(c: *Checker, n: Node.Index, v: Typed) Error!Typed {
     if (v.ty == .err or v.ty == .noreturn) return v;
     if (isColumns(c, v.ty)) return c.unsupported(n, "columns of temporary SoA values (T091)");
     const f = try field(c, n, v.ty, .read) orelse return .err;
     return .{ .ty = f.ty, .ref = try c.emit(f.ty, .{ .extract = .{ .value = v.ref, .index = f.index } }) };
 }
 
-/// The place that place expression `n` names: a local, `self`, or a field
-/// of a place (§1.6), emitted. Null, with nothing emitted, if `n` is not a
-/// place expression; a place of type `.err` after a diagnostic.
-pub fn place(c: *Checker, n: Node.Index, access: Access) Error!?Place {
-    switch (c.ast.kind(n)) {
-        .paren => return place(c, c.ast.data(n).paren.inner, access),
-        .ident, .self_value => {
-            const l = check_call.localOf(c, n) orelse return null;
-            const ty = c.b.locals.items(.ty)[l.int()];
-            // Writes through a `mut T` view are the view's (§5.5.3).
-            if (access == .write and c.types.get(ty) != .mut_view)
-                return try check_stmt.localPlace(c, n, l) orelse .{ .ref = .none, .ty = .err };
-            return .{ .ref = try c.emit(ty, .{ .local = .{ .local = l } }), .ty = ty };
-        },
-        .field_access => {
-            if (c.items.names.get(c.m, n) != null) return null; // a module member
-            const base = try place(c, c.ast.data(n).field_access.lhs, access) orelse return null;
-            if (base.ty == .err) return base;
-            const f = try field(c, n, base.ty, access) orelse return .{ .ref = .none, .ty = .err };
-            return .{ .ref = try c.emit(f.ty, .{ .field = .{ .base = base.ref, .index = f.index } }), .ty = f.ty };
-        },
-        else => return null,
-    }
-}
-
-/// Assignment target `n`, a `field_access` that is not a module member:
-/// its place, or null after a diagnostic (E0207 if it is not a place).
-pub fn assignTarget(c: *Checker, n: Node.Index) Error!?Place {
-    if (try place(c, n, .write)) |p| return if (p.ty == .err) null else p;
-    try c.reportAt(c.ast.mainToken(n), .E0207, &.{"bind the value with `let mut` first"}, "cannot assign to field `{s}` of a value that is not a place", .{c.ast.tokenSlice(c.ast.mainToken(n))});
-    return null;
-}
-
 /// The type of place expression `n` without emitting anything; null if it
-/// is not a place expression or one of its fields is not found (checking
-/// it as a value reports that).
+/// is not a place expression rooted at a local, or one of its fields or
+/// elements is not found (checking it as a value reports that). `mut T`
+/// views are followed.
 fn placeType(c: *Checker, n: Node.Index) Error!?TypeId {
-    switch (c.ast.kind(n)) {
+    const ty: TypeId = switch (c.ast.kind(n)) {
         .paren => return placeType(c, c.ast.data(n).paren.inner),
-        .ident, .self_value => {
-            const l = check_call.localOf(c, n) orelse return null;
-            return c.b.locals.items(.ty)[l.int()];
-        },
-        .field_access => {
+        .ident, .self_value => c.b.locals.items(.ty)[(check_call.localOf(c, n) orelse return null).int()],
+        .field_access => blk: {
             if (c.items.names.get(c.m, n) != null) return null;
             const base = try placeType(c, c.ast.data(n).field_access.lhs) orelse return null;
             if (base == .err) return null;
-            const f = try lookupField(c, base, c.ast.tokenSlice(c.ast.mainToken(n))) orelse return null;
-            return f.ty;
+            break :blk (try lookupField(c, base, c.ast.tokenSlice(c.ast.mainToken(n))) orelse return null).ty;
+        },
+        .index => blk: {
+            if (check_index.isSlice(c.ast, n)) return null;
+            const base = try placeType(c, c.ast.data(n).index.lhs) orelse return null;
+            if (base == .err) return null;
+            const u = c.underlying(base);
+            if (u == .str) break :blk .int(.unsigned, 8);
+            break :blk switch (c.types.get(u)) {
+                inline .array, .soa_array, .slice, .soa_slice, .vec, .ptr => |x| x.elem,
+                else => return null,
+            };
         },
         else => return null,
-    }
+    };
+    return switch (c.types.get(ty)) {
+        .mut_view => |v| v.elem,
+        else => ty,
+    };
 }
 
 const Field = struct { index: u32, ty: TypeId };
@@ -147,15 +140,11 @@ fn lookupField(c: *Checker, ty: TypeId, name: []const u8) Error!?Field {
 
 /// Field `n` (a `field_access`) of a value of type `ty`, reported if it is
 /// missing or not visible for `access` here (§7.3.3).
-fn field(c: *Checker, n: Node.Index, ty: TypeId, access: Access) Error!?Field {
+fn field(c: *Checker, n: Node.Index, ty: TypeId, access: mutability.Access) Error!?Field {
     const name = c.ast.tokenSlice(c.ast.mainToken(n));
     switch (c.types.get(ty)) {
         .vec => {
             _ = c.unsupported(n, "swizzles (T128)");
-            return null;
-        },
-        .mut_view => {
-            _ = c.unsupported(n, "fields through `mut T` views (T055)");
             return null;
         },
         .nominal => |nm| if (nm.kind == .protocol) {
@@ -207,7 +196,7 @@ fn isColumns(c: *Checker, ty: TypeId) bool {
 
 /// The type that `lhs` of `lhs.name` names (`Opcode`, `geo.Point`, `Self`,
 /// a prelude type), or null if it is a value.
-fn typePath(c: *Checker, lhs: Node.Index) Error!?TypeId {
+pub fn typePath(c: *Checker, lhs: Node.Index) Error!?TypeId {
     switch (c.ast.kind(lhs)) {
         .self_type => return if (c.self_ty == .none) null else c.self_ty,
         .ident, .field_access => {},
@@ -345,13 +334,15 @@ pub fn call(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
 
 /// A receiver typed before its method is known: a place expression
 /// (`value` null: nothing emitted yet, the parameter mode decides how it
-/// is passed) or a checked value.
+/// is passed) or a checked value. For a `mut T` view value (a `-> mut
+/// Self` result, §5.5.4) `ty` is `T`.
 const Receiver = struct { node: Node.Index, ty: TypeId, value: ?Typed };
 
 fn receiver(c: *Checker, e: Node.Index) Error!Receiver {
     if (try placeType(c, e)) |ty| return .{ .node = e, .ty = ty, .value = null };
     const v = try c.materialize(try check_expr.check(c, e, .none), e);
-    return .{ .node = e, .ty = v.ty, .value = v };
+    const ty = if (v.ty != .err and c.types.get(v.ty) == .mut_view) c.types.get(v.ty).mut_view.elem else v.ty;
+    return .{ .node = e, .ty = ty, .value = v };
 }
 
 /// A function a method call resolves to, declared in module `m`.
@@ -465,12 +456,19 @@ fn pass(c: *Checker, r: Receiver, p: items_mod.Param) Error!Typed {
     switch (p.mode) {
         .@"comptime" => return c.unsupported(r.node, "calls of functions with `comptime` parameters (T063)"),
         .mut => {
-            if (r.value != null) {
+            if (r.value) |v| {
+                // A `mut T` view is passed on as it is (§4.5.3).
+                if (v.ty != r.ty and r.ty == p.type) return v;
+                if (v.ty != r.ty) {
+                    try c.mismatch(r.node, p.type, r.ty);
+                    return .err;
+                }
                 try c.reportAt(check_stmt.firstToken(c.ast, r.node), .E0336, &.{"bind the value with `let mut` first"}, "receiver of a `mut` parameter is not a mutable place", .{});
                 return .err;
             }
-            const pl = try place(c, r.node, .write) orelse return .err;
-            if (pl.ty == .err) return .err;
+            const pl = try receiverPlace(c, r, .write) orelse return .err;
+            if (pl.bad()) return .{ .ty = pl.ty };
+            if (!try mutability.require(c, pl, r.node, .receiver)) return .err;
             if (pl.ty != p.type) {
                 try c.mismatch(r.node, p.type, pl.ty);
                 return .err;
@@ -482,13 +480,25 @@ fn pass(c: *Checker, r: Receiver, p: items_mod.Param) Error!Typed {
         .value => {},
     }
     if (r.value) |v| return c.coerce(v, p.type, r.node);
-    const pl = try place(c, r.node, .read) orelse return .err;
-    if (pl.ty == .err) return .err;
+    const pl = try receiverPlace(c, r, .read) orelse return .err;
+    if (pl.bad()) return .{ .ty = pl.ty };
     // A resource or shared cell is passed as a view of its place (§5.5.2, §5.1).
     const kind = if (p.mode == .value) try kinds.kind(c.items, p.type) else .plain;
     if (pl.ty == p.type and (kind == .resource or kind == .shared_cell))
         return .{ .ty = pl.ty, .ref = try c.emit(pl.ty, .{ .view = .{ .place = pl.ref } }) };
     return c.coerce(.{ .ty = pl.ty, .ref = try c.emit(pl.ty, .{ .load = .{ .place = pl.ref } }) }, p.type, r.node);
+}
+
+/// The place of receiver `r`, a place expression (`placeType`); null if
+/// it checked as a value after all (not expected; the body fails).
+fn receiverPlace(c: *Checker, r: Receiver, access: mutability.Access) Error!?Place {
+    switch (try mutability.operand(c, r.node, access)) {
+        .place => |pl| return pl,
+        .value => {
+            c.failed = true;
+            return null;
+        },
+    }
 }
 
 /// Checks the arguments of a failed call for their own errors.
