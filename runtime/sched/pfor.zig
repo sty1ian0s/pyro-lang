@@ -2,7 +2,10 @@
 //! `pfor.begin range, chunk` / `pfor.end` pair (B.5.2). The loop body becomes
 //! a chunk function that runs iterations `lo..hi` in order:
 //!
-//!     pyro_rt_pfor(lo, hi, chunk_hint, body_chunk, &captures);
+//!     pyro_rt_pfor(0, len, chunk_hint, body_chunk, &captures);
+//!
+//! The index space is 0-based; the body adds the range start (see
+//! `pyro_rt_pfor`).
 //!
 //! The range is cut into contiguous chunks of at least `min_chunk` iterations
 //! (the whole range when it is smaller). Up to `threads()` runners, the calling
@@ -22,6 +25,10 @@ pub const ChunkFn = *const fn (ctx: ?*anyopaque, lo: usize, hi: usize) callconv(
 
 /// Runs `body` over `begin..end` in parallel chunks of at least
 /// `max(chunk_hint, 64)` iterations; `chunk_hint` 0 lets the runtime choose.
+/// `begin..end` is unsigned and runs nothing when `end <= begin`, so lowering
+/// passes the 0-based index space `0..len` of the source `Range<T>` (§6.5.1)
+/// and the chunk body adds the range start from its captures. This keeps
+/// signed ranges such as `-10..10` correct.
 pub export fn pyro_rt_pfor(begin: usize, end: usize, chunk_hint: usize, body: ChunkFn, ctx: ?*anyopaque) callconv(.c) void {
     run(begin, end, chunk_hint, body, ctx, pool.pyro_rt_threads());
 }
@@ -138,6 +145,26 @@ test "N threads: each index once, chunks contiguous and >= 64" {
     for ([_]usize{ 2, 8, 64 }) |threads| {
         for (lens) |len| try expectLoop(0, len, 0, threads);
     }
+}
+
+test "N threads: chunks run on a runner other than the caller" {
+    if (pool.pyro_rt_threads() < 2) return error.SkipZigTest;
+    const Probe = struct {
+        caller: std.Thread.Id,
+        off_caller: std.atomic.Value(bool) = .init(false),
+
+        // The caller blocks in its first chunk until a helper runs one, so a
+        // loop that never leaves the caller fails instead of passing by luck.
+        fn body(ctx: ?*anyopaque, _: usize, _: usize) callconv(.c) void {
+            const p: *@This() = @ptrCast(@alignCast(ctx.?));
+            if (std.Thread.getCurrentId() != p.caller) return p.off_caller.store(true, .release);
+            var spins: usize = 0;
+            while (!p.off_caller.load(.acquire) and spins < 1_000_000) : (spins += 1) std.Thread.yield() catch {};
+        }
+    };
+    var p: Probe = .{ .caller = std.Thread.getCurrentId() };
+    run(0, 64 * 64, 0, Probe.body, &p, 8);
+    try testing.expect(p.off_caller.load(.acquire));
 }
 
 test "non-zero range start and chunk hint" {
