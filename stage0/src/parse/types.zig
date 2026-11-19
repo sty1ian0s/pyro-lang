@@ -11,6 +11,7 @@ const Ast = @import("../ast/Ast.zig");
 const Node = Ast.Node;
 const TokenKind = @import("../lex/token.zig").TokenKind;
 const expr = @import("expr.zig");
+const items = @import("items.zig");
 
 /// Parses a `type`.
 pub fn parseType(p: *Parser) Parser.Error!Node.Index {
@@ -92,9 +93,13 @@ fn parse(p: *Parser, mode: Mode) Parser.Error!Node.Index {
             return p.addNode(t, .{ .tuple = .{ .elems = p.scratch.items[top..] } });
         },
         .kw_struct => {
+            // Extension point: items.zig (T020) owns `struct_body`; once it exports
+            // `pub fn parseAnonStruct(p: *Parser) Parser.Error!Node.Index`, called at
+            // `struct` and returning an `anon_struct`, this picks it up unchanged.
+            if (@hasDecl(items, "parseAnonStruct")) return items.parseAnonStruct(p);
             _ = p.next();
-            // shortcut: the body is skipped and left empty because struct-body
-            // parsing is T020's (items.zig); call it here once it exists.
+            // shortcut: fields and members are dropped until items.zig exports
+            // `parseAnonStruct`; the "anonymous struct body" test pins this.
             try p.skipGroup(.l_brace, .r_brace);
             return p.addNode(t, .{ .anon_struct = .{ .fields = &.{}, .members = &.{} } });
         },
@@ -315,10 +320,21 @@ test "every type form" {
     try expectType("(T)", "paren(path:T)");
     try expectType("(T,)", "tuple(path:T)");
     try expectType("(A, B, C,)", "tuple(path:A path:B path:C)");
-    try expectType("struct { x: i32 }", "anon_struct:struct");
     // Call arguments are expressions (stubbed until T023).
     try expectType("Pool(Particle)", "call(path:Pool invalid:Particle)");
     try expectType("Make(n: 4, mut x, fn())", "call(path:Make named_arg(invalid:4) mut_arg(invalid:x) fn_type(_))");
+}
+
+test "anonymous struct body" {
+    var buf: [128]u8 = undefined;
+    const tree = try testTree(&buf, parseType, "struct { x: i32, y: i32 }", .eof);
+    if (@hasDecl(items, "parseAnonStruct")) {
+        // Wired: the fields survive.
+        try testing.expect(std.mem.startsWith(u8, tree, "anon_struct("));
+    } else {
+        // shortcut (see `parse`): the body is skipped, so no fields remain.
+        try testing.expectEqualStrings("anon_struct:struct", tree);
+    }
 }
 
 test "generic arguments: literals, braced expressions and types" {
