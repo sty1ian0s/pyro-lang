@@ -33,6 +33,7 @@ const ast_dump = @import("../ast/dump.zig");
 const diag = @import("../diag/diag.zig");
 const SourceMap = @import("../source/SourceMap.zig");
 const cmd_deps = @import("cmd_deps.zig");
+const cmd_fmt = @import("cmd_fmt.zig");
 const names = @import("../resolve/names.zig");
 
 /// Exit statuses (§13.8).
@@ -48,7 +49,7 @@ const commands = std.enums.EnumArray(Command, *const fn (*Ctx) anyerror!Exit).in
     .check = check,
     .@"test" = notImplemented,
     .bench = notImplemented,
-    .fmt = notImplemented,
+    .fmt = cmd_fmt.run,
     .doc = notImplemented,
     .lsp = notImplemented,
     .profile = notImplemented,
@@ -70,7 +71,7 @@ pub const usage_text =
     \\  check [file.pr...]         parse, resolve and type-check only
     \\  test [pattern] [--seed n]  run tests and laws
     \\  bench [pattern]            run benchmarks
-    \\  fmt [--check]              format source
+    \\  fmt [--check] [path...]    format source
     \\  doc [--open]               generate HTML docs
     \\  lsp                        language server over stdio
     \\  profile [-- args]          run with the sampling profiler
@@ -87,7 +88,7 @@ pub const usage_text =
     \\
     \\debug: --dump-tokens  --dump-ast  --stop-after lex|parse
     \\
-    \\stage 0: only `pyro check file.pr...`, add, remove, update and fetch are implemented.
+    \\stage 0: only `pyro check file.pr...`, fmt, add, remove, update and fetch are implemented.
     \\
 ;
 
@@ -332,7 +333,7 @@ test "unknown flag and unknown command exit 2" {
 test "every command dispatches; stubs report not implemented" {
     for (std.enums.values(Command)) |cmd| {
         switch (cmd) {
-            .check, .add, .remove, .update, .fetch => continue,
+            .check, .fmt, .add, .remove, .update, .fetch => continue,
             else => {},
         }
         var c: Captured = try .init(&.{@tagName(cmd)});
