@@ -179,14 +179,22 @@ const Renderer = struct {
         return best;
     }
 
-    /// ` n | text`.
+    /// ` n | text`. Control bytes other than TAB (legal in comments, §2.1;
+    /// a lone CR is what E0102 reports) print as their one-column U+2400
+    /// control picture, so untrusted source cannot drive the terminal.
     fn sourceLine(r: Renderer, f: diag.FileId, n: u32) Error!void {
         const text = lineText(r.sm.get(f), n);
+        const w = r.t.writer;
         try r.color(.bright_blue);
-        try r.t.writer.print(" {[n]d:>[w]} |", .{ .n = n, .w = r.width });
+        try w.print(" {[n]d:>[w]} |", .{ .n = n, .w = r.width });
         try r.t.setColor(.reset);
-        if (text.len > 0) try r.t.writer.print(" {s}", .{text});
-        try r.t.writer.writeByte('\n');
+        if (text.len > 0) try w.writeByte(' ');
+        for (text) |c| switch (c) {
+            0...0x08, 0x0A...0x1F => try w.print("{u}", .{@as(u21, 0x2400) + c}),
+            0x7F => try w.writeAll("\u{2421}"),
+            else => try w.writeByte(c),
+        };
+        try w.writeByte('\n');
     }
 
     /// `   |     ^^^^ label` under `l`, which starts on `line`.
@@ -201,8 +209,9 @@ const Renderer = struct {
         const w = r.t.writer;
         try r.gutter();
         try w.writeByte(' ');
-        // shortcut: one column per scalar, tabs copied so they align; wide
-        // (CJK, emoji) characters before a mark shift it left.
+        // shortcut: one column per scalar (a control byte's picture is one),
+        // tabs copied so they align; wide (CJK, emoji) characters before a
+        // mark shift it left.
         for (before) |c| if (c & 0xC0 != 0x80) try w.writeByte(if (c == '\t') '\t' else ' ');
         try r.color(if (l.primary) r.sev else .bright_blue);
         try w.splatByteAll(if (l.primary) '^' else '-', @max(1, scalarCount(marked)));
@@ -226,7 +235,7 @@ fn scalarCount(s: []const u8) usize {
 }
 
 const testing = std.testing;
-const render_json = @import("render_json.zig");
+const a2 = @import("testdata_a2.zig");
 
 fn expectRender(sm: *const SourceMap, mode: Terminal.Mode, ds: []const diag.Diagnostic, expected: []const u8) !void {
     var aw: std.Io.Writer.Allocating = .init(testing.allocator);
@@ -262,8 +271,8 @@ test "golden: A.2 example byte for byte" {
     var fx: Fixture = undefined;
     fx.init();
     defer fx.deinit();
-    _ = try fx.add("src/frame.pr", render_json.a2_source);
-    try expectRender(&fx.sm, .no_color, &.{render_json.a2_example},
+    _ = try fx.add("src/frame.pr", a2.source);
+    try expectRender(&fx.sm, .no_color, &.{a2.example},
         \\error[E0332]: `arena` is changed while a slice from it is still in use
         \\  --> src/frame.pr:4:5
         \\   |
@@ -391,4 +400,34 @@ test "span on a line ending marks one column past the text" {
         \\   |   ^ at LF
         \\
     );
+}
+
+test "control bytes in source print as one-column pictures, never raw" {
+    var fx: Fixture = undefined;
+    fx.init();
+    defer fx.deinit();
+    const src = "x // \x1b[2J\x07\x7f\nab\rcd\tef\n";
+    const f = try fx.add("ctl.pr", src);
+    const d: diag.Diagnostic = .{
+        .code = .E0102,
+        .severity = .@"error",
+        .message = "m",
+        .spans = &.{
+            .{ .span = span(f, src, "\x1b", 1), .label = "esc" },
+            .{ .span = span(f, src, "\r", 1), .primary = true, .label = "cr" },
+            .{ .span = span(f, src, "ef", 2) },
+        },
+    };
+    var aw: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer aw.deinit();
+    try renderAll(.{ .writer = &aw.writer, .mode = .no_color }, &fx.sm, &.{d});
+    for (aw.written()) |c| try testing.expect(c >= 0x20 and c != 0x7F or c == '\t' or c == '\n');
+    try testing.expectEqualStrings("error[E0102]: m\n" ++
+        "  --> ctl.pr:2:3\n" ++
+        "   |\n" ++
+        " 1 | x // \u{241B}[2J\u{2407}\u{2421}\n" ++
+        "   |      - esc\n" ++
+        " 2 | ab\u{240D}cd\tef\n" ++
+        "   |   ^ cr\n" ++
+        "   |      \t--\n", aw.written());
 }
