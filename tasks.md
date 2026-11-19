@@ -326,7 +326,7 @@ graph TD
   - Size: M · Parallel: W07
   - Blocked by: T023
   - Blocks: T026, T039
-- [ ] **T026** Post-parse syntactic checks and §8.8 attribute table **[GATE]**
+- [x] **T026** Post-parse syntactic checks and §8.8 attribute table **[GATE]**
   - Spec: §3.3, §3.5, §3.7, §3.8.2, §8.8, §2.8
   - Deliverable: `stage0/src/parse/check.zig`; `stage0/src/attr_table.zig` (single table of every §8.8 attribute, positions, arg kinds). E0202, E0203, E0207 (syntactic), E0210, E0211 (names), E0213, E0501.
   - Acceptance: Pass+fail case each for E0202, E0203, E0207, E0210, E0211, E0213, E0501.
@@ -417,7 +417,7 @@ graph TD
   - Blocked by: T020, T021, T024
   - Blocks: T038, T051, T069, T105, T176
   - Conflicts: Later std tasks fill bodies in these files: T105 owns option/result/range bodies, T106 owns protocols bodies.
-- [ ] **T038** Import resolution, visibility, prelude **[CRITICAL]**
+- [x] **T038** Import resolution, visibility, prelude **[CRITICAL]**
   - Spec: §7.1, §7.8.2, §7.8.4, §7.9, §7.10, E0903-E0905
   - Deliverable: `stage0/src/resolve/imports.zig`: `use` forms, `pub use`, first segment std/dep/current, implicit prelude, impl-visibility index.
   - Acceptance: E0903 duplicate/collision; E0904 local module shadows dependency; E0905 private import; transitive `pub use`.
