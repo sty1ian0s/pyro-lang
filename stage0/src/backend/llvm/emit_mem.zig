@@ -62,8 +62,8 @@ pub fn emitInst(e: *FnEmitter, i: ir.Inst, ty: ir.Type) Error!c.ValueRef {
             if (i.@"align" != 0) c.LLVMSetAlignment(a, i.@"align");
             break :blk a;
         },
-        .load => memFlags(i, c.LLVMBuildLoad2(b, llType(e.ctx, ty), try e.val(i, 0), "")),
-        .store => memFlags(i, c.LLVMBuildStore(b, try e.val(i, 0), try e.val(i, 1))),
+        .load => memFlags(i, ty, c.LLVMBuildLoad2(b, llType(e.ctx, ty), try e.val(i, 0), "")),
+        .store => memFlags(i, typeOf(e, ops[0]), c.LLVMBuildStore(b, try e.val(i, 0), try e.val(i, 1))),
         .gep => blk: {
             const stride = std.math.cast(u64, ops[2].int) orelse return error.Unsupported;
             break :blk c.LLVMBuildGEP2(b, c.LLVMArrayType2(i8Type(e.ctx), stride), try e.val(i, 0), &.{try e.val(i, 1)}, 1, "");
@@ -149,9 +149,15 @@ fn lowMask(n: u32) u64 {
     return ~@as(u64, 0) >> @intCast(64 - n);
 }
 
-/// Applies `align`, `volatile` and `atomic(order)` of `i` to load/store `v`.
-fn memFlags(i: ir.Inst, v: c.ValueRef) c.ValueRef {
-    if (i.@"align" != 0) c.LLVMSetAlignment(v, i.@"align");
+/// Applies `align`, `volatile` and `atomic(order)` of `i` to load/store `v`,
+/// which accesses a value of type `ty`. An alignless atomic is aligned to its
+/// size: LLVM would take the data layout's ABI alignment, which can be
+/// smaller, and lowers an underaligned atomic to an `__atomic_*` libcall.
+fn memFlags(i: ir.Inst, ty: ir.Type, v: c.ValueRef) c.ValueRef {
+    // shortcut: ptr is 8 bytes; use the target's pointer size once T088 sets the data layout.
+    const size: u32 = if (ty.scalar == .ptr) 8 else bits(ty.scalar) / 8;
+    const @"align" = if (i.@"align" == 0 and i.atomic != .none) size else i.@"align";
+    if (@"align" != 0) c.LLVMSetAlignment(v, @"align");
     if (i.flags.@"volatile") c.LLVMSetVolatile(v, 1);
     if (i.atomic != .none) c.LLVMSetOrdering(v, ordering(i.atomic));
     return v;
@@ -349,16 +355,19 @@ test "globals, memory access flags, gep, memcpy and memset" {
                 \\  store %v, %slot
                 \\  store volatile %a, %dst, align 2
                 \\  store atomic(seq_cst) %g, @counter, align 8
+                \\  %h: i64 = load atomic(acquire) @counter
+                \\  store atomic(relaxed) %h, %slot
                 \\  %q: ptr = gep %dst, %n, 12
                 \\  memcpy %q, %src, %n, align 4
                 \\  %zero: i8 = const 0
                 \\  memset %dst, %zero, %n
-                \\  ret %g
+                \\  ret %h
                 \\}
             );
             defer x.deinit();
             // Natural alignment comes from the module's data layout; without
-            // one (set by T088), LLVM's default aligns i64 to 4.
+            // one (set by T088), LLVM's default aligns i64 to 4. Alignless
+            // atomics are aligned to their size instead.
             try x.expect(&.{
                 "@counter = global i64 7, align 16",
                 "@msg = constant [2 x i8] c\"hi\"",
@@ -372,6 +381,8 @@ test "globals, memory access flags, gep, memcpy and memset" {
                 "store i64 %v, ptr %slot, align 4",
                 "store volatile i64 %a, ptr %dst, align 2",
                 "store atomic i64 %g, ptr @counter seq_cst, align 8",
+                "%h = load atomic i64, ptr @counter acquire, align 8",
+                "store atomic i64 %h, ptr %slot monotonic, align 8",
                 "%q = getelementptr [12 x i8], ptr %dst, i64 %n",
                 "call void @llvm.memcpy.p0.p0.i64(ptr align 4 %q, ptr align 4 %src, i64 %n, i1 false)",
                 "call void @llvm.memset.p0.i64(ptr %dst, i8 0, i64 %n, i1 false)",

@@ -274,7 +274,7 @@ test "masked tail store and load never touch masked-off lanes" {
                 \\  store.masked %xv, %p, %m
                 \\  %z: f32 = const 0.0
                 \\  %zv: vec<4 x f32> = splat %z
-                \\  %l: vec<4 x f32> = load.masked %p, %m, %zv, align 16
+                \\  %l: vec<4 x f32> = load.masked %p, %m, %zv, align 8
                 \\  %r: f32 = reduce.add %l
                 \\  ret %r
                 \\}
@@ -282,7 +282,7 @@ test "masked tail store and load never touch masked-off lanes" {
             defer x.deinit();
             try x.expect(&.{
                 "call void @llvm.masked.store.v4f32.p0(<4 x float> %xv, ptr %p, i32 4, <4 x i1> %m)",
-                "%l = call <4 x float> @llvm.masked.load.v4f32.p0(ptr %p, i32 16, <4 x i1> %m, <4 x float> zeroinitializer)",
+                "%l = call <4 x float> @llvm.masked.load.v4f32.p0(ptr %p, i32 8, <4 x i1> %m, <4 x float> zeroinitializer)",
             }, &.{});
 
             var ee: c.ExecutionEngineRef = undefined;
