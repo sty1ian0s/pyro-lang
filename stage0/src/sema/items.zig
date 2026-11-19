@@ -475,7 +475,7 @@ pub const Items = struct {
         const inner = if (a.kind(n) == .generic_expr_arg) a.data(n).generic_expr_arg.value else n;
         if (value_ty == .none and inner == n and !isValueArg(a, n)) return .{ .type = try it.resolveType(m, n, self_ty) };
         const want = if (value_ty == .none) TypeId.usize else value_ty;
-        const v = try it.coerceValue(m, inner, try it.fold(m, inner, self_ty), want);
+        const v = try it.coerceValue(m, inner, try it.fold(m, inner, self_ty, want), want);
         return switch (v) {
             .scalar => |s| .{ .value = s },
             // shortcut: symbolic arguments (`Ring<T, CAP>` inside a generic body) wait for generics.zig (T064).
@@ -637,7 +637,7 @@ pub const Items = struct {
     }
 
     fn arrayLen(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId) Error!?u64 {
-        const v = try it.coerceValue(m, n, try it.fold(m, n, self_ty), .usize);
+        const v = try it.coerceValue(m, n, try it.fold(m, n, self_ty, .usize), .usize);
         return if (v == .scalar) v.scalar.bits else null;
     }
 
@@ -698,7 +698,7 @@ pub const Items = struct {
             try it.report(m, it.ast(m).mainToken(r), .E0370, &.{"defaults are evaluated at compile time; use a literal, a `const` or a comptime-evaluable call"}, "default value is not a comptime constant: `{s}` is a runtime value", .{it.ast(m).tokenSlice(it.ast(m).mainToken(r))});
             return .unknown;
         }
-        return it.coerceValue(m, n, try it.fold(m, n, self_ty), ty);
+        return it.coerceValue(m, n, try it.fold(m, n, self_ty, ty), ty);
     }
 
     /// The first name use in `n` that denotes a runtime value: a parameter
@@ -749,21 +749,10 @@ pub const Items = struct {
         const a = it.ast(m);
         const d = a.data(n).const_decl;
         const name_tok = a.mainToken(n) + 1;
-        var v = try it.fold(m, d.value, self_ty);
-        const ty: TypeId = if (d.ty) |t| blk: {
-            const ty = try it.resolveType(m, t, self_ty);
-            v = try it.coerceValue(m, d.value, v, ty);
-            break :blk ty;
-        } else switch (v) {
-            .unknown => switch (try it.hook(m, d.value, .none)) {
-                .unknown => .err,
-                else => |hv| blk: {
-                    v = hv;
-                    break :blk valueType(hv);
-                },
-            },
-            else => valueType(v),
-        };
+        const decl_ty: TypeId = if (d.ty) |t| try it.resolveType(m, t, self_ty) else .none;
+        var v = try it.fold(m, d.value, self_ty, decl_ty);
+        if (d.ty != null) v = try it.coerceValue(m, d.value, v, decl_ty);
+        const ty = if (d.ty != null) decl_ty else valueType(v);
         if (!try it.constTypeOk(ty)) {
             try it.report(m, if (d.ty) |t| typeToken(a, t) else name_tok, .E0341, &.{"a `const` must be plain, `str`, an array or slice of plain values, or comptime-only (§5.9)"}, "invalid type for a `const`: `{s}`", .{try it.tyName(ty)});
         }
@@ -839,7 +828,8 @@ pub const Items = struct {
             };
             val.* = next;
             if (vd.value) |e| {
-                const fv = try it.fold(m, e, self_ty);
+                var fv = try it.fold(m, e, self_ty, backing);
+                if (backing != .none) fv = try it.coerceValue(m, e, fv, backing);
                 val.* = switch (fv) {
                     // Too large for i128 also fits no backing type: E0306 below.
                     .untyped => |c| if (c == .int) c.int.toInt(i128) catch std.math.maxInt(i128) else null,
@@ -847,7 +837,7 @@ pub const Items = struct {
                     else => null,
                 };
                 if (val.* == null and fv != .unknown) // `.unknown` is left to the comptime evaluator
-                    try it.report(m, a.mainToken(e), null, &.{}, "enum discriminant must be a comptime integer constant", .{});
+                    try it.report(m, a.mainToken(e), if (fv == .untyped) .E0306 else null, &.{}, "enum discriminant must be a comptime integer constant", .{});
             }
             if (val.*) |x| {
                 if ((try seen.fetchPut(it.alloc(), x, {})) != null)
@@ -918,7 +908,7 @@ pub const Items = struct {
     /// can (literals, consts, enum variants, operators, casts); the rest
     /// goes to the comptime hook. Untyped constants stay untyped.
     pub fn evalConst(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId) Error!Value {
-        return it.fold(m, n, self_ty);
+        return it.fold(m, n, self_ty, .none);
     }
 
     fn hook(it: *Items, m: ModuleId, n: Node.Index, expected: TypeId) Error!Value {
@@ -926,7 +916,10 @@ pub const Items = struct {
         return try h.eval(h.ctx, it, m, n, expected) orelse .unknown;
     }
 
-    fn fold(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId) Error!Value {
+    /// `expected` is the type wanted for `n` (or `.none`), passed to the hook
+    /// for whatever this file cannot fold. An operand the hook could not
+    /// evaluate makes the whole expression `.unknown` without asking again.
+    fn fold(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId, expected: TypeId) Error!Value {
         const a = it.ast(m);
         const mt = a.mainToken(n);
         const gpa = it.alloc();
@@ -957,10 +950,20 @@ pub const Items = struct {
             },
             .char_lit => return .{ .untyped = try convert.fromInt(gpa, literals.decodeChar(a.tokenSlice(mt))) },
             .bool_lit => return .{ .scalar = .{ .type = .bool, .bits = @intFromBool(a.tokens.items(.kind)[mt] == .kw_true) } },
-            .paren => |p| return it.fold(m, p.inner, self_ty),
-            .prefix => |p| return it.foldPrefix(m, n, try it.fold(m, p.operand, self_ty)),
-            .binary => |b| return it.foldBinary(m, n, try it.fold(m, b.lhs, self_ty), try it.fold(m, b.rhs, self_ty)),
-            .cast => |c| return it.foldCast(m, n, try it.fold(m, c.value, self_ty), try it.resolveType(m, c.ty, self_ty)),
+            .paren => |p| return it.fold(m, p.inner, self_ty, expected),
+            .prefix => |p| {
+                const v = try it.fold(m, p.operand, self_ty, .none);
+                return if (v == .unknown) .unknown else it.foldPrefix(m, n, v, expected);
+            },
+            .binary => |b| {
+                const l = try it.fold(m, b.lhs, self_ty, .none);
+                const r = try it.fold(m, b.rhs, self_ty, .none);
+                return if (l == .unknown or r == .unknown) .unknown else it.foldBinary(m, n, l, r, expected);
+            },
+            .cast => |c| {
+                const v = try it.fold(m, c.value, self_ty, .none);
+                return if (v == .unknown) .unknown else it.foldCast(m, n, v, try it.resolveType(m, c.ty, self_ty), expected);
+            },
             .ident => {
                 const e = it.names.get(m, n) orelse return .unknown; // reported by the expression checker
                 return switch (e.res) {
@@ -971,12 +974,12 @@ pub const Items = struct {
             .self_type => return if (self_ty == .none) .unknown else .{ .type = self_ty },
             .field_access => |f| {
                 if (it.names.get(m, n)) |e| if (e.res == .global) return it.targetValue(m, n, e.res.global, self_ty);
-                const lhs = try it.fold(m, f.lhs, self_ty);
+                const lhs = try it.fold(m, f.lhs, self_ty, .none);
                 if (lhs == .type) if (try it.memberValue(lhs.type, identText(a, mt))) |v| return v;
-                return it.hook(m, n, .none);
+                return it.hook(m, n, expected);
             },
             .array_type, .slice_type, .soa_array_type, .soa_slice_type, .ptr_type, .ptr_const_type, .mut_type, .fn_type, .type_type, .generic_inst => return .{ .type = try it.resolveType(m, n, self_ty) },
-            else => return it.hook(m, n, .none),
+            else => return it.hook(m, n, expected),
         }
     }
 
@@ -1029,7 +1032,8 @@ pub const Items = struct {
         return null;
     }
 
-    fn foldPrefix(it: *Items, m: ModuleId, n: Node.Index, v: Value) Error!Value {
+    /// `op v` for known `v`; what this file cannot fold goes to the hook.
+    fn foldPrefix(it: *Items, m: ModuleId, n: Node.Index, v: Value, expected: TypeId) Error!Value {
         const gpa = it.alloc();
         switch (it.ast(m).tokens.items(.kind)[it.ast(m).mainToken(n)]) {
             .minus => switch (v) {
@@ -1037,35 +1041,35 @@ pub const Items = struct {
                 .scalar => |s| {
                     if (s.type == .f32) return .{ .scalar = .{ .type = .f32, .bits = s.bits ^ 0x8000_0000 } };
                     if (s.type == .f64) return .{ .scalar = .{ .type = .f64, .bits = s.bits ^ (1 << 63) } };
-                    const x = it.numeric(s) orelse return .unknown;
-                    return it.typed(try convert.negate(x), s.type);
+                    if (it.numeric(s)) |x| return it.typed(m, n, try convert.negate(x), s.type, expected);
                 },
-                else => return .unknown,
+                else => {},
             },
             .tilde => if (v == .untyped) return .{ .untyped = convert.bitNot(gpa, v.untyped) catch |e| switch (e) {
                 error.OutOfMemory => return error.OutOfMemory,
-                else => return .unknown,
+                else => return it.hook(m, n, expected),
             } },
             .bang => if (v == .scalar and v.scalar.type == .bool) return .{ .scalar = .{ .type = .bool, .bits = v.scalar.bits ^ 1 } },
-            else => return it.hook(m, n, .none),
+            else => {},
         }
-        return .unknown;
+        return it.hook(m, n, expected);
     }
 
-    fn foldBinary(it: *Items, m: ModuleId, n: Node.Index, l: Value, r: Value) Error!Value {
+    /// `l op r` for known operands; what this file cannot fold goes to the hook.
+    fn foldBinary(it: *Items, m: ModuleId, n: Node.Index, l: Value, r: Value, expected: TypeId) Error!Value {
         const gpa = it.alloc();
         const op = it.ast(m).tokens.items(.kind)[it.ast(m).mainToken(n)];
         if (op == .amp_amp or op == .pipe_pipe) {
-            if (l != .scalar or r != .scalar or l.scalar.type != .bool or r.scalar.type != .bool) return .unknown;
+            if (l != .scalar or r != .scalar or l.scalar.type != .bool or r.scalar.type != .bool) return it.hook(m, n, expected);
             const x = l.scalar.bits != 0;
             const y = r.scalar.bits != 0;
             return .{ .scalar = .{ .type = .bool, .bits = @intFromBool(if (op == .amp_amp) x and y else x or y) } };
         }
         // Operand type: both untyped, or one integer type (§4.8). Typed float
-        // arithmetic is left to the strict-IEEE comptime interpreter (T057).
-        const lt, const lc = it.operand(l) orelse return .unknown;
-        const rt, const rc = it.operand(r) orelse return .unknown;
-        const ty = if (lt == rt) lt else if (isUntyped(lt)) rt else if (isUntyped(rt)) lt else return .unknown;
+        // arithmetic goes to the strict-IEEE comptime interpreter (T057).
+        const lt, const lc = it.operand(l) orelse return it.hook(m, n, expected);
+        const rt, const rc = it.operand(r) orelse return it.hook(m, n, expected);
+        const ty = if (lt == rt) lt else if (isUntyped(lt)) rt else if (isUntyped(rt)) lt else return it.hook(m, n, expected);
         const bop: convert.BinOp = switch (op) {
             .plus => .add,
             .minus => .sub,
@@ -1089,16 +1093,17 @@ pub const Items = struct {
                 };
                 return .{ .scalar = .{ .type = .bool, .bits = @intFromBool(res) } };
             },
-            else => return it.hook(m, n, .none),
+            else => return it.hook(m, n, expected),
         };
         const res = convert.binary(gpa, bop, lc, rc) catch |e| switch (e) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return .unknown, // division by zero, bad operand: reported by the expression checker
+            else => return it.hook(m, n, expected), // division by zero, bad operand
         };
-        return if (isUntyped(ty)) .{ .untyped = res } else it.typed(res, ty);
+        return if (isUntyped(ty)) .{ .untyped = res } else it.typed(m, n, res, ty, expected);
     }
 
-    fn foldCast(it: *Items, m: ModuleId, n: Node.Index, v: Value, to: TypeId) Error!Value {
+    /// `v as to` for known `v`; what this file cannot fold goes to the hook.
+    fn foldCast(it: *Items, m: ModuleId, n: Node.Index, v: Value, to: TypeId, expected: TypeId) Error!Value {
         if (to == .err) return .unknown;
         const c: convert.Const = switch (v) {
             .untyped => |c| c,
@@ -1106,17 +1111,18 @@ pub const Items = struct {
                 if (s.type == to) return v;
                 if (s.type == .bool and it.intInfo(to) != null) return .{ .scalar = .{ .type = to, .bits = s.bits } };
                 if (it.enumOf(s.type)) |e| break :blk try convert.fromInt(it.alloc(), scalarInt(.{ .type = e.backing, .bits = s.bits }, it.intInfo(e.backing).?));
-                break :blk it.numeric(s) orelse return .unknown;
+                break :blk it.numeric(s) orelse return it.hook(m, n, expected);
             },
-            else => return .unknown,
+            else => return it.hook(m, n, expected),
         };
         switch (try convert.castConst(it.alloc(), it.types, it.options.ptr_bits, c, to)) {
             .ok => |val| return .{ .scalar = val },
             .err => |code| {
                 if (v == .untyped) {
                     try it.report(m, it.ast(m).mainToken(n), code, &.{}, "invalid constant conversion to `{s}`", .{try it.tyName(to)});
+                    return .unknown;
                 }
-                return .unknown; // a typed value: truncation is the comptime interpreter's
+                return it.hook(m, n, expected); // a typed value: truncation is the comptime interpreter's
             },
         }
     }
@@ -1137,20 +1143,23 @@ pub const Items = struct {
         return convert.fromInt(it.alloc(), scalarInt(s, info_)) catch null;
     }
 
-    /// Exact result `c` of typed integer arithmetic, as a `ty` value; an
-    /// overflow is left to the comptime interpreter, which traps (§8.6).
-    fn typed(it: *Items, c: convert.Const, ty: TypeId) Error!Value {
+    /// Exact result `c` of typed integer arithmetic node `n`, as a `ty`
+    /// value; an overflow goes to the comptime interpreter, which traps (§8.6).
+    fn typed(it: *Items, m: ModuleId, n: Node.Index, c: convert.Const, ty: TypeId, expected: TypeId) Error!Value {
         return switch (try convert.convertConst(it.alloc(), it.types, it.options.ptr_bits, c, ty)) {
             .ok => |val| .{ .scalar = val },
-            .err => .unknown,
+            .err => it.hook(m, n, expected),
         };
     }
 
     /// Converts the value of expression `n` to `to`, where a `to` is
     /// declared (const, default, discriminant, array length): rule 1 for
     /// untyped constants (E0306, E0310), widening for typed integers.
+    /// A generic parameter `to` is checked per instantiation (§7.6.4, T064),
+    /// so `v` is kept as is; other types built from parameters reject
+    /// scalars whatever the arguments.
     fn coerceValue(it: *Items, m: ModuleId, n: Node.Index, v: Value, to: TypeId) Error!Value {
-        if (to == .err) return v;
+        if (to == .err or (to != .none and it.types.get(to) == .param)) return v;
         const tok = it.ast(m).mainToken(n);
         const from = valueType(v);
         switch (v) {
@@ -1250,16 +1259,13 @@ pub const Items = struct {
     // -----------------------------------------------------------------------
     // Recursive containment (§7.3.1, E0376)
 
-    /// Generic arguments in scope while walking a declaration's fields.
-    const Frame = struct { owner: Types.Decl, args: []const Types.Arg, parent: ?*const Frame };
-
     fn checkContainment(it: *Items) Error!void {
         for (it.im.graph.modules, 0..) |cm, m| for (cm.items, 0..) |item, i| {
             if (item.kind != .@"struct" and item.kind != .@"enum") continue;
             const root = it.decl(@intCast(m), item.node);
-            var seen: std.AutoHashMapUnmanaged(Types.Decl, void) = .empty;
+            var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
             const found = for (it.containedTypes(.{ .module = @intCast(m), .item = @intCast(i) })) |t| {
-                if (try it.contains(t, root, null, 0, &seen)) break true;
+                if (try it.contains(t, root, 0, &seen)) break true;
             } else false;
             if (found) try it.report(@intCast(m), it.ast(@intCast(m)).mainToken(item.node) + 1, .E0376, &.{"use a `Handle` or an index instead"}, "recursive type `{s}` contains itself by value", .{item.name});
         };
@@ -1283,41 +1289,62 @@ pub const Items = struct {
         };
     }
 
-    fn contains(it: *Items, ty: TypeId, root: Types.Decl, frame: ?*const Frame, depth: u32, seen: *std.AutoHashMapUnmanaged(Types.Decl, void)) Error!bool {
-        if (depth > 64) return false;
+    /// Whether `ty` holds declaration `root` by value. Each nominal type
+    /// (one generic instance) is walked once per root; its fields are
+    /// walked with its arguments substituted.
+    fn contains(it: *Items, ty: TypeId, root: Types.Decl, depth: u32, seen: *std.AutoHashMapUnmanaged(TypeId, void)) Error!bool {
+        // shortcut: the visit budget cuts off polymorphic recursion
+        // (`L<T>` holding `L<(T, T)>`); exact once T064 bounds instantiation depth.
+        if (depth > 64 or seen.count() > 4096) return false;
         switch (it.types.get(ty)) {
-            .array => |x| return it.contains(x.elem, root, frame, depth + 1, seen),
-            .soa_array => |x| return it.contains(x.elem, root, frame, depth + 1, seen),
-            .vec => |x| return it.contains(x.elem, root, frame, depth + 1, seen),
+            .array => |x| return it.contains(x.elem, root, depth + 1, seen),
+            .soa_array => |x| return it.contains(x.elem, root, depth + 1, seen),
+            .vec => |x| return it.contains(x.elem, root, depth + 1, seen),
             .tuple => |x| {
-                for (x.elems) |e| if (try it.contains(e, root, frame, depth + 1, seen)) return true;
-                return false;
-            },
-            .param => |p| {
-                var f = frame;
-                while (f) |fr| : (f = fr.parent) {
-                    if (!std.meta.eql(fr.owner, p.owner)) continue;
-                    if (p.index >= fr.args.len or fr.args[p.index] != .type) return false;
-                    return it.contains(fr.args[p.index].type, root, fr.parent, depth + 1, seen);
-                }
+                for (x.elems) |e| if (try it.contains(e, root, depth + 1, seen)) return true;
                 return false;
             },
             .nominal => |n| {
                 if (std.meta.eql(n.decl, root)) return true;
-                if (n.kind == .distinct) return it.contains(n.underlying, root, frame, depth + 1, seen);
+                if (n.kind == .distinct) return it.contains(n.underlying, root, depth + 1, seen);
+                if ((try seen.fetchPut(it.alloc(), ty, {})) != null) return false;
                 if (std.meta.eql(n.decl.package, it.std_pkg)) {
                     // `Option`, `Result`, `Atomic`, ranges hold their arguments inline; containers on the heap.
                     if (isStdHeap(it.types.strings.get(n.name))) return false;
-                    for (n.args) |arg| if (arg == .type and try it.contains(arg.type, root, frame, depth + 1, seen)) return true;
+                    for (n.args) |arg| if (arg == .type and try it.contains(arg.type, root, depth + 1, seen)) return true;
                     return false;
                 }
                 const ref = it.refOfDecl(n.decl) orelse return false;
-                if (n.args.len == 0 and (try seen.fetchPut(it.alloc(), n.decl, {})) != null) return false;
-                const sub: Frame = .{ .owner = n.decl, .args = n.args, .parent = frame };
-                for (it.containedTypes(ref)) |t| if (try it.contains(t, root, &sub, depth + 1, seen)) return true;
+                for (it.containedTypes(ref)) |t| if (try it.contains(try it.subst(t, n.decl, n.args), root, depth + 1, seen)) return true;
                 return false;
             },
-            else => return false,
+            else => return false, // a parameter not bound here, or held indirectly
+        }
+    }
+
+    /// `ty` with the type parameters of `owner` replaced by `args`. Only the
+    /// constructors that hold values inline are rebuilt: a parameter behind
+    /// a pointer, slice or handle never matters for containment.
+    fn subst(it: *Items, ty: TypeId, owner: Types.Decl, args: []const Types.Arg) Error!TypeId {
+        switch (it.types.get(ty)) {
+            .param => |p| return if (std.meta.eql(p.owner, owner) and p.index < args.len and args[p.index] == .type) args[p.index].type else ty,
+            .array => |x| return it.types.intern(.{ .array = .{ .len = x.len, .elem = try it.subst(x.elem, owner, args) } }),
+            .soa_array => |x| return it.types.intern(.{ .soa_array = .{ .len = x.len, .elem = try it.subst(x.elem, owner, args) } }),
+            .vec => |x| return it.types.intern(.{ .vec = .{ .len = x.len, .elem = try it.subst(x.elem, owner, args) } }),
+            .tuple => |x| {
+                const elems = try it.alloc().alloc(TypeId, x.elems.len);
+                for (x.elems, elems) |e, *o| o.* = try it.subst(e, owner, args);
+                return it.types.intern(.{ .tuple = .{ .elems = elems } });
+            },
+            .nominal => |n| {
+                if (n.args.len == 0) return ty;
+                const out = try it.alloc().alloc(Types.Arg, n.args.len);
+                for (n.args, out) |arg, *o| o.* = if (arg == .type) .{ .type = try it.subst(arg.type, owner, args) } else arg;
+                var k = n;
+                k.args = out;
+                return it.types.intern(.{ .nominal = k });
+            },
+            else => return ty,
         }
     }
 
@@ -1684,13 +1711,75 @@ test "E0370: defaults must be comptime constants; the hook folds calls" {
     defer f.deinit();
     try f.expectDiags(&.{ .{ .E0370, "len" }, .{ .E0370, "ms" }, .{ .E0306, "256" } });
     const scale = (try f.get("scale")).@"fn";
-    try testing.expect(scale.params[1].default.? == .unknown); // f32 arithmetic: comptime interpreter
+    try testing.expect(scale.params[1].default.? == .unknown); // f32 arithmetic: the hook declines
     try expectInt(3, scale.params[2].default.?);
     try testing.expectEqual(null, scale.params[0].default);
     const grid = (try f.get("Grid")).@"struct";
     try expectInt(16, grid.fields[0].default.?);
     try testing.expectEqual(TypeId.int(.unsigned, 32), grid.fields[0].default.?.scalar.type);
     try testing.expectEqual(TypeId.f32, grid.fields[2].default.?.scalar.type);
+}
+
+/// Records what it is asked and answers every typed float binary
+/// expression with 1.5 and anything else with null, for the hook test.
+const Recorder = struct {
+    asked: std.ArrayList(TypeId) = .empty,
+
+    fn eval(ctx: ?*anyopaque, items: *Items, m: ModuleId, n: Node.Index, expected: TypeId) Error!?Value {
+        const r: *Recorder = @ptrCast(@alignCast(ctx.?));
+        try r.asked.append(testing.allocator, expected);
+        if (items.ast(m).kind(n) != .binary or expected != .f32) return null;
+        return .{ .scalar = .{ .type = .f32, .bits = @as(u32, @bitCast(@as(f32, 1.5))) } };
+    }
+};
+
+test "the hook gets what folding gives up on, with the expected type" {
+    var rec: Recorder = .{};
+    defer rec.asked.deinit(testing.allocator);
+    var f: Fixture = undefined;
+    try f.init(&.{.{
+        "a",
+        \\const BASE: f32 = 2.0;
+        \\const X: f32 = BASE * 2.0;
+        \\const Y: u8 = 255u8 + 1u8;
+        \\const Z: u8 = ~1u8;
+        \\const W: u16 = (1u8 + 2u16) + 1;
+    }}, .{ .ctx = &rec, .eval = Recorder.eval });
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    const x = (try f.get("X")).@"const";
+    try testing.expectEqual(TypeId.f32, x.value.scalar.type);
+    try testing.expectEqual(@as(f32, 1.5), @as(f32, @bitCast(@as(u32, @truncate(x.value.scalar.bits)))));
+    try testing.expect((try f.get("Y")).@"const".value == .unknown);
+    try testing.expect((try f.get("W")).@"const".value == .unknown);
+    // X, Y (overflow), Z (`~` on a typed value), W's mismatched operands
+    // once only: an operand the hook declined is not asked about again.
+    const u8_: TypeId = .int(.unsigned, 8);
+    try testing.expectEqualSlices(TypeId, &.{ .f32, u8_, u8_, .none }, rec.asked.items);
+}
+
+test "defaults of a generic parameter type wait for instantiation" {
+    var f: Fixture = undefined;
+    try f.init(&.{.{
+        "a",
+        \\struct S<T> { x: T = 0 }
+        \\fn g<T>(x: T = 0) {}
+    }}, null);
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    try expectInt(0, (try f.get("S")).@"struct".fields[0].default.?);
+}
+
+test "E0310, E0306: discriminants convert to the backing type" {
+    var f: Fixture = undefined;
+    try f.init(&.{.{
+        "a",
+        \\enum E: u8 { a = 1u16, b = 2u8 }
+        \\enum F { a = 1.5 }
+    }}, null);
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ .E0310, "1u16" }, .{ .E0306, "1.5" } });
+    try expectInt(2, .{ .scalar = (try f.get("E")).@"enum".variants[1].discriminant });
 }
 
 test "E0376: recursive containment by value" {
@@ -1708,11 +1797,14 @@ test "E0376: recursive containment by value" {
         \\struct Boxed<T> { h: Handle<T> }
         \\struct B { b: Boxed<B>, items: List<B>, s: []B }
         \\struct Empty {}
+        \\struct L<T> { a: Option<L<T>>, b: Option<L<T>>, c: (T, Option<L<T>>) }
+        \\struct M { l: L<u8>, k: [2]L<u16> }
     }}, null);
     defer f.deinit();
     try f.expectDiags(&.{
         .{ .E0376, "Node" }, .{ .E0376, "Tree" }, .{ .E0376, "Expr" },
         .{ .E0376, "A" },    .{ .E0376, "X" },    .{ .E0376, "Y" },
+        .{ .E0376, "L" },
     });
 }
 
@@ -1747,12 +1839,14 @@ test "E0341: allowed const types; untyped consts stay untyped" {
     try testing.expectEqual(TypeId.int(.unsigned, 32), (try f.get("ELEM")).@"const".value.type);
 }
 
-test "E0311: at most 65 535 variants" {
+test "E0311: at most 65 535 variants and fields" {
     for ([_]usize{ max_members, max_members + 1 }) |count| {
         var src: std.ArrayList(u8) = .empty;
         defer src.deinit(testing.allocator);
         try src.appendSlice(testing.allocator, "enum E {");
         for (0..count) |i| try src.print(testing.allocator, " v{d},", .{i});
+        try src.appendSlice(testing.allocator, " }\nstruct S {");
+        for (0..count) |i| try src.print(testing.allocator, " f{d}: u8,", .{i});
         try src.appendSlice(testing.allocator, " }");
         var f: Fixture = undefined;
         try f.init(&.{.{ "a", src.items }}, null);
@@ -1760,7 +1854,8 @@ test "E0311: at most 65 535 variants" {
         if (count == max_members) {
             try f.expectDiags(&.{});
             try testing.expectEqual(TypeId.int(.unsigned, 16), (try f.get("E")).@"enum".backing);
-        } else try f.expectDiags(&.{.{ .E0311, "E" }});
+            try testing.expectEqual(max_members, (try f.get("S")).@"struct".fields.len);
+        } else try f.expectDiags(&.{ .{ .E0311, "E" }, .{ .E0311, "S" } });
     }
 }
 
