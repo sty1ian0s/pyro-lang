@@ -832,10 +832,10 @@ test "every primary form" {
     try expectTree("|x| x + 1", "lambda(param(_ _) binary(ident:x int_lit:1))");
     try expectTree("|x: i32, y,| x", "lambda(param(path:i32 _) param(_ _) ident:x)");
     try expectTree("|| 0", "lambda(int_lit:0)");
-    try expectTree("{ 1 }", "block(_)");
+    try expectTree("{ 1 }", "block(int_lit:1)");
     try expectTree("if a {} else if b {} else {}", "if(ident:a block(_) if(ident:b block(_) block(_)))");
     try expectTree("if let .some(v) = f() {}", "if(let_cond(pat_variant(pat_bind:v) call(ident:f)) block(_) _)");
-    try expectTree("match a { 0 => 1, x if x > 1 => { 2 } _ => 3 }", "match(ident:a match_arm(int_lit:0 _ int_lit:1) match_arm(pat_bind:x binary(ident:x int_lit:1) block(_)) match_arm(pat_wildcard:_ _ int_lit:3))");
+    try expectTree("match a { 0 => 1, x if x > 1 => { 2 } _ => 3 }", "match(ident:a match_arm(int_lit:0 _ int_lit:1) match_arm(pat_bind:x binary(ident:x int_lit:1) block(int_lit:2)) match_arm(pat_wildcard:_ _ int_lit:3))");
     try expectTree("loop {}", "loop(block(_))");
     try expectTree("unsafe {}", "unsafe_block(block(_))");
     try expectTree("comptime {}", "comptime_block(block(_))");
@@ -852,7 +852,7 @@ test "postfix forms" {
     try expectTree("Pool(Particle).init()", "call(field_access(call(ident:Pool ident:Particle)))");
     try expectTree("xs[0]", "index(ident:xs int_lit:0)");
     try expectTree("f()?", "try_op(call(ident:f))");
-    try expectTree("{ 1 }.x", "field_access(block(_))");
+    try expectTree("{ 1 }.x", "field_access(block(int_lit:1))");
 }
 
 test "expr_ns: `path {` opens the block" {

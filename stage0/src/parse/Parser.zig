@@ -365,6 +365,14 @@ fn isGtLike(k: TokenKind) bool {
 /// after attributes (`BUILTIN ( "(" ... ")" )?`). A builtin not followed by
 /// an item is an expression, not a sync point.
 fn startsItem(kinds: []const TokenKind, i: TokenIndex) bool {
+    const j = skipAttributes(kinds, i) orelse return false;
+    return isItemKeyword(kinds[j]);
+}
+
+/// The first token after the attributes (`BUILTIN ( "(" ... ")" )?`) that
+/// start at token `i` (`i` itself if there are none), or null if their
+/// parentheses never close. A token scan: no nodes, no diagnostics.
+pub fn skipAttributes(kinds: []const TokenKind, i: TokenIndex) ?TokenIndex {
     var j = i;
     while (kinds[j] == .builtin) {
         j += 1;
@@ -378,10 +386,10 @@ fn startsItem(kinds: []const TokenKind, i: TokenIndex) bool {
                 if (depth == 0) break;
             }
         }
-        if (kinds[j] == .eof) return false;
+        if (kinds[j] == .eof) return null;
         j += 1;
     }
-    return isItemKeyword(kinds[j]);
+    return j;
 }
 
 /// Keywords that start an item (§3.2), where item recovery resumes.
@@ -673,7 +681,9 @@ test "stubbed parse yields item skeletons" {
         \\      last=T)
         \\    body=(block {
         \\      stmts=[]
-        \\      tail=_)))
+        \\      tail=(binary +
+        \\        lhs=(ident a)
+        \\        rhs=(ident b)))))
     , out.written());
 }
 
