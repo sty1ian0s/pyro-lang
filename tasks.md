@@ -276,7 +276,7 @@ graph TD
   - Size: S · Parallel: W03
   - Blocked by: T002, T011, T012, T013
   - Blocks: T019, T022
-- [ ] **T019** Parser core: cursor, lookahead, recovery, grammar stubs **[CRITICAL]** **[GATE]**
+- [x] **T019** Parser core: cursor, lookahead, recovery, grammar stubs **[CRITICAL]** **[GATE]**
   - Spec: §3.1, §3.9.1
   - Deliverable: `stage0/src/parse/Parser.zig`: peek(0..1), expect/eat, `>>`/`>>=` split in generic context, recovery to item/stmt/delimiter with poisoned nodes, `parseFile`; balanced-skip stubs for type/pattern/expr/block.
   - Acceptance: `>>` split only in type context; broken item recovers with one error; stubbed parse yields item skeletons.
@@ -380,21 +380,21 @@ graph TD
   - Blocked by: T002, T014
   - Blocks: T033, T034, T035, T040, T041, T042, T056, T163
   - Conflicts: Owns `types.zig`; frozen API early.
-- [ ] **T033** Untyped constants, implicit conversions, `as` legality
+- [x] **T033** Untyped constants, implicit conversions, `as` legality
   - Spec: §4.8, §4.9.1, §4.9.2, §4.7, §4.2.4, E0306, E0307
   - Deliverable: `stage0/src/sema/convert.zig`: bigint untyped ints, exact rational floats, constant folding; `coerce` implementing rules 1-9 (rule 9 hook for FnRef); `as` table; defaults i64/f64.
   - Acceptance: 300 as u8 const E0306; 1.5 -> i32 E0306; f32->f64 ok, i32->f32 error; u8->i16 ok, u8->i8 error; int->bool E0307; round-to-nearest-even into f32.
   - Size: M · Parallel: W04
   - Blocked by: T032
   - Blocks: T040, T043
-- [ ] **T034** C-compatible type predicate
+- [x] **T034** C-compatible type predicate
   - Spec: §12.5, §12.6, §4.11.3, E1201
   - Deliverable: `stage0/src/sema/ctype.zig`: predicate over TypeId (ints, floats, bool, raw pointers, @c_layout structs/enums, [N]T as field only, extern fn pointers).
   - Acceptance: Unit table of compatible/incompatible types incl. str, slices, Option.
   - Size: S · Parallel: W04
   - Blocked by: T032
   - Blocks: T045, T097
-- [ ] **T035** TIR core data structures, builder, dump **[GATE]**
+- [x] **T035** TIR core data structures, builder, dump **[GATE]**
   - Spec: B.1, B.4, §8.1
   - Deliverable: `stage0/src/tir/{tir,builder,dump}.zig`: SoA instructions, u32 indices, per-function CFG blocks, values tagged with TypeId, single opcode enum file, defer/errdefer scope markers.
   - Acceptance: Hand-built TIR (arith, if, loop, call, field, enum match) golden-dumps; no pointers in nodes; per-thread arena.
@@ -783,7 +783,7 @@ graph TD
   - Size: L · Parallel: W03
   - Blocked by: T085
   - Blocks: T088, T096, T126, T127
-- [ ] **T088** LLVM backend: target machine, objects, system linking
+- [x] **T088** LLVM backend: target machine, objects, system linking
   - Spec: B.6.1, §13.2.1, §13.9
   - Deliverable: `stage0/src/backend/llvm/target.zig`: triple + CPU features, opt-level mapping (codegen only), object output, system linker with `runtime/`.
   - Acceptance: Hand-written P-IR hello world links and runs on x86-64 and aarch64 Linux; wasm32 object emitted.
@@ -1300,7 +1300,7 @@ graph TD
   - Size: M · Parallel: W03
   - Blocked by: T008, T029
   - Blocks: T159, T161, T163
-- [ ] **T159** pyro.lock, hash verification, --locked/--offline
+- [x] **T159** pyro.lock, hash verification, --locked/--offline
   - Spec: §13.4, E0911
   - Deliverable: `stage0/src/pkg/lock.zig`.
   - Acceptance: Round-trip; tampered cache E0911; `--locked` with changed manifest exits 1; stable output.
