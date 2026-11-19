@@ -69,7 +69,7 @@ fn lane(e: *FnEmitter, n: i64) c.ValueRef {
 
 /// The `i32` alignment argument of a masked access to vector type `vt`.
 fn alignArg(e: *FnEmitter, i: ir.Inst, vt: ir.Type) c.ValueRef {
-    // shortcut: ptr lanes assume 8-byte pointers until T088 sets the data layout.
+    // shortcut: ptr lanes assume 8-byte pointers until T093 threads the Target/Machine data layout into emitModule.
     const natural: u32 = switch (vt.scalar) {
         .i1, .i8 => 1,
         .i16 => 2,

@@ -8,10 +8,11 @@
 //! the P-IR pass pipeline (opt/pipeline.zig), so `O2` and `O3` differ only in
 //! the codegen level, and `Oz` uses LLVM's `-Oz` codegen level (`default`).
 //!
-//! `link` runs the system C compiler driver (`cc`) as the linker, so the C
-//! runtime start files and libc come from the host toolchain; the caller
-//! passes the compiled `runtime/` objects or archives (e.g. the trap entry
-//! `pyro_rt_trap` of runtime/trap.zig).
+//! `link` runs a C compiler driver as the linker, so the C runtime start
+//! files and libc come from that toolchain; the caller passes the compiled
+//! `runtime/` objects or archives (e.g. the trap entry `pyro_rt_trap` of
+//! runtime/trap.zig). The target never selects the driver: without an
+//! explicit `LinkOptions.cc`, only the host target links (with the host `cc`).
 //!
 //! `Machine` references LLVM symbols, so only use it when
 //! `@import("build_options").llvm` is true. `link` and `features` do not.
@@ -24,6 +25,7 @@ const OptLevel = @import("../../pkg/env.zig").OptLevel;
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Target = pyro_target.Target;
+const host = pyro_target.host;
 const log = std.log.scoped(.llvm_target);
 
 /// The LLVM codegen level of an `opt_level` (§13.9). Mirrors clang: `-Oz`
@@ -78,7 +80,8 @@ fn relocMode(t: Target) c.RelocMode {
     return if (t.os == .freestanding or t.arch == .wasm32) .static else .pic;
 }
 
-/// Registers the LLVM code generator of `arch`. Safe to call repeatedly.
+/// Registers the LLVM code generator of `arch`. Repeated calls are no-ops,
+/// but LLVM's target registry is not locked: concurrent first calls race.
 fn initArch(arch: pyro_target.Arch) void {
     switch (arch) {
         .x86_64 => {
@@ -118,7 +121,9 @@ pub const Machine = struct {
     tm: c.TargetMachineRef,
     triple: [:0]const u8,
 
-    /// Creates the target machine. Release it with `deinit`.
+    /// Creates the target machine. Release it with `deinit`. The first call
+    /// for each architecture registers its LLVM target unsynchronized, so make
+    /// it from one thread before codegen workers create their own machines.
     pub fn init(t: Target, level: OptLevel) Error!Machine {
         initArch(t.arch);
         // Every support-table triple is a string literal, hence NUL-terminated.
@@ -165,8 +170,11 @@ fn llvmError(what: []const u8, msg: ?[*:0]u8) error{Llvm} {
 }
 
 pub const LinkOptions = struct {
-    /// The C compiler driver that runs the system linker.
-    cc: []const u8 = "cc",
+    /// The C compiler driver that runs the system linker; it must produce
+    /// `target` executables (e.g. a `zig cc -target ...` wrapper). Null means
+    /// the host `cc`, which only links for the host target.
+    cc: ?[]const u8 = null,
+    /// Only checked against the driver's capabilities; it is not passed on.
     target: Target,
     /// Objects of the program, in link order.
     objects: []const []const u8,
@@ -177,7 +185,8 @@ pub const LinkOptions = struct {
 };
 
 pub const LinkError = Allocator.Error || std.process.RunError || error{
-    /// Only hosted Unix-like targets link through `cc` so far.
+    /// Only hosted Unix-like targets link through `cc` so far, and the
+    /// default driver only links for the host target.
     Unsupported,
     /// The linker exited unsuccessfully; its output was logged.
     LinkFailed,
@@ -190,9 +199,15 @@ pub fn link(gpa: Allocator, io: Io, opts: LinkOptions) LinkError!void {
         // shortcut: no MSVC link.exe, wasm-ld or freestanding linker script yet; add with the targets' drivers.
         .windows, .ios, .wasi, .freestanding => return error.Unsupported,
     }
+    const cc = opts.cc orelse cc: {
+        // shortcut: no cross toolchain discovery; the host `cc` links host objects only. Add with T093's `--target`.
+        const h = host() orelse return error.Unsupported;
+        if (h.arch != opts.target.arch or h.os != opts.target.os or h.abi != opts.target.abi) return error.Unsupported;
+        break :cc "cc";
+    };
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
-    try argv.appendSlice(gpa, &.{ opts.cc, "-o", opts.output });
+    try argv.appendSlice(gpa, &.{ cc, "-o", opts.output });
     try argv.appendSlice(gpa, opts.objects);
     try argv.appendSlice(gpa, opts.runtime);
 
@@ -200,7 +215,7 @@ pub fn link(gpa: Allocator, io: Io, opts: LinkOptions) LinkError!void {
     defer gpa.free(res.stdout);
     defer gpa.free(res.stderr);
     if (!res.term.success()) {
-        log.err("`{s}` failed ({any}):\n{s}{s}", .{ opts.cc, res.term, res.stdout, res.stderr });
+        log.err("`{s}` failed ({any}):\n{s}{s}", .{ cc, res.term, res.stdout, res.stderr });
         return error.LinkFailed;
     }
 }
@@ -240,6 +255,10 @@ test "feature strings use LLVM spellings" {
 test "link rejects targets without a cc driver" {
     const t = try pyro_target.parse("x86_64-windows-msvc");
     try testing.expectError(error.Unsupported, link(testing.allocator, testing.io, .{ .target = t, .objects = &.{}, .runtime = &.{}, .output = "a.exe" }));
+    // The host `cc` never links a foreign target.
+    const h = host() orelse return;
+    const foreign = try pyro_target.parse(if (h.arch == .aarch64) "x86_64-linux-gnu" else "aarch64-linux-gnu");
+    try testing.expectError(error.Unsupported, link(testing.allocator, testing.io, .{ .target = foreign, .objects = &.{}, .runtime = &.{}, .output = "a.out" }));
 }
 
 /// Hand-written hello world (§13.2.1 acceptance): writes through libc.
@@ -359,9 +378,14 @@ fn runtimeSource(gpa: Allocator) ![]u8 {
     }
 }
 
-/// Compiles the runtime trap entry to an object with the Zig compiler
-/// (`$ZIG`, else `zig` on PATH), as the build does for `runtime/`.
-fn buildRuntime(s: Scratch) ![]u8 {
+/// The Zig compiler: `$ZIG`, else `zig` on PATH.
+fn zigExe() []const u8 {
+    return testing.environ.getPosix("ZIG") orelse "zig";
+}
+
+/// Compiles the runtime trap entry to an object with the Zig compiler, as
+/// the build does for `runtime/`; for the host unless `zig_target` is given.
+fn buildRuntime(s: Scratch, zig_target: ?[]const u8) ![]u8 {
     const gpa = testing.allocator;
     const src = try runtimeSource(gpa);
     defer gpa.free(src);
@@ -369,8 +393,11 @@ fn buildRuntime(s: Scratch) ![]u8 {
     errdefer gpa.free(out);
     const emit_arg = try std.fmt.allocPrint(gpa, "-femit-bin={s}", .{out});
     defer gpa.free(emit_arg);
-    const zig = testing.environ.getPosix("ZIG") orelse "zig";
-    try run(&.{ zig, "build-obj", "-lc", "-fPIC", "-fcompiler-rt", "-OReleaseSafe", emit_arg, src }, .{ .exited = 0 }, "");
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.appendSlice(gpa, &.{ zigExe(), "build-obj", "-lc", "-fPIC", "-fcompiler-rt", "-OReleaseSafe", emit_arg, src });
+    if (zig_target) |zt| try argv.appendSlice(gpa, &.{ "-target", zt });
+    try run(argv.items, .{ .exited = 0 }, "");
     return out;
 }
 
@@ -386,13 +413,11 @@ fn run(argv: []const []const u8, term: std.process.Child.Term, stderr_prefix: []
     try testing.expect(std.mem.startsWith(u8, res.stderr, stderr_prefix));
 }
 
-/// Compiles `src` for the host, links it against the runtime and returns the
-/// executable's path.
-fn buildExe(s: Scratch, rt: []const u8, src: []const u8, name: []const u8) ![]u8 {
-    const host = pyro_target.host() orelse return error.SkipZigTest;
-    if (host.os != .linux) return error.SkipZigTest;
+/// Compiles `src` for `t`, links it against the runtime with driver `cc`
+/// and returns the executable's path.
+fn buildExe(s: Scratch, rt: []const u8, src: []const u8, name: []const u8, t: Target, cc: ?[]const u8) ![]u8 {
     const gpa = testing.allocator;
-    const obj = try compile(src, host.triple(), .O2);
+    const obj = try compile(src, t.triple(), .O2);
     defer gpa.free(obj);
     const obj_name = try std.fmt.allocPrint(gpa, "{s}.o", .{name});
     defer gpa.free(obj_name);
@@ -401,31 +426,63 @@ fn buildExe(s: Scratch, rt: []const u8, src: []const u8, name: []const u8) ![]u8
     defer gpa.free(obj_path);
     const exe = try s.join(name);
     errdefer gpa.free(exe);
-    try link(gpa, testing.io, .{ .target = host, .objects = &.{obj_path}, .runtime = &.{rt}, .output = exe });
+    try link(gpa, testing.io, .{ .cc = cc, .target = t, .objects = &.{obj_path}, .runtime = &.{rt}, .output = exe });
     return exe;
+}
+
+/// Builds and runs hello world and the overflow trap for `t` (§13.2.1).
+fn helloAndTrap(s: Scratch, rt: []const u8, t: Target, cc: ?[]const u8) !void {
+    const gpa = testing.allocator;
+    const hello = try buildExe(s, rt, hello_src, "hello", t, cc);
+    defer gpa.free(hello);
+    const res = std.process.run(gpa, testing.io, .{ .argv = &.{hello} }) catch |err| switch (err) {
+        // A foreign executable without a binfmt emulator (e.g. qemu-user).
+        error.InvalidExe => return error.SkipZigTest,
+        else => return err,
+    };
+    defer gpa.free(res.stdout);
+    defer gpa.free(res.stderr);
+    try testing.expect(res.term.success());
+    try testing.expectEqualStrings("hello, world\n", res.stdout);
+
+    // Overflow reaches pyro_rt_trap, which exits 134 (§9.4).
+    const trapper = try buildExe(s, rt, trap_src, "trapper", t, cc);
+    defer gpa.free(trapper);
+    try run(&.{trapper}, .{ .exited = 134 }, "trap[overflow]: ");
 }
 
 test "hand-written P-IR links against the runtime and runs on the host" {
     try emit.llvmTest(struct {
         fn run_() !void {
             const gpa = testing.allocator;
+            const h = host() orelse return error.SkipZigTest;
+            if (h.os != .linux) return error.SkipZigTest;
             var s = try Scratch.init();
             defer s.deinit();
-            const rt = try buildRuntime(s);
+            const rt = try buildRuntime(s, null);
             defer gpa.free(rt);
+            try helloAndTrap(s, rt, h, null);
+        }
+    }.run_);
+}
 
-            const hello = try buildExe(s, rt, hello_src, "hello");
-            defer gpa.free(hello);
-            const res = try std.process.run(gpa, testing.io, .{ .argv = &.{hello} });
-            defer gpa.free(res.stdout);
-            defer gpa.free(res.stderr);
-            try testing.expect(res.term.success());
-            try testing.expectEqualStrings("hello, world\n", res.stdout);
-
-            // Overflow reaches pyro_rt_trap, which exits 134 (§9.4).
-            const trapper = try buildExe(s, rt, trap_src, "trapper");
-            defer gpa.free(trapper);
-            try run(&.{trapper}, .{ .exited = 134 }, "trap[overflow]: ");
+test "hand-written P-IR cross-links for aarch64 Linux and runs" {
+    try emit.llvmTest(struct {
+        fn run_() !void {
+            const gpa = testing.allocator;
+            const h = host() orelse return error.SkipZigTest;
+            // An aarch64 host already runs this through the host test.
+            if (h.os != .linux or h.arch == .aarch64) return error.SkipZigTest;
+            var s = try Scratch.init();
+            defer s.deinit();
+            const rt = try buildRuntime(s, "aarch64-linux-musl");
+            defer gpa.free(rt);
+            const script = try std.fmt.allocPrint(gpa, "#!/bin/sh\nexec '{s}' cc -target aarch64-linux-musl \"$@\"\n", .{zigExe()});
+            defer gpa.free(script);
+            try s.tmp.dir.writeFile(testing.io, .{ .sub_path = "cc-aarch64", .data = script, .flags = .{ .permissions = .executable_file } });
+            const cc = try s.join("cc-aarch64");
+            defer gpa.free(cc);
+            try helloAndTrap(s, rt, try pyro_target.parse("aarch64-linux-musl"), cc);
         }
     }.run_);
 }
