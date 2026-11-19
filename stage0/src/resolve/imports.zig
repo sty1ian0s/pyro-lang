@@ -464,6 +464,15 @@ fn itemSpan(mod: *const collect.Module, it: collect.Item) diag.Span {
 /// in a non-root file is no self-import. Package mode registers the graph
 /// and import stages with the package's manifest instead (T163).
 pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
+    return eachFile(comp, null);
+}
+
+/// Called by `eachFile` with one file's imports, freed when it returns.
+pub const FileFn = *const fn (comp: *Compilation, im: *const Imports) anyerror!void;
+
+/// The body of `runFiles`; `then`, if given, also runs on each file's
+/// imports (body name resolution, `names.zig`).
+pub fn eachFile(comp: *Compilation, then: ?FileFn) anyerror!void {
     for (comp.files.items) |*f| {
         if (f.poisoned) continue;
         const stem = std.fs.path.stem(comp.sources.get(f.id).path);
@@ -474,7 +483,8 @@ pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
         var g = try module_graph.build(comp.gpa, &comp.sink, &.{in}, .{ .kind = .exe });
         defer g.deinit();
         var im = try resolve(comp.gpa, &comp.sink, &g, .{ .partial = true });
-        im.deinit();
+        defer im.deinit();
+        if (then) |next| try next(comp, &im);
     }
 }
 

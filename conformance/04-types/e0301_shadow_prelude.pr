@@ -1,4 +1,3 @@
-//@ expected-fail: T039
 // §4.1, §6.3.1: prelude type names and the formatting intrinsics `print`,
 // `eprint` and `format` cannot be shadowed, not even by a local or a parameter.
 
