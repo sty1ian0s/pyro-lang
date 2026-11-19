@@ -235,7 +235,10 @@ const Mod = struct {
     /// Attributes of every attributed declaration, member, field and variant.
     attrs: std.AutoHashMapUnmanaged(Node.Index, []const Node.Index) = .empty,
     params: std.AutoHashMapUnmanaged(Node.Index, GenericParam) = .empty,
-    consts: std.AutoHashMapUnmanaged(Node.Index, struct { state: State, c: Const }) = .empty,
+    /// Const values by declaration and instantiation (`instantiate.current`):
+    /// a local `const` in an instance body may depend on its bound `comptime`
+    /// parameters (§8.2).
+    consts: std.AutoHashMapUnmanaged(struct { Node.Index, instantiate.Id }, struct { state: State, c: Const }) = .empty,
     fns: std.AutoHashMapUnmanaged(Node.Index, Fn) = .empty,
 };
 
@@ -806,7 +809,9 @@ pub const Items = struct {
     /// The const declared by `const_decl` node `n` of module `m` (§7.7,
     /// §5.9). `self_ty` is the enclosing type of an associated const.
     pub fn constValue(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId) Error!Const {
-        const gop = try it.mods[m].consts.getOrPut(it.alloc(), n);
+        // shortcut: associated consts are keyed per instance like local ones (re-evaluated, and re-reported, in each instance that names them); key them once if that shows up.
+        const key = .{ n, if (it.mods[m].item_of.contains(n)) instantiate.no_instance else instantiate.current(it) };
+        const gop = try it.mods[m].consts.getOrPut(it.alloc(), key);
         if (gop.found_existing) return switch (gop.value_ptr.state) {
             .done => gop.value_ptr.c,
             else => {
@@ -828,7 +833,7 @@ pub const Items = struct {
             try it.report(m, if (d.ty) |t| typeToken(a, t) else name_tok, .E0341, &.{"a `const` must be plain, `str`, an array or slice of plain values, or comptime-only (§5.9)"}, "invalid type for a `const`: `{s}`", .{try it.tyName(ty)});
         }
         const c: Const = .{ .node = n, .name = identText(a, name_tok), .is_pub = isPub(a, a.mainToken(n)), .type = ty, .value = v };
-        it.mods[m].consts.getPtr(n).?.* = .{ .state = .done, .c = c };
+        it.mods[m].consts.getPtr(key).?.* = .{ .state = .done, .c = c };
         return c;
     }
 

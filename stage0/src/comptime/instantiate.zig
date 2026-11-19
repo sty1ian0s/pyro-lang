@@ -28,7 +28,8 @@
 //!   result)` adds one (the key's arguments must outlive the table: use the
 //!   `Items` arena); `Memo.get(id)` its `Result`, updatable in place.
 //! - `Result`: `.func` (a function instance: its TIR id and instantiated
-//!   signature), `.type` (a type instance), or `.failed`.
+//!   signature), `.type` (a type instance), or `.failed` (a failed
+//!   instance: later uses report nothing more).
 //! - Add the entry *before* checking the instance, so that a recursive
 //!   reference finds it instead of instantiating again.
 //! - An `Id` also names the instantiation context of comptime evaluation
@@ -42,6 +43,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Ast = @import("../ast/Ast.zig");
+const diag = @import("../diag/diag.zig");
 const Types = @import("../sema/types.zig");
 const items_mod = @import("../sema/items.zig");
 const emit_tir = @import("../sema/emit_tir.zig");
@@ -209,6 +211,10 @@ pub fn instance(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, skip
     const own = sig.params[skip..];
     for (own, 0..) |p, i| {
         if (p.mode != .@"comptime") continue;
+        if (p.type == .type) {
+            _ = c.unsupported(n, "`comptime` type parameters (T068)");
+            return null;
+        }
         const before = c.sink.diags.items.len;
         const at = argNode(c.ast, args, own, i);
         const v: items_mod.Value = if (at) |a| v: {
@@ -257,7 +263,11 @@ pub fn instance(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, skip
     it.memo.get(id).func.sig = isig;
     // shortcut: an instance first checked before protocols exist and stopped at a method call is not checked again (`Body.retry`).
     // Checking may add bodies and move `bs.fns.items`.
-    const func = try emit_tir.checkFn(bs, it, m, isig, decl.self_ty);
+    const func = try emit_tir.checkFn(bs, it, m, isig, decl.self_ty) orelse {
+        it.memo.get(id).* = .failed;
+        c.failed = true; // reported or recorded by the body
+        return null;
+    };
     bs.fns.items[fid.int()].func = func;
     return .{ .id = fid, .sig = isig };
 }
@@ -266,15 +276,32 @@ pub fn instance(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, skip
 /// resolved again: those that did not resolve without them.
 fn signature(it: *Items, m: ModuleId, sig: items_mod.Fn, self_ty: TypeId) Error!items_mod.Fn {
     const ast = it.im.graph.modules[m].ast;
+    const before = it.sink.diags.items.len;
     const params = try it.arena.allocator().dupe(items_mod.Param, sig.params);
-    // shortcut: a type that failed with an error is resolved (and reported) again.
     for (params) |*p| if (p.type == .err) if (ast.data(p.node).param.ty) |t| {
         p.type = try it.resolveType(m, t, self_ty);
     };
     var f = sig;
     f.params = params;
     if (f.ret == .err) f.ret = try it.resolveType(m, ast.data(sig.node).fn_decl.ret.?, self_ty);
+    dropRepeats(it.sink, before);
     return f;
+}
+
+/// Drops the diagnostics from index `from` on that repeat an earlier one:
+/// errors of the template's signature, reported when it was checked.
+fn dropRepeats(sink: *diag.Sink, from: usize) void {
+    const ds = &sink.diags;
+    var len = from;
+    for (ds.items[from..]) |d| {
+        const seen = for (ds.items[0..from]) |e| {
+            if (e.code == d.code and std.meta.eql(e.primarySpan(), d.primarySpan()) and std.mem.eql(u8, e.message, d.message)) break true;
+        } else false;
+        if (seen) continue;
+        ds.items[len] = d;
+        len += 1;
+    }
+    ds.shrinkRetainingCapacity(len);
 }
 
 /// The argument for parameter `i` of `params` among call arguments `args`:
@@ -373,6 +400,61 @@ test "instances run at comptime and select by their bound value" {
     try testing.expectEqual(210, (try f.constOf("A")).value.scalar.bits);
     try testing.expectEqual(315, (try f.constOf("B")).value.scalar.bits);
     try testing.expectEqual(2, f.items.memo.count());
+}
+
+test "local consts in an instance body take its bound values" {
+    for ([_][]const u8{
+        \\const A: u32 = k(1);
+        \\const B: u32 = k(5);
+        \\fn k(comptime n: u32) -> u32 { const m: u32 = n * 2; m }
+        ,
+        \\fn d() -> u32 { k(5) + k(1) }
+        \\const B: u32 = k(5);
+        \\const A: u32 = k(1);
+        \\fn k(comptime n: u32) -> u32 { const m: u32 = n * 2; m }
+        ,
+    }) |src| {
+        var f: Fixture = undefined;
+        try f.init(src);
+        defer f.deinit();
+        try f.expectDiags(&.{});
+        try f.expectComplete();
+        try testing.expectEqual(2, (try f.constOf("A")).value.scalar.bits);
+        try testing.expectEqual(10, (try f.constOf("B")).value.scalar.bits);
+    }
+}
+
+test "a failed instance is reported once and not called" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn g(comptime n: u32) -> u32 { n + true }
+        \\fn d() -> u32 { g(1) + g(1) }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{.{ .E0310, "+" }});
+    try testing.expectEqual(1, f.items.memo.count());
+    try testing.expect(f.items.memo.get(0).* == .failed);
+}
+
+test "signature errors of the template are not repeated by its instances" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn h(comptime n: usize, x: Bogus) -> [n]u8 { [1; n] }
+        \\fn d() -> u8 { h(2, 0)[0] }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{.{ null, "Bogus" }});
+}
+
+test "`comptime` type parameters are left to T068" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn id(comptime T: type, x: T) -> T { x }
+        \\fn d() -> u32 { id(u32, 5) }
+    );
+    defer f.deinit();
+    try testing.expect(std.mem.indexOf(u8, f.bodies.unsupported.?.what, "T068") != null);
+    try testing.expectEqual(0, f.items.memo.count());
 }
 
 test "unbounded nested instantiation is E0812" {
