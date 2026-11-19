@@ -10,10 +10,6 @@
 //! wake-up is in flight. The check runs only when the count drops, under the
 //! scheduler lock: when no thread is active and no task is queued, nothing can
 //! ever unblock a parked task. This costs nothing until all threads are idle.
-// shortcut: a joiner that helps (pool.zig) runs a task on top of its own stack;
-// if that task parks, the joiner stays stuck under it even after its nursery
-// drains, and a wait that only the joiner could end is reported as a deadlock.
-// Fix with stackful tasks or by not helping with tasks that may park.
 
 const std = @import("std");
 const pool = @import("pool.zig");
@@ -153,12 +149,7 @@ fn pipelineOneThread() void {
 }
 
 test "10k-iteration pipeline on one thread starts workers for parked tasks" {
-    if (builtin.os.tag != .linux) return error.SkipZigTest;
-    var buf: [512]u8 = undefined;
-    const r = try nursery.runForked(pipelineOneThread, &buf);
-    try testing.expectEqualStrings("", r.err);
-    try testing.expect(std.c.W.IFEXITED(r.status));
-    try testing.expectEqual(0, std.c.W.EXITSTATUS(r.status));
+    try expectClean(pipelineOneThread);
 }
 
 fn recvForever(args: ?*anyopaque) callconv(.c) void {
@@ -204,4 +195,60 @@ fn mainRecvAlone() void {
 
 test "the main body parked with no tasks is a deadlock" {
     try expectDeadlock(mainRecvAlone, "trap[deadlock]: every task is blocked: main in recv (test.pr:2)\n  --> test.pr:2\n");
+}
+
+const Probe = struct { ch: *Chan };
+
+fn probeQ(_: ?*anyopaque) callconv(.c) void {}
+
+/// Opens its own nursery, then sends to a sibling.
+fn probeW(args: ?*anyopaque) callconv(.c) void {
+    const p: *const Probe = @ptrCast(@alignCast(args.?));
+    const n = nursery.pyro_rt_nursery_begin();
+    nursery.pyro_rt_spawn(n, probeQ, null, 0, 1);
+    nursery.pyro_rt_nursery_end(n);
+    p.ch.send(7);
+}
+
+fn probeC(args: ?*anyopaque) callconv(.c) void {
+    const p: *const Probe = @ptrCast(@alignCast(args.?));
+    if (p.ch.recv() != 7) std.c._exit(3);
+}
+
+/// `nursery { spawn W; spawn C }` where W = `nursery { spawn Q }; ch.send(7)`
+/// and C = `ch.recv()`: acyclic, so it must finish (§10.4.1).
+fn nestedSend(threads: usize) void {
+    pool.pyro_rt_set_threads(threads);
+    var ch: Chan = .{};
+    const p: Probe = .{ .ch = &ch };
+    const n = nursery.pyro_rt_nursery_begin();
+    nursery.pyro_rt_spawn(n, probeW, &p, @sizeOf(Probe), @alignOf(Probe));
+    nursery.pyro_rt_spawn(n, probeC, &p, @sizeOf(Probe), @alignOf(Probe));
+    nursery.pyro_rt_nursery_end(n);
+}
+
+fn nestedSend1() void {
+    nestedSend(1);
+}
+
+fn nestedSend4() void {
+    nestedSend(4);
+}
+
+fn expectClean(child: *const fn () void) !void {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    var buf: [512]u8 = undefined;
+    const r = try nursery.runForked(child, &buf);
+    try testing.expectEqualStrings("", r.err);
+    try testing.expect(std.c.W.IFEXITED(r.status));
+    try testing.expectEqual(0, std.c.W.EXITSTATUS(r.status));
+}
+
+test "a task that joins its own nursery then sends to a sibling is no deadlock (1 thread)" {
+    try expectClean(nestedSend1);
+}
+
+test "a task that joins its own nursery then sends to a sibling is no deadlock (4 threads)" {
+    // The old failure was timing-dependent with several threads; repeat it.
+    for (0..50) |_| try expectClean(nestedSend4);
 }

@@ -1,17 +1,16 @@
 //! Worker pool behind `nursery`/`spawn` (§10.2 rule 6) and `std.par`'s
 //! `threads`/`set_threads` (§14.5). The pool starts on the first nursery with
 //! `threads() - 1` workers; the thread waiting at a nursery's end is the last
-//! one, because it runs queued tasks itself while it waits (helping join).
+//! one, because it runs its own nursery's queued tasks while it waits (helping
+//! join). It never helps with another nursery's task: one that parked would bury
+//! the joiner's continuation under it, which deadlocks valid programs.
 //!
 //! All scheduler state is guarded by one pthread mutex, so ThreadSanitizer
 //! sees every hand-off.
 // shortcut: one global FIFO under one lock; switch to per-worker work-stealing
 // deques if profiling shows queue contention.
-// shortcut: a helping joiner runs the oldest queued task of any nursery, so
-// nesting depth on one thread is bounded by queued sibling tasks, not by
-// nursery depth (a wide enough tree can overflow the native stack), and a
-// joiner whose group drained waits for unrelated nested tasks; restrict helping
-// to the joining group's descendants with the work-stealing upgrade.
+// shortcut: a helping joiner scans the whole FIFO for its own group's tasks;
+// keep per-group queues if long queues make the scan show up in profiles.
 
 const std = @import("std");
 const trap = @import("../trap.zig");
@@ -39,8 +38,10 @@ pub const Group = struct {
 
 /// The scheduler lock; park.zig waits on it.
 pub var mutex: c.pthread_mutex_t = .{};
-/// Signaled once per queued task and broadcast when a group drains.
+/// Signaled once per queued task; idle workers wait on it.
 var cond: c.pthread_cond_t = .{};
+/// Broadcast when a group drains; waiting joiners wait on it.
+var drained: c.pthread_cond_t = .{};
 var head: ?*Task = null;
 var tail: ?*Task = null;
 var started = false;
@@ -118,6 +119,7 @@ pub fn push(task: *Task) void {
     defer unlock();
     task.group.pending += 1;
     next_id +%= 1;
+    if (next_id == 0) next_id = 1; // 0 names the main body
     task.id = next_id;
     if (tail) |t| t.next = task else head = task;
     tail = task;
@@ -130,6 +132,24 @@ fn pop() ?*Task {
     head = task.next;
     if (head == null) tail = null;
     return task;
+}
+
+/// Unlinks and returns the oldest queued task of `group`. Caller holds the
+/// lock.
+fn popOf(group: *Group) ?*Task {
+    var prev: ?*Task = null;
+    var it = head;
+    while (it) |task| : ({
+        prev = task;
+        it = task.next;
+    }) {
+        if (task.group != group) continue;
+        if (prev) |p| p.next = task.next else head = task.next;
+        if (tail == task) tail = prev;
+        task.next = null;
+        return task;
+    }
+    return null;
 }
 
 /// Runs `task` without the lock, then retires it from its group. Caller holds
@@ -145,7 +165,7 @@ fn run(task: *Task) void {
     group.pending -= 1;
     if (group.pending == 0) {
         unblockJoiner(group);
-        std.debug.assert(c.pthread_cond_broadcast(&cond) == .SUCCESS);
+        std.debug.assert(c.pthread_cond_broadcast(&drained) == .SUCCESS);
     }
 }
 
@@ -157,33 +177,32 @@ fn unblockJoiner(group: *Group) void {
     deadlock.wake();
 }
 
-/// Waits for queued work or a draining group as an idle thread. Caller holds
-/// the lock.
+/// Waits for queued work as an idle worker. Caller holds the lock.
 fn waitIdle() void {
     deadlock.idle += 1;
     std.debug.assert(c.pthread_cond_wait(&cond, &mutex) == .SUCCESS);
     deadlock.idle -= 1;
 }
 
-/// Blocks until every task of `group` has finished, running queued tasks
-/// (from any nursery) meanwhile.
+/// Blocks until every task of `group` has finished, running the group's queued
+/// tasks meanwhile. A task of `group` cannot wait on the joiner's continuation
+/// (that runs only once the group drains), so running one here never buries
+/// work another task needs.
 pub fn join(group: *Group) void {
     lock();
     defer unlock();
     while (group.pending > 0) {
-        if (pop()) |task| {
+        if (popOf(group)) |task| {
             unblockJoiner(group);
             run(task);
-        } else {
-            if (!group.joiner_waiting) {
-                group.joiner_waiting = true;
-                deadlock.sleep();
-            }
-            waitIdle();
-        }
+        } else if (!group.joiner_waiting) {
+            group.joiner_waiting = true;
+            // Other nurseries' queued tasks are left to workers; with none
+            // idle, start one so they still run (like a parked task does).
+            if (head != null and deadlock.idle == 0) addWorker();
+            deadlock.sleep();
+        } else std.debug.assert(c.pthread_cond_wait(&drained, &mutex) == .SUCCESS);
     }
-    // A wake-up meant for queued work may have landed here; pass it on.
-    if (head != null) std.debug.assert(c.pthread_cond_signal(&cond) == .SUCCESS);
 }
 
 fn workerMain() void {
@@ -202,6 +221,7 @@ fn workerMain() void {
 pub fn resetAfterFork() void {
     mutex = .{};
     cond = .{};
+    drained = .{};
     head = null;
     tail = null;
     started = false;
