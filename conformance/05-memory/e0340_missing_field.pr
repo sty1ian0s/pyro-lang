@@ -1,4 +1,3 @@
-//@ expected-fail: T046
 // §5.8, §6.2.1: without `..`, every field is listed, even defaulted ones; with
 // `..`, a field without a default must still be listed.
 

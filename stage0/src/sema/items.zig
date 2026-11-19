@@ -644,7 +644,9 @@ pub const Items = struct {
         } });
     }
 
-    fn arrayLen(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId) Error!?u64 {
+    /// The value of comptime array length `n`, or null if it is not
+    /// known (or was reported).
+    pub fn arrayLen(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId) Error!?u64 {
         const v = try it.coerceValue(m, n, try it.fold(m, n, self_ty, .usize), .usize);
         return if (v == .scalar) v.scalar.bits else null;
     }

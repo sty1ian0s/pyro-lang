@@ -1,4 +1,4 @@
-//@ expected-fail: T046
+//@ expected-fail: T050
 //@ covers: E0351
 // §6.2.1, §6.1: each field once, in any order; `x` is shorthand for `x: x`.
 

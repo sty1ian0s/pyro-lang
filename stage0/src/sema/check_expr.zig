@@ -20,6 +20,7 @@ const convert = @import("convert.zig");
 const items_mod = @import("items.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_stmt = @import("check_stmt.zig");
+const check_literals = @import("check_literals.zig");
 const tir = @import("../tir/tir.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
@@ -49,6 +50,12 @@ const handlers = blk: {
         .{ .binary, binary },
         .{ .cast, cast },
         .{ .call, call },
+        .{ .struct_lit, check_literals.structLit },
+        .{ .anon_lit, check_literals.anonLit },
+        .{ .inferred_member, check_literals.inferredMember },
+        .{ .array_lit, check_literals.arrayLit },
+        .{ .array_repeat, check_literals.arrayRepeat },
+        .{ .tuple, check_literals.tuple },
         .{ .block, check_stmt.block },
         .{ .@"if", check_stmt.ifExpr },
         .{ .loop, check_stmt.loopExpr },
@@ -61,7 +68,6 @@ const handlers = blk: {
 /// The construct of an unsupported node kind and the task that checks it.
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
-        .struct_lit, .anon_lit, .inferred_member, .array_lit, .array_repeat, .tuple => "literals (T046)",
         .builtin_call => "builtin calls (T048)",
         .field_access => "field access and methods (T050)",
         .index, .range => "indexing and ranges (T051)",
@@ -142,7 +148,7 @@ fn stringLit(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     return .{ .ty = .str, .ref = try c.emit(.str, .{ .str = .{ .string = s } }) };
 }
 
-fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
+pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     const e = c.items.names.get(c.m, n) orelse {
         try c.report(n, null, "cannot find `{s}` in this scope", .{c.ast.tokenSlice(c.ast.mainToken(n))});
         return .err;
@@ -257,9 +263,29 @@ fn binary(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     if (op == .amp_amp or op == .pipe_pipe) return check_stmt.logical(c, n, op == .amp_amp);
     const class = classOf(op) orelse return c.unsupported(n, "this operator (a later task)");
     // The other operand is the expected type of each (§6.2.3).
-    const l = try check(c, d.lhs, if (class == .arith or class == .bitwise or class == .shift) expected else .none);
+    const l_expected: TypeId = if (class == .arith or class == .bitwise or class == .shift) expected else .none;
+    if (class != .shift and l_expected == .none and needsExpected(c.ast, d.lhs)) {
+        // Checking the right first emits it first; only a bare `.name` (a
+        // variant or `const`, no side effects) may be evaluated after it.
+        if (c.ast.kind(d.lhs) != .inferred_member)
+            return c.unsupported(d.lhs, "a call or literal typed by the right operand (a later task)");
+        const r = try check(c, d.rhs, .none);
+        const l = try check(c, d.lhs, if (r.isUntyped() or r.ty == .noreturn) .none else r.ty);
+        return operate(c, n, op, l, r, expected);
+    }
+    const l = try check(c, d.lhs, l_expected);
     const r = try check(c, d.rhs, if (class == .shift) .none else if (l.isUntyped()) .none else l.ty);
     return operate(c, n, op, l, r, expected);
+}
+
+/// `n` takes its type only from the expected type: `.name`, `.name(args)`
+/// or `.{ ... }` (§6.2.2, §6.2.3).
+fn needsExpected(ast: *const Ast, n: Node.Index) bool {
+    return switch (ast.kind(n)) {
+        .inferred_member, .anon_lit => true,
+        .call => ast.kind(ast.data(n).call.callee) == .inferred_member,
+        else => false,
+    };
 }
 
 /// `l op r` for checked operands (also used by compound assignment).
@@ -539,9 +565,10 @@ fn cast(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
 /// A direct call `f(args)` of a non-generic function with positional
 /// arguments for value parameters (§6.9). Method calls, named and default
 /// arguments, parameter modes and function pointers are T047's and T050's.
-fn call(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
+fn call(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const d = c.ast.data(n).call;
     const ast = c.ast;
+    if (ast.kind(d.callee) == .inferred_member) return check_literals.inferredCall(c, n, expected);
     if (ast.kind(d.callee) != .ident) return c.unsupported(n, "calls of this form (T047, T050)");
     const e = c.items.names.get(c.m, d.callee) orelse return failedCall(c, d);
     const ref = switch (e.res) {

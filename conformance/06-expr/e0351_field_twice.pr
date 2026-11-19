@@ -1,4 +1,3 @@
-//@ expected-fail: T046
 // §6.2.1: naming a field twice in a struct literal is an error.
 
 struct Point { x: i32, y: i32 }

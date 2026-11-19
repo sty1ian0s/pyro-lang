@@ -1,4 +1,4 @@
-//@ expected-fail: T046
+//@ expected-fail: T050
 //@ covers: E0352
 // §6.2.1, §7.3.3: inside its module a struct is constructed freely; this is the
 // parse-don't-validate pattern.

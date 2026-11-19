@@ -1,4 +1,3 @@
-//@ expected-fail: T046
 // §6.2.3: an inferred member needs an expected type that has it.
 
 enum GameState { idle, playing }

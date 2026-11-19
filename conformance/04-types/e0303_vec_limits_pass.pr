@@ -1,4 +1,3 @@
-//@ expected-fail: T051
 //@ covers: E0303
 // §4.3.1: the lane-count bounds 1 and 64 are both valid, as are every allowed
 // element type.
