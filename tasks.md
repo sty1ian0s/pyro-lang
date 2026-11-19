@@ -572,14 +572,14 @@ graph TD
   - Size: L · Parallel: W14
   - Blocked by: T057
   - Blocks: T059, T060, T137
-- [ ] **T059** Comptime budget, @set_eval_quota, forbidden ops
+- [x] **T059** Comptime budget, @set_eval_quota, forbidden ops
   - Spec: §8.6, §8.7, E0805, E0808
   - Deliverable: `stage0/src/comptime/limits.zig`.
   - Acceptance: Infinite loop E0808 with trace; passes after quota; fail case per E0805 category; budget per top-level evaluation.
   - Size: S · Parallel: W15
   - Blocked by: T058
   - Blocks: T223
-- [ ] **T060** Comptime context detection and evaluation driver **[CRITICAL]** **[GATE]**
+- [x] **T060** Comptime context detection and evaluation driver **[CRITICAL]** **[GATE]**
   - Spec: §8.1, §8.5
   - Deliverable: `stage0/src/sema/comptime_ctx.zig`: const initializers, comptime blocks, comptime args, array lengths, lane counts, field defaults, attribute args, type exprs; caching; const cycle detection; wires items/calls hooks.
   - Acceptance: Const arrays land in rodata; array length from const fn; failing comptime block aborts; mutual const recursion reported.
