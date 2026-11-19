@@ -657,7 +657,8 @@ test "stubbed parse yields item skeletons" {
         \\  inner=(fn_decl pub fn add
         \\    generics=_
         \\    params=[]
-        \\    ret=(invalid T)
+        \\    ret=(path T
+        \\      last=T)
         \\    body=(block {
         \\      stmts=[]
         \\      tail=_)))
