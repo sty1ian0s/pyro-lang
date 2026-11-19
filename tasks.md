@@ -304,14 +304,14 @@ graph TD
   - Size: M · Parallel: W05
   - Blocked by: T002, T017, T018, T019
   - Blocks: T024, T028, T036, T245
-- [ ] **T023** Parser: expressions (Pratt) **[CRITICAL]**
+- [x] **T023** Parser: expressions (Pratt) **[CRITICAL]**
   - Spec: §3.8, §3.8.1, §3.8.2, §3.9, §3.9.1, §2.6.5
   - Deliverable: `stage0/src/parse/expr.zig`: table-driven Pratt; non-assoc levels (E0214); W0201; all primaries (ML strings, tuples, arrays, comprehensions, struct/anon literals E0215, `.x`, lambdas, block exprs, `struct` body); postfix; expr_ns mode; prefix `-` folding + suffix fit (E0108); E0213 position check.
   - Acceptance: `flags & MASK == 0` -> `(flags & MASK) == 0`; `-x as u8` -> `(-x) as u8`; `a < b < c` E0214; `if p == Point {}`; `-128i8` ok, `128i8` E0108; `.{x: 1, 2}` E0215.
   - Size: L · Parallel: W06
   - Blocked by: T019, T021
   - Blocks: T025, T026, T039
-- [ ] **T024** CLI skeleton: all subcommands, common flags, exit codes **[GATE]**
+- [x] **T024** CLI skeleton: all subcommands, common flags, exit codes **[GATE]**
   - Spec: §13.8, A.2
   - Deliverable: `stage0/src/cli/{main,args}.zig`: dispatch for every §13.8 command (stubs report not-implemented); flags `--env --release --target --backend --set --jobs --offline --locked --expand[=full] --trust-build-scripts --color --message-format`; debug `--dump-tokens --dump-ast --stop-after`; exits 0/1/2/3 (panic handler -> 3); single-file `pyro check file.pr` (stage-0 convenience, documented as such).
   - Acceptance: Unknown flag -> 2; E0214 file -> 1 with JSON diagnostic; forced ICE -> 3; `--release` == `--env prod`.
@@ -402,7 +402,7 @@ graph TD
   - Blocked by: T014, T032
   - Blocks: T043, T057
   - Conflicts: Owns TIR opcode enum; schema frozen at merge; other tasks add opcodes only via this owner.
-- [ ] **T036** Module graph: collect items, import cycles **[CRITICAL]**
+- [x] **T036** Module graph: collect items, import cycles **[CRITICAL]**
   - Spec: §7.1, §7.8.1, §7.8.3, §7.10, E0901, E0902
   - Deliverable: `stage0/src/resolve/{collect,module_graph}.zig`: file -> module path, segment validation, per-module item tables, use/pub use graph, cycle chain, topological layers.
   - Acceptance: E0901 bad segment; E0902 prints `a → b → c → a`; diamond compiled once; main.pr vs lib.pr by package kind.
