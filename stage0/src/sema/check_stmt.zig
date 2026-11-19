@@ -17,6 +17,7 @@ const attr_table = @import("../attr_table.zig");
 const conv = @import("convert.zig");
 const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
+const must_use = @import("must_use.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -71,7 +72,11 @@ fn stmt(c: *Checker, s: Node.Index) Error!bool {
         .spawn, .nursery => _ = c.unsupported(s, "`nursery` and `spawn` (T125)"),
         .launch => _ = c.unsupported(s, "`launch` (T187)"),
         .attributed => _ = c.unsupported(s, "attributes on statements (T062)"),
-        else => return (try check_expr.check(c, s, .none)).ty == .noreturn,
+        else => {
+            const v = try check_expr.check(c, s, .none);
+            try must_use.check(c, s, v.ty);
+            return v.ty == .noreturn;
+        },
     }
     return false;
 }
@@ -222,7 +227,7 @@ fn discard(c: *Checker, s: Node.Index) Error!bool {
 }
 
 /// The first token of a call or name expression, to report it at its start.
-fn firstToken(ast: *const Ast, n: Node.Index) Ast.TokenIndex {
+pub fn firstToken(ast: *const Ast, n: Node.Index) Ast.TokenIndex {
     var x = n;
     while (ast.kind(x) == .call) x = ast.data(x).call.callee;
     return ast.mainToken(x);
