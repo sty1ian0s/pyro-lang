@@ -1,0 +1,69 @@
+//@ covers: E0802
+// §8.4, §8.7: reflection results that are plain (`usize`, `bool`, `str`)
+// reach runtime as constants; `TypeInfo` values and types stay in comptime
+// code. The layout facts are those of §4.11.
+
+use std.meta.{TypeInfo};
+
+struct Particle { pub pos: [3]f32, pub mut id: u32 = 0, alive: bool, kind: u3 }
+
+enum Shape { circle(f32), rect(f32, f32), empty }
+
+const INFO: TypeInfo = @type_info(Particle);
+
+type Id = @field_type(Particle, "id");
+
+comptime {
+    // pos at 0, id at 12, then one unit holding the bit fields alive and kind.
+    if @size_of(Particle) != 20 || @align_of(Particle) != 4 {
+        @compile_error("Particle is 20 bytes, aligned to 4");
+    }
+    match INFO {
+        .struct_(s) => {
+            if s.size != @size_of(Particle) || s.align != @align_of(Particle) {
+                @compile_error("StructInfo agrees with @size_of and @align_of");
+            }
+            let mut count: usize = 0;
+            for f in s.fields { count += 1; }
+            if count != 4 || s.fields[1].offset != 12 || s.fields[3].offset != 16 {
+                @compile_error("fields in declaration order with their offsets");
+            }
+            if s.fields[2].bit_width != 1 || s.fields[3].bit_width != 3 || s.fields[3].bit_offset != 1 {
+                @compile_error("bit fields share a unit");
+            }
+            if !s.fields[1].is_pub_mut || !s.fields[1].has_default || s.fields[2].is_pub {
+                @compile_error("visibility and defaults");
+            }
+        },
+        _ => { @compile_error("Particle is a struct"); },
+    }
+    match @type_info(Shape) {
+        .enum_(e) => {
+            if e.variants[2].discriminant != 2 { @compile_error("discriminants count up"); }
+        },
+        _ => { @compile_error("Shape is an enum"); },
+    }
+    match @type_info([4]u3) {
+        .array(a) => {
+            if a.len != 4 || a.r#soa { @compile_error("[4]u3 is an array of 4"); }
+            match @type_info(a.child) {
+                .int(i) => if i.signed || i.bits != 3 { @compile_error("u3 is unsigned, 3 bits"); },
+                _ => { @compile_error("u3 is an integer"); },
+            }
+        },
+        _ => { @compile_error("[4]u3 is an array"); },
+    }
+    if @variant_count(Shape) != 3 || !@has_field(Particle, "kind") || @has_field(Particle, "mass") {
+        @compile_error("variants and fields");
+    }
+}
+
+fn runtime_values() -> usize {
+    let name: str = @type_name(Particle);
+    let id: Id = 7;
+    let buf: [@size_of(Id)]u8 = [0; @size_of(Id)];
+    if @has_field(Particle, "id") && !@has_method(Particle, "id") {
+        return @size_of(Particle);
+    }
+    @variant_count(Shape)
+}

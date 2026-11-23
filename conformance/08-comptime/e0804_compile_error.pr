@@ -1,4 +1,3 @@
-//@ expected-fail: T063
 // §8.5: an evaluated `@compile_error` aborts compilation with its message.
 
 struct HotParticle { pos: [16]f32, id: u32 }

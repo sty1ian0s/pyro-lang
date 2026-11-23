@@ -383,7 +383,7 @@ fn concrete(t: *Types, args: []const Types.Arg) bool {
 }
 
 /// Whether `ty` mentions a generic parameter.
-fn mentionsParam(t: *Types, ty: TypeId) bool {
+pub fn mentionsParam(t: *Types, ty: TypeId) bool {
     return switch (t.get(ty)) {
         .param => true,
         inline .array, .soa_array, .slice, .soa_slice, .handle, .ptr, .mut_view, .vec => |x| mentionsParam(t, x.elem),

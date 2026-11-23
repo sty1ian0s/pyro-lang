@@ -97,7 +97,7 @@ fn placeType(c: *Checker, n: Node.Index) Error!?TypeId {
             if (c.items.names.get(c.m, n) != null) return null;
             const base = try placeType(c, c.ast.data(n).field_access.lhs) orelse return null;
             if (base == .err) return null;
-            break :blk (try lookupField(c, base, c.ast.tokenSlice(c.ast.mainToken(n))) orelse return null).ty;
+            break :blk (try lookupField(c, base, fieldName(c, n)) orelse return null).ty;
         },
         .index => blk: {
             if (check_index.isSlice(c.ast, n)) return null;
@@ -140,10 +140,16 @@ fn lookupField(c: *Checker, ty: TypeId, name: []const u8) Error!?Field {
     }
 }
 
+/// The field name `field_access` node `n` names: `x.r#soa` is `soa` (§2.3).
+fn fieldName(c: *const Checker, n: Node.Index) []const u8 {
+    const s = c.ast.tokenSlice(c.ast.mainToken(n));
+    return if (std.mem.startsWith(u8, s, "r#")) s[2..] else s;
+}
+
 /// Field `n` (a `field_access`) of a value of type `ty`, reported if it is
 /// missing or not visible for `access` here (§7.3.3).
 fn field(c: *Checker, n: Node.Index, ty: TypeId, access: mutability.Access) Error!?Field {
-    const name = c.ast.tokenSlice(c.ast.mainToken(n));
+    const name = fieldName(c, n);
     switch (c.types.get(ty)) {
         .vec => {
             _ = c.unsupported(n, "swizzles (T128)");

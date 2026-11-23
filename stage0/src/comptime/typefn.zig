@@ -60,8 +60,10 @@ pub const Generated = struct {
     /// The declaration name of §8.3.2 (`SortedSoA__Monster__512`), for
     /// `--expand` and lowering. Diagnostics print the type itself.
     mangled: []const u8,
-    /// How the type is named so far: `returned` and `alias` are final.
-    naming: enum { anonymous, alias, returned } = .anonymous,
+    /// How the type is named so far: `returned` is final, and so is
+    /// `inner`: a type reached by reflection inside another type before it
+    /// was returned, which no instance returns (`reached`).
+    naming: enum { anonymous, alias, returned, inner } = .anonymous,
     /// Its fields; it has no generics, and members are not supported yet.
     decl: items_mod.Struct,
 };
@@ -203,14 +205,22 @@ const Names = struct { display: []const u8, mangled: []const u8 };
 /// is a struct made in an instance other than the evaluation's own, the
 /// instance returned it, so it takes the instance's names `F(args)` and
 /// `F__a1__a2…` (§8.3.2).
-// shortcut: a type that leaves its instance other than as the result (reflection on a field type) is taken as returned; check the instance's result once reflection exists (T069).
 pub fn returned(it: *Items, t: TypeId) Error!void {
     const g = it.generated.get(t) orelse return;
-    if (g.naming == .returned or g.instance == instantiate.no_instance or g.instance == instantiate.current(it)) return;
+    if (g.naming == .returned or g.naming == .inner or g.instance == instantiate.no_instance or g.instance == instantiate.current(it)) return;
     const gpa = it.arena.allocator();
     g.mangled = try mangle.instanceMangled(gpa, it, g.instance);
     it.types.rename(t, try it.types.strings.intern(try mangle.instanceDisplay(gpa, it, g.instance)));
     g.naming = .returned;
+}
+
+/// Type `t` was reached by reflection inside another type (a field type,
+/// §8.4). A type an instance returns is named when the call that makes it
+/// is evaluated, before any reflection can reach it; one still unnamed was
+/// made inside the instance and not returned, so `returned` leaves it be.
+pub fn reached(it: *Items, t: TypeId) void {
+    const g = it.generated.get(t) orelse return;
+    if (g.naming != .returned) g.naming = .inner;
 }
 
 /// Type `t` is the value of `const` `name`: a struct not yet named is

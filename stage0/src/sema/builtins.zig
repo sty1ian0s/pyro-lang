@@ -15,7 +15,7 @@
 //! an unknown name, a variable written with parentheses or a function
 //! without, a wrong argument count, a use outside the allowed context
 //! (E1202, E0805, E1005, `@old` outside `@ensures`), then argument types.
-//! Builtins whose typing needs a later task (reflection, comptime inputs,
+//! Builtins whose typing needs a later task (`@field`, `@call`, comptime inputs,
 //! `Option` results, format strings) are recorded as unsupported with
 //! that task, after the checks above.
 
@@ -33,6 +33,7 @@ const check_expr = @import("check_expr.zig");
 const builtins_expr = @import("builtins_expr.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
 const comptime_flow = @import("comptime_flow.zig");
+const reflect = @import("../comptime/reflect.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -177,7 +178,7 @@ pub const Allowed = union(enum) {
 pub const Rule = enum {
     /// `@size_of`, `@align_of`, `@type_info`, `@type_name`,
     /// `@variant_count`, `@has_field`, `@has_method`, `@implements`,
-    /// `@field_type` (T069).
+    /// `@field_type` (`comptime/reflect.zig`).
     reflect,
     /// `(x, comptime str) -> F` (T072).
     field,
@@ -545,7 +546,7 @@ pub const Args = struct {
 fn typeCall(a: *Args, rule: Rule, expected: TypeId) Error!Typed {
     const c = a.c;
     switch (rule) {
-        .reflect => return c.unsupported(a.at, "reflection builtins (T069)"),
+        .reflect => return reflect.check(a, expected),
         .field => return c.unsupported(a.at, "`@field` (T072)"),
         .call, .fn_info => return c.unsupported(a.at, "`@call` and `@fn_info` (T071)"),
         .enum_from_int => return builtins_expr.enumFromInt(a),

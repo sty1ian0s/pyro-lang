@@ -89,6 +89,14 @@ pub fn checkRuntime(it: *Items, m: ModuleId, tok: Ast.TokenIndex, ty: TypeId) Al
     return false;
 }
 
+/// Whether `ty` is comptime-only (§8.3, §8.4): it holds a `type`, `FnRef`,
+/// `FieldId<T>` or untyped constant, by value or through a slice.
+pub fn isComptimeOnly(it: *Items, ty: TypeId) Allocator.Error!bool {
+    var seen: std.AutoHashMapUnmanaged(TypeId, void) = .empty;
+    defer seen.deinit(it.types.gpa);
+    return comptimeOnly(it, &seen, ty);
+}
+
 /// Whether `ty` holds a comptime-only value by value or through a slice.
 /// `seen` breaks cycles, which E0376 reports elsewhere.
 fn comptimeOnly(it: *Items, seen: *std.AutoHashMapUnmanaged(TypeId, void), ty: TypeId) Allocator.Error!bool {

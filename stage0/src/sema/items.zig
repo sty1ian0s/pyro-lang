@@ -47,6 +47,8 @@ const layout_soa = @import("layout_soa.zig");
 const tir = @import("../tir/tir.zig");
 const instantiate = @import("../comptime/instantiate.zig");
 const typefn = @import("../comptime/typefn.zig");
+const reflect = @import("../comptime/reflect.zig");
+const embed = @import("../comptime/embed.zig");
 const generics_mod = @import("generics.zig");
 
 const Node = Ast.Node;
@@ -619,7 +621,7 @@ pub const Items = struct {
             .global => |t| switch (t) {
                 .item => |ref| return it.itemType(m, n, ref, args, self_ty),
                 .prelude => |name| return it.preludeType(m, n, name, args, self_ty),
-                .external => |path| return it.stdType(m, path, args, self_ty),
+                .external => |path| return if (reflect.metaRef(it, path)) |ref| it.itemType(m, n, ref, args, self_ty) else it.stdType(m, path, args, self_ty),
                 .unresolved => return .err,
                 .module => {},
             },
@@ -1359,7 +1361,7 @@ pub const Items = struct {
             .field_id => true,
             .slice => |s| it.isPlain(s.elem),
             .soa_slice => |s| it.isPlain(s.elem),
-            else => it.isPlain(ty),
+            else => try it.isPlain(ty) or try embed.isComptimeOnly(it, ty),
         };
     }
 

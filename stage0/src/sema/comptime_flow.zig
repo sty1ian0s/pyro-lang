@@ -38,6 +38,7 @@ const interp_ctrl = @import("../comptime/interp_ctrl.zig");
 const limits = @import("../comptime/limits.zig");
 const Value = @import("../comptime/value.zig").Value;
 const hash_mod = @import("../comptime/hash.zig");
+const reflect = @import("../comptime/reflect.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -269,7 +270,8 @@ pub fn hash(a: *builtins.Args) Error!Typed {
 }
 
 /// `Hooks.builtin` of the comptime driver: runs `@compile_error`,
-/// `@compile_log` and `@hash` reached by the interpreter.
+/// `@compile_log`, `@hash` and the reflection builtins (`reflect.eval`)
+/// reached by the interpreter.
 pub fn evalBuiltin(ctx: *anyopaque, m: *interp_ctrl.Machine, b: tir.BuiltinId, args: []const Value) interp_ctrl.StepError!Value {
     const cx: *comptime_ctx.Ctx = @ptrCast(@alignCast(ctx));
     if (b == builtins.Builtin.compile_log.id()) {
@@ -302,7 +304,9 @@ pub fn evalBuiltin(ctx: *anyopaque, m: *interp_ctrl.Machine, b: tir.BuiltinId, a
         };
         return .{ .ty = .int(.unsigned, 64), .data = .{ .scalar = h } };
     }
-    if (b != builtins.Builtin.compile_error.id()) return m.fail(unsupportedBuiltin(@fromBackingInt(b.int())));
+    const which: builtins.Builtin = @fromBackingInt(b.int());
+    if (reflect.evaluates(which)) return reflect.eval(m, which, args);
+    if (b != builtins.Builtin.compile_error.id()) return m.fail(unsupportedBuiltin(which));
     const tr = try m.trace();
     defer tr.deinit(m.gpa);
     if (m.eval) |e| e.reported = true;
@@ -321,7 +325,8 @@ pub fn evalBuiltin(ctx: *anyopaque, m: *interp_ctrl.Machine, b: tir.BuiltinId, a
 fn unsupportedBuiltin(b: builtins.Builtin) []const u8 {
     return switch (b) {
         inline else => |t| "`@" ++ @tagName(t) ++ "` in comptime code" ++ comptime switch (t) {
-            .size_of, .align_of, .type_info, .type_name, .has_field, .has_method, .implements, .field_type, .field, .call, .fn_info, .variant_count => " (T069)",
+            .field => " (T072)",
+            .call, .fn_info => " (T071)",
             .embed_file, .env, .env_or, .target => " (T073)",
             else => "",
         },
@@ -560,6 +565,6 @@ test "an inline for range over the comptime budget is E0808" {
 }
 
 test "builtins not evaluable at comptime name their owner" {
-    try testing.expectEqualStrings("`@size_of` in comptime code (T069)", unsupportedBuiltin(.size_of));
+    try testing.expectEqualStrings("`@fn_info` in comptime code (T071)", unsupportedBuiltin(.fn_info));
     try testing.expectEqualStrings("`@zero` in comptime code", unsupportedBuiltin(.zero));
 }
