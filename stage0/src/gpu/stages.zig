@@ -193,21 +193,24 @@ fn scalar(it: *Items, t: TypeId) bool {
 
 /// Whether `t` is a struct of this package whose fields are scalars that
 /// are not bit fields (§4.11.2), vectors, arrays of them, or such structs.
+/// `@c_layout` and `@soa` structs have no bit fields (§4.11.3).
 fn uniformStruct(it: *Items, lay: *layout.Engine, t: TypeId, depth: u32) Error!bool {
     const s = it.structOf(t) orelse return false;
     // A struct that contains itself is E0376 (layout); stop rather than recurse.
     if (depth > 64) return false;
-    for (s.fields) |fd| if (!try uniformField(it, lay, fd.type, depth + 1)) return false;
+    const m = it.declRef(t).?.module;
+    const bit_packed = lay.attr(m, s.attrs, .c_layout) == null and lay.attr(m, s.attrs, .soa) == null;
+    for (s.fields) |fd| if (!try uniformField(it, lay, fd.type, bit_packed, depth + 1)) return false;
     return true;
 }
 
-fn uniformField(it: *Items, lay: *layout.Engine, t: TypeId, depth: u32) Error!bool {
+fn uniformField(it: *Items, lay: *layout.Engine, t: TypeId, bit_packed: bool, depth: u32) Error!bool {
     if (t == .err) return true;
-    if (lay.bitWidth(t) != null) return false;
+    if (bit_packed and lay.bitWidth(t) != null) return false;
     if (scalar(it, t)) return true;
     return switch (it.types.get(t)) {
         .vec => true,
-        .array => |x| uniformField(it, lay, x.elem, depth),
+        .array => |x| uniformField(it, lay, x.elem, bit_packed, depth),
         .nominal => uniformStruct(it, lay, t, depth),
         // shortcut: fields of a generic struct are judged as declared, a type
         // parameter counting as uniform; substitute the arguments once
@@ -362,6 +365,17 @@ test "invalid kernel parameters and return type (E1001)" {
         .{ .E1001, "at" },
         .{ .E1001, "m" },
     }, null);
+}
+
+test "`@c_layout` and `@soa` structs have no bit fields (§4.11.3)" {
+    try expectStages(
+        \\@c_layout struct C { a: u32, ok: bool }
+        \\@soa struct B { x: f32, alive: bool, tag: u7 }
+        \\@packed struct P { a: u32, ok: bool }
+        \\@gpu_kernel fn k1(c: C) {}
+        \\@gpu_kernel fn k2(mut bs: soa []B) {}
+        \\@gpu_kernel fn k3(p: P) {}
+    , &.{.{ .E1001, "p" }}, null);
 }
 
 test "workgroup size limits (E1002)" {
