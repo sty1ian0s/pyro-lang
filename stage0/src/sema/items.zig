@@ -613,7 +613,9 @@ pub const Items = struct {
                 },
                 .pat_bind => if (it.mods[m].bound.get(l)) |t| return t,
                 // A `comptime T: type` parameter of a type function instance (§8.3.1).
-                .param => if (instantiate.boundValue(it, m, l)) |v| if (v == .type) return v.type,
+                .param => if (instantiate.boundValue(it, m, l)) |v| {
+                    if (v == .type) return v.type;
+                } else if (isComptimeType(a, l)) return .err, // resolved per instance (§7.6.3)
                 else => {},
             },
             .global => |t| switch (t) {
@@ -1639,6 +1641,12 @@ fn isValueArg(a: *const Ast, n: Node.Index) bool {
         .int_lit, .char_lit, .bool_lit, .prefix => true,
         else => false,
     };
+}
+
+/// Whether `param` node `p` of `a` is `comptime T: type`.
+fn isComptimeType(a: *const Ast, p: Node.Index) bool {
+    const ty = a.data(p).param.ty orelse return false;
+    return a.tokens.items(.kind)[a.mainToken(p) - 1] == .kw_comptime and a.kind(ty) == .type_type;
 }
 
 fn isUntyped(ty: TypeId) bool {

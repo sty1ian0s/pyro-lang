@@ -220,11 +220,6 @@ pub fn instance(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, skip
     const own = sig.params[skip..];
     for (own, 0..) |p, i| {
         if (p.mode != .@"comptime") continue;
-        // A type function (§8.3.1) takes types; other functions wait for T068.
-        if (p.type == .type and sig.ret != .type) {
-            _ = c.unsupported(n, "`comptime` type parameters (T068)");
-            return null;
-        }
         const before = c.sink.diags.items.len;
         const at = argNode(c.ast, args, own, i);
         const v: items_mod.Value = if (at) |a| v: {
@@ -283,19 +278,38 @@ pub fn instance(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, skip
 }
 
 /// `sig` with the types that depend on the bound `comptime` parameters
-/// resolved again: those that did not resolve without them.
+/// resolved again: those that did not resolve without them, in whole or
+/// in part (`[]T` is `[]{error}` without `T`).
 fn signature(it: *Items, m: ModuleId, sig: items_mod.Fn, self_ty: TypeId) Error!items_mod.Fn {
     const ast = it.im.graph.modules[m].ast;
     const before = it.sink.diags.items.len;
     const params = try it.arena.allocator().dupe(items_mod.Param, sig.params);
-    for (params) |*p| if (p.type == .err) if (ast.data(p.node).param.ty) |t| {
+    for (params) |*p| if (mentionsErr(it.types, p.type)) if (ast.data(p.node).param.ty) |t| {
         p.type = try it.resolveType(m, t, self_ty);
     };
     var f = sig;
     f.params = params;
-    if (f.ret == .err) f.ret = try it.resolveType(m, ast.data(sig.node).fn_decl.ret.?, self_ty);
+    if (mentionsErr(it.types, f.ret)) f.ret = try it.resolveType(m, ast.data(sig.node).fn_decl.ret.?, self_ty);
     dropRepeats(it.sink, before);
     return f;
+}
+
+/// Whether `ty` is or contains `.err`: a type that did not resolve.
+pub fn mentionsErr(t: *Types, ty: TypeId) bool {
+    if (ty == .err) return true;
+    return switch (t.get(ty)) {
+        inline .array, .soa_array, .slice, .soa_slice, .handle, .ptr, .mut_view, .vec => |x| mentionsErr(t, x.elem),
+        .tuple => |x| for (x.elems) |e| {
+            if (mentionsErr(t, e)) break true;
+        } else false,
+        .fn_ptr => |x| mentionsErr(t, x.ret) or for (x.params) |p| {
+            if (mentionsErr(t, p.type)) break true;
+        } else false,
+        .nominal => |x| for (x.args) |g| {
+            if (g == .type and mentionsErr(t, g.type)) break true;
+        } else false,
+        else => false,
+    };
 }
 
 /// Drops the diagnostics from index `from` on that repeat an earlier one:
@@ -456,15 +470,44 @@ test "signature errors of the template are not repeated by its instances" {
     try f.expectDiags(&.{.{ null, "Bogus" }});
 }
 
-test "`comptime` type parameters are left to T068" {
+test "`comptime T: type` parameters are bound per instance (§7.6.3)" {
     var f: Fixture = undefined;
     try f.init(
         \\fn id(comptime T: type, x: T) -> T { x }
-        \\fn d() -> u32 { id(u32, 5) }
+        \\fn zero(comptime T: type) -> T { @zero(T) }
+        \\fn d() -> u32 { let z: u32 = zero(u32); id(u32, 5) + id(u32, z) + id(T: u32, x: 1) }
+        \\fn e() -> u8 { id(u8, 1) }
     );
     defer f.deinit();
-    try testing.expect(std.mem.indexOf(u8, f.bodies.unsupported.?.what, "T068") != null);
-    try testing.expectEqual(0, f.items.memo.count());
+    try f.expectDiags(&.{});
+    try f.expectComplete();
+    // id(u32), zero(u32), id(u8).
+    try testing.expectEqual(3, f.items.memo.count());
+    try testing.expectEqual(TypeId.int(.unsigned, 32), f.bodies.find(0, "d").?.func.?.ret);
+}
+
+test "`comptime T: type` inside compound parameter and result types" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn head(comptime T: type, x: []T) -> T { x[0] }
+        \\fn first(comptime T: type, x: [4]T) -> T { x[0] }
+        \\fn left(comptime T: type, x: (T, T)) -> T { x.0 }
+        \\fn mk(comptime T: type) -> [2]T { @zero([2]T) }
+        \\fn d(a: []u8, b: [4]u8) -> u8 { let m: [2]u8 = mk(u8); head(u8, a) + first(u8, b) + left(u8, (1, 2)) + m[0] }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    try f.expectComplete();
+    var n: usize = 0;
+    for (f.items.memo.results.items) |e| switch (e) {
+        .func => |func| {
+            n += 1;
+            for (func.sig.params) |p| try testing.expect(!mentionsErr(f.items.types, p.type));
+            try testing.expect(!mentionsErr(f.items.types, func.sig.ret));
+        },
+        else => {},
+    };
+    try testing.expectEqual(4, n);
 }
 
 test "unbounded nested instantiation is E0812" {

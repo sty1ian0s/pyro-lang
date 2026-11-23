@@ -1,4 +1,3 @@
-//@ expected-fail: T068
 // §7.6.3: generic arguments are inferred from argument types only, never from
 // the expected result type.
 

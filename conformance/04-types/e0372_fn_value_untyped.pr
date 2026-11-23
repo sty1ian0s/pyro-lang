@@ -1,0 +1,9 @@
+// §7.2.5, §7.6.3: a generic function named without a call needs an expected
+// `fn` type to be instantiated from.
+
+fn clamp<T: plain>(x: T, hi: T) -> T { if x > hi { hi } else { x } }
+
+fn demo() -> u8 {
+    let g = clamp; //~ E0372
+    0
+}

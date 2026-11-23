@@ -1,4 +1,3 @@
-//@ expected-fail: T068
 //@ covers: E0329
 // §7.6.1: the `plain` parameter of a generic function accepts a plain struct.
 

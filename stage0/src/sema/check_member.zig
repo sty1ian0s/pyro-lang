@@ -53,7 +53,7 @@ const Place = mutability.Place;
 pub fn fieldAccess(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     if (c.items.names.get(c.m, n) != null) return check_expr.ident(c, n, expected);
     const lhs = c.ast.data(n).field_access.lhs;
-    if (try typePath(c, lhs)) |ty| return typeMember(c, n, n, ty, null);
+    if (try typePath(c, lhs)) |ty| return typeMember(c, n, n, ty, null, expected);
     return switch (try mutability.operand(c, n, .read)) {
         .place => |p| if (p.bad()) .{ .ty = p.ty } else .{ .ty = p.ty, .ref = try c.emit(p.ty, .{ .load = .{ .place = p.ref } }) },
         .value => |v| v,
@@ -229,8 +229,9 @@ pub fn typePath(c: *Checker, lhs: Node.Index) Error!?TypeId {
 
 /// Member `fa` (a `field_access`) of type `ty`, called with `args` at call
 /// `at` or used as a value (`args` null, `at == fa`): a variant, a
-/// `const`, or a member function (§6.3.3, §7.2.2).
-fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]const Node.Index) Error!Typed {
+/// `const`, or a member function (§6.3.3, §7.2.2). A generic member
+/// function used as a value is instantiated for `expected` (§7.2.5).
+fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]const Node.Index, expected: TypeId) Error!Typed {
     if (ty == .err) return failed(c, args);
     const name = c.ast.tokenSlice(c.ast.mainToken(fa));
     const nm = switch (c.types.get(ty)) {
@@ -273,7 +274,7 @@ fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]
     for (methods) |f| if (std.mem.eql(u8, f.name, name)) {
         if (outside and !f.is_pub) return private(c, fa, "function", name, ty, args);
         try warnDeprecated(c, fa, ref.module, f.attrs);
-        const a = args orelse return check_call.fnOf(c, fa, ref.module, f);
+        const a = args orelse return check_call.fnOf(c, fa, ref.module, f, expected);
         return check_call.callFn(c, at, ref.module, f, null, a);
     };
     // A member of a visible `impl P for T` (§6.3.3 step 1).
@@ -286,7 +287,7 @@ fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]
         if (found.len == 1) {
             const callee = try fromImpl(c, fa, found[0]) orelse return failed(c, args);
             try warnDeprecated(c, fa, callee.m, callee.f.attrs);
-            const a = args orelse return check_call.fnOf(c, fa, callee.m, callee.f);
+            const a = args orelse return check_call.fnOf(c, fa, callee.m, callee.f, expected);
             return check_call.callFn(c, at, callee.m, callee.f, null, a);
         }
     } else if (beforeProtos(c, fa)) return failed(c, args);
@@ -341,7 +342,7 @@ fn protocolCall(c: *Checker, fa: Node.Index, at: Node.Index, proto: TypeId, args
 pub fn call(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     const d = c.ast.data(n).call;
     const lhs = c.ast.data(d.callee).field_access.lhs;
-    if (try typePath(c, lhs)) |ty| return typeMember(c, d.callee, n, ty, d.args);
+    if (try typePath(c, lhs)) |ty| return typeMember(c, d.callee, n, ty, d.args, .none);
     const r = try receiver(c, lhs);
     if (r.ty == .err or r.ty == .noreturn) return failedAfter(c, r, d.args);
     const callee = try resolve(c, d.callee, r.ty) orelse return failed(c, d.args);
