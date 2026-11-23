@@ -586,21 +586,21 @@ graph TD
   - Size: M · Parallel: W15
   - Blocked by: T026, T058
   - Blocks: T061, T062, T063
-- [ ] **T061** comptime if, inline for, @compile_error, @compile_log
+- [x] **T061** comptime if, inline for, @compile_error, @compile_log
   - Spec: §8.5, §6.7.3, E0804, W0801
   - Deliverable: `stage0/src/sema/comptime_flow.zig`.
   - Acceptance: Untaken branch with errors compiles; taken @compile_error E0804; inline for over type tuple; @compile_log W0801.
   - Size: M · Parallel: W16
   - Blocked by: T060
   - Blocks: T076
-- [ ] **T062** Attribute semantics: placement, args, @align, @deprecated, @inline **[GATE]**
+- [x] **T062** Attribute semantics: placement, args, @align, @deprecated, @inline **[GATE]**
   - Spec: §8.8, W0802
   - Deliverable: `stage0/src/sema/attrs.zig`: comptime-evaluated args; `@align` pow2 <= 4096; W0802 on use; @doc_hidden, @inline/@no_inline flags; integrates with warnlvl.
   - Acceptance: Wrong-target rejected; `@align(3)` rejected; deprecated use W0802; `@deny(W0802)` errors.
   - Size: M · Parallel: W16
   - Blocked by: T027, T060
   - Blocks: T067, T124, T135, T139, T141, T144, T176
-- [ ] **T063** Comptime parameters and shared memo table **[CRITICAL]** **[GATE]**
+- [x] **T063** Comptime parameters and shared memo table **[CRITICAL]** **[GATE]**
   - Spec: §8.2, §7.6.2
   - Deliverable: `stage0/src/comptime/instantiate.zig`: per-call comptime arg evaluation, E0801, memo keyed by (fn, args) with types-by-identity/values-by-equality (shared with generics and type functions).
   - Acceptance: Same n shares instantiation (counter); distinct n distinct; runtime arg E0801.

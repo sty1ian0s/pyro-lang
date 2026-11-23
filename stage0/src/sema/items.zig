@@ -45,6 +45,7 @@ const attr_table = @import("../attr_table.zig");
 const type_kinds = @import("kinds.zig");
 const layout_soa = @import("layout_soa.zig");
 const tir = @import("../tir/tir.zig");
+const instantiate = @import("../comptime/instantiate.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -234,7 +235,10 @@ const Mod = struct {
     /// Attributes of every attributed declaration, member, field and variant.
     attrs: std.AutoHashMapUnmanaged(Node.Index, []const Node.Index) = .empty,
     params: std.AutoHashMapUnmanaged(Node.Index, GenericParam) = .empty,
-    consts: std.AutoHashMapUnmanaged(Node.Index, struct { state: State, c: Const }) = .empty,
+    /// Const values by declaration and instantiation (`instantiate.current`):
+    /// a local `const` in an instance body may depend on its bound `comptime`
+    /// parameters (§8.2).
+    consts: std.AutoHashMapUnmanaged(struct { Node.Index, instantiate.Id }, struct { state: State, c: Const }) = .empty,
     fns: std.AutoHashMapUnmanaged(Node.Index, Fn) = .empty,
     /// The type bound to an `inline for` binding while one copy of the
     /// loop body is checked (`comptime_flow.zig`).
@@ -261,6 +265,12 @@ pub const Items = struct {
     main: ?Main = null,
     /// Memoized type kinds, owned by `kinds.zig` (arena-backed).
     kinds: type_kinds.Cache = .{},
+    /// The instantiation memo table, owned by `comptime/instantiate.zig`
+    /// (arena-backed).
+    memo: instantiate.Memo = .{},
+    /// The instantiation whose body or signature is being checked, if any:
+    /// its `comptime` parameters are bound to values (§8.2).
+    instance: ?*const instantiate.Frame = null,
 
     pub fn deinit(it: *Items) void {
         const gpa = it.arena.child_allocator;
@@ -806,7 +816,9 @@ pub const Items = struct {
     /// The const declared by `const_decl` node `n` of module `m` (§7.7,
     /// §5.9). `self_ty` is the enclosing type of an associated const.
     pub fn constValue(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId) Error!Const {
-        const gop = try it.mods[m].consts.getOrPut(it.alloc(), n);
+        // shortcut: associated consts are keyed per instance like local ones (re-evaluated, and re-reported, in each instance that names them); key them once if that shows up.
+        const key = .{ n, if (it.mods[m].item_of.contains(n)) instantiate.no_instance else instantiate.current(it) };
+        const gop = try it.mods[m].consts.getOrPut(it.alloc(), key);
         if (gop.found_existing) return switch (gop.value_ptr.state) {
             .done => gop.value_ptr.c,
             else => {
@@ -828,7 +840,7 @@ pub const Items = struct {
             try it.report(m, if (d.ty) |t| typeToken(a, t) else name_tok, .E0341, &.{"a `const` must be plain, `str`, an array or slice of plain values, or comptime-only (§5.9)"}, "invalid type for a `const`: `{s}`", .{try it.tyName(ty)});
         }
         const c: Const = .{ .node = n, .name = identText(a, name_tok), .is_pub = isPub(a, a.mainToken(n)), .type = ty, .value = v };
-        it.mods[m].consts.getPtr(n).?.* = .{ .state = .done, .c = c };
+        it.mods[m].consts.getPtr(key).?.* = .{ .state = .done, .c = c };
         return c;
     }
 
@@ -984,6 +996,13 @@ pub const Items = struct {
         return it.fold(m, n, self_ty, .none);
     }
 
+    /// The value of comptime argument `n` of module `m` (where `Self` is
+    /// `self_ty`) converted to `ty` (§8.2); `.unknown` if it was reported
+    /// or cannot be evaluated.
+    pub fn comptimeArg(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId, ty: TypeId) Error!Value {
+        return it.coerceValue(m, n, try it.fold(m, n, self_ty, ty), ty);
+    }
+
     fn hook(it: *Items, m: ModuleId, n: Node.Index, expected: TypeId) Error!Value {
         const h = it.options.comptime_hook orelse return .unknown;
         return try h.eval(h.ctx, it, m, n, expected) orelse .unknown;
@@ -1040,7 +1059,11 @@ pub const Items = struct {
             .ident => {
                 const e = it.names.get(m, n) orelse return .unknown; // reported by the expression checker
                 return switch (e.res) {
-                    .local => |l| if (a.kind(l) == .const_decl) (try it.constValue(m, l, self_ty)).value else .unknown,
+                    .local => |l| switch (a.kind(l)) {
+                        .const_decl => (try it.constValue(m, l, self_ty)).value,
+                        .param => instantiate.boundValue(it, m, l) orelse .unknown,
+                        else => .unknown,
+                    },
                     .global => |t| it.targetValue(m, n, t, self_ty),
                 };
             },

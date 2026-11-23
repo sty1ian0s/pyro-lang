@@ -31,6 +31,7 @@ const comptime_ctx = @import("comptime_ctx.zig");
 const comptime_flow = @import("comptime_flow.zig");
 const tir = @import("../tir/tir.zig");
 const interp_expr = @import("../comptime/interp_expr.zig");
+const instantiate = @import("../comptime/instantiate.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
 const Node = Ast.Node;
@@ -176,6 +177,7 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
                     .computed => |cv| comptime_ctx.use(c, n, cv),
                     else => unreachable, // `comptime_flow.bind` stores typed values
                 };
+                if (try instantiate.boundParam(c, n, l)) |v| return v;
                 // Comptime code sees no runtime local of the enclosing function (§8.1).
                 if (c.in_comptime) {
                     try c.report(n, .E0801, "`{s}` is a runtime value and cannot be used at comptime", .{c.ast.tokenSlice(c.ast.mainToken(n))});
