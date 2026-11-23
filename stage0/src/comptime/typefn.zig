@@ -15,9 +15,17 @@
 //! type (`structType`), identified by the expression and the instance it is
 //! checked in. Its fields are resolved with the instance's parameters bound
 //! (`CAP`, `T`) and recorded in `Items.generated` (`Generated`), where
-//! `structOf` finds them. Names follow §8.3.2 (`mangle.zig`): the type
-//! prints as `F(args)` in diagnostics and is `F__a1__a2…` in `--expand`
-//! output and lowering (`Generated.mangled`).
+//! `structOf` finds them. Names follow §8.3.2 (`mangle.zig`): the type an
+//! instance of `F` returns prints as `F(args)` in diagnostics and is
+//! `F__a1__a2…` in `--expand` output and lowering (`Generated.mangled`);
+//! it gets these names when it leaves the instance (`returned`). Any other
+//! struct expression is named by the `const` it is bound to, else
+//! `struct`, in diagnostics (`alias`), and is `struct__N` (`F__a1…__struct__N`
+//! inside an instance) for lowering, so mangled names stay unique.
+//!
+//! Every parameter of a type function is a comptime parameter, and every
+//! call of one has an instance (`Items.signature`, `check_call.callFn`), so
+//! that `F(3)` and `F(4)` are distinct instances named by their arguments.
 //!
 //! Anonymous `enum` expressions are reserved for a future edition (§8.3.1);
 //! the parser rejects them.
@@ -32,6 +40,7 @@ const comptime_ctx = @import("../sema/comptime_ctx.zig");
 const embed = @import("embed.zig");
 const instantiate = @import("instantiate.zig");
 const mangle = @import("mangle.zig");
+const prelude = @import("../resolve/prelude.zig");
 const ModuleId = @import("../resolve/module_graph.zig").ModuleId;
 
 const Node = Ast.Node;
@@ -51,12 +60,14 @@ pub const Generated = struct {
     /// The declaration name of §8.3.2 (`SortedSoA__Monster__512`), for
     /// `--expand` and lowering. Diagnostics print the type itself.
     mangled: []const u8,
+    /// How the type is named so far: `returned` and `alias` are final.
+    naming: enum { anonymous, alias, returned } = .anonymous,
     /// Its fields; it has no generics, and members are not supported yet.
     decl: items_mod.Struct,
 };
 
 /// Generated types by type (`Items.generated`).
-pub const Table = std.AutoHashMapUnmanaged(TypeId, *const Generated);
+pub const Table = std.AutoHashMapUnmanaged(TypeId, *Generated);
 
 /// The generated type `ty`, if it is one.
 pub fn get(it: *const Items, ty: TypeId) ?*const Generated {
@@ -74,6 +85,20 @@ pub fn structOf(it: *Items, ty: TypeId) ?*const items_mod.Struct {
 /// a type function (§8.3.1).
 fn comptimeBody(c: *const Checker) bool {
     return c.in_comptime or c.sig.ret == .type;
+}
+
+/// Whether prelude name `name` is a primitive type (§4, §14.1): built into
+/// the compiler, so usable as a value without the standard library.
+pub fn isPrimitive(name: []const u8) bool {
+    if (prelude.isIntTypeName(name)) return true;
+    for (prelude.entries) |e| if (std.mem.eql(u8, e.name, name)) return e.kind == .type and e.origin == .compiler;
+    return false;
+}
+
+/// The handler of a type written as an expression (`u8`, `[N]T`, `[]T`):
+/// the type, as a value.
+pub fn typeExpr(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
+    return typeValue(c, n, try c.items.resolveType(c.m, n, c.self_ty));
 }
 
 /// Type `t` used as a value at `n` (§8.3): a comptime constant, E0802
@@ -123,9 +148,13 @@ pub fn structType(c: *Checker, n: Node.Index) Error!TypeId {
     const gpa = it.arena.allocator();
     // The instance identifies the type: the memo gives equal arguments one instance.
     const args: []const Types.Arg = if (inst == instantiate.no_instance) &.{} else try gpa.dupe(Types.Arg, &.{.{ .value = .{ .type = .int(.unsigned, 32), .bits = inst } }});
-    const names = try typeNames(c, n, inst);
+    const node_id = it.mods[m].base + n.int();
+    const names: Names = if (inst == instantiate.no_instance)
+        .{ .display = "struct", .mangled = try std.fmt.allocPrint(gpa, "struct__{d}", .{node_id}) }
+    else
+        .{ .display = "struct", .mangled = try std.fmt.allocPrint(gpa, "{s}__struct__{d}", .{ try mangle.instanceMangled(gpa, it, inst), node_id }) };
     const ty = try it.types.intern(.{ .nominal = .{
-        .decl = .{ .package = it.options.package, .index = it.mods[m].base + n.int() },
+        .decl = .{ .package = it.options.package, .index = node_id },
         .args = args,
         .kind = .@"struct",
         .name = try it.types.strings.intern(names.display),
@@ -170,22 +199,27 @@ pub fn structType(c: *Checker, n: Node.Index) Error!TypeId {
 
 const Names = struct { display: []const u8, mangled: []const u8 };
 
-/// The names of the type that `anon_struct` `n` makes in instance `inst`:
-/// `F(args)` and `F__a1__a2…` inside an instance of `F`; `F()` and `F` in
-/// a type function `F` without `comptime` parameters; else `struct` and
-/// `struct__N`, unique in the package.
-fn typeNames(c: *Checker, n: Node.Index, inst: instantiate.Id) Error!Names {
-    const it = c.items;
+/// Type `t` was computed by a comptime evaluation (`comptime_ctx`): if it
+/// is a struct made in an instance other than the evaluation's own, the
+/// instance returned it, so it takes the instance's names `F(args)` and
+/// `F__a1__a2…` (§8.3.2).
+// shortcut: a type that leaves its instance other than as the result (reflection on a field type) is taken as returned; check the instance's result once reflection exists (T066).
+pub fn returned(it: *Items, t: TypeId) Error!void {
+    const g = it.generated.get(t) orelse return;
+    if (g.naming == .returned or g.instance == instantiate.no_instance or g.instance == instantiate.current(it)) return;
     const gpa = it.arena.allocator();
-    if (inst != instantiate.no_instance) return .{
-        .display = try mangle.instanceDisplay(gpa, it, inst),
-        .mangled = try mangle.instanceMangled(gpa, it, inst),
-    };
-    if (c.sig.ret == .type) return .{
-        .display = try std.fmt.allocPrint(gpa, "{s}()", .{c.sig.name}),
-        .mangled = c.sig.name,
-    };
-    return .{ .display = "struct", .mangled = try std.fmt.allocPrint(gpa, "struct__{d}", .{it.mods[c.m].base + n.int()}) };
+    g.mangled = try mangle.instanceMangled(gpa, it, g.instance);
+    it.types.rename(t, try it.types.strings.intern(try mangle.instanceDisplay(gpa, it, g.instance)));
+    g.naming = .returned;
+}
+
+/// Type `t` is the value of `const` `name`: a struct not yet named is
+/// named after it in diagnostics (§8.3.2).
+pub fn alias(it: *Items, t: TypeId, name: []const u8) Error!void {
+    const g = it.generated.get(t) orelse return;
+    if (g.naming != .anonymous) return;
+    it.types.rename(t, try it.types.strings.intern(name));
+    g.naming = .alias;
 }
 
 /// The identifier an IDENT token names: `r#type` is `type` (§2.3).
@@ -280,4 +314,63 @@ test "types as values in comptime code; E0802 at runtime" {
     try testing.expectEqual(q, try constType(&f, "R"));
     try testing.expectEqualStrings("Pair()", try f.items.tyName(q));
     try testing.expectEqualStrings("Pair", get(&f.items, q).?.mangled);
+}
+
+test "only the returned struct takes the instance's names; others stay unique" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn F(comptime T: type) -> type {
+        \\    const Inner = struct { a: T };
+        \\    struct { i: Inner, b: T }
+        \\}
+        \\const X = F(u8);
+        \\const S = struct { a: u8 };
+        \\const U = struct { a: u8 };
+        \\fn bad(s: S) -> U { s }
+    );
+    defer f.deinit();
+    const ds = f.p.sink.finish();
+    try testing.expectEqual(1, ds.len);
+    // §8.3.2: a struct bound to a `const` is named by it.
+    try testing.expectEqualStrings("mismatched types: expected `U`, found `S`", ds[0].message);
+    const x = try constType(&f, "X");
+    try testing.expectEqualStrings("F(u8)", try f.items.tyName(x));
+    try testing.expectEqualStrings("F__u8", get(&f.items, x).?.mangled);
+    const inner = structOf(&f.items, x).?.fields[0].type;
+    try testing.expect(inner != x);
+    try testing.expectEqualStrings("Inner", try f.items.tyName(inner));
+    const im = get(&f.items, inner).?.mangled;
+    try testing.expect(std.mem.startsWith(u8, im, "F__u8__struct__"));
+    try testing.expect(!std.mem.eql(u8, im, get(&f.items, x).?.mangled));
+    try testing.expect(!std.mem.eql(u8, im, get(&f.items, try constType(&f, "S")).?.mangled));
+}
+
+test "§8.3: primitive and constructed types are values in type functions" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn Arr(comptime T: type, comptime N: usize) -> type { [N]T }
+        \\fn Byte() -> type { let v = u8; v }
+        \\const A = Arr(Byte(), 4);
+        \\fn leak() { let t = u8; }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{.{ .E0802, "u8" }});
+    const a = try constType(&f, "A");
+    try testing.expectEqual(4, f.types.get(a).array.len);
+    try testing.expectEqual(TypeId.int(.unsigned, 8), f.types.get(a).array.elem);
+}
+
+test "every parameter of a type function is comptime: F(3) and F(4) differ" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn G(n: usize) -> type { struct { a: [n]u8 } }
+        \\const A = G(3);
+        \\const B = G(4);
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    const a = try constType(&f, "A");
+    try testing.expect(a != try constType(&f, "B"));
+    try testing.expectEqualStrings("G(3)", try f.items.tyName(a));
+    try testing.expectEqualStrings("G__3", get(&f.items, a).?.mangled);
 }

@@ -276,6 +276,17 @@ pub fn get(t: *Types, id: TypeId) Key {
     return t.keys.items[@backingInt(id)];
 }
 
+/// Renames nominal type `id` to `name` (an interned string). The name is
+/// not part of its identity: a generated type gets its name of §8.3.2 once
+/// it is known (`comptime/typefn.zig`). Thread-safe.
+pub fn rename(t: *Types, id: TypeId, name: Interner.Id) void {
+    t.lock.lockUncancelable(t.io);
+    defer t.lock.unlock(t.io);
+    const k = &t.keys.items[@backingInt(id)];
+    k.nominal.name = name;
+    t.map.getKeyPtr(k.*).?.nominal.name = name;
+}
+
 /// Number of types in the table, fixed ids included. Thread-safe.
 pub fn count(t: *Types) u32 {
     t.lock.lockSharedUncancelable(t.io);

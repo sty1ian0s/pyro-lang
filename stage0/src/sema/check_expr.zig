@@ -82,6 +82,14 @@ const handlers = blk: {
         .{ .comptime_if, comptime_flow.comptimeIf },
         .{ .for_inline, comptime_flow.inlineFor },
         .{ .anon_struct, typefn.anonStruct },
+        .{ .array_type, typefn.typeExpr },
+        .{ .slice_type, typefn.typeExpr },
+        .{ .soa_array_type, typefn.typeExpr },
+        .{ .soa_slice_type, typefn.typeExpr },
+        .{ .ptr_type, typefn.typeExpr },
+        .{ .ptr_const_type, typefn.typeExpr },
+        .{ .fn_type, typefn.typeExpr },
+        .{ .generic_inst, typefn.typeExpr },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -203,7 +211,7 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
             // Already reported (the check fails anyway), or from a module a
             // single-file check did not load: not shown valid either way.
             .unresolved => return c.unsupported(n, "names from modules not loaded (multi-file check)"),
-            .prelude => return c.unsupported(n, "prelude functions and values (T105)"),
+            .prelude => |name| return if (typefn.isPrimitive(name)) typefn.typeExpr(c, n, .none) else c.unsupported(n, "prelude functions and values (T105)"),
             .external => return c.unsupported(n, "standard library items (T163)"),
             .module => {
                 try c.report(n, .E0310, "module `{s}` is not a value", .{c.ast.tokenSlice(c.ast.mainToken(n))});

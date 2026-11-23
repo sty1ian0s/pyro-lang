@@ -110,7 +110,8 @@ pub fn callFn(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_m
         try unsafe.callee(c, c.ast.data(n).call.callee, c.items.im.graph.modules[m].ast, sig, false);
     if (sig.generics.len > 0) return c.unsupported(n, "generic calls (T068)");
     const skip = @intFromBool(recv != null);
-    const has_comptime = for (sig.params[skip..]) |p| {
+    // A type function always has an instance: its type's name (§8.3.2).
+    const has_comptime = sig.ret == .type or for (sig.params[skip..]) |p| {
         if (p.mode == .@"comptime") break true;
     } else false;
     // A call with `comptime` arguments calls their instantiation (§8.2).

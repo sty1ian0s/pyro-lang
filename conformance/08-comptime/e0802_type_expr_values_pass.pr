@@ -1,0 +1,21 @@
+//@ covers: E0802
+// §8.3, §8.3.1: in a type function, primitive types and type expressions
+// such as `[N]T` are values; a type function may return one.
+
+struct Monster { health: f32, threat: u32 }
+
+fn Arr(comptime T: type, comptime N: usize) -> type {
+    [N]T
+}
+
+fn Byte() -> type {
+    let b = u8;
+    b
+}
+
+const Pack = Arr(Monster, 4);
+const Bytes = Arr(Byte(), 16);
+
+fn second(p: Pack) -> Monster { p[1] }
+
+fn take(b: Bytes) -> [16]u8 { b }

@@ -201,7 +201,10 @@ pub const Ctx = struct {
         const v = try cx.ev.finish(cx.values.allocator(), r);
         switch (v.data) {
             .scalar => |bits| return .{ .scalar = .{ .type = v.ty, .bits = bits } },
-            .type => |t| return .{ .type = t },
+            .type => |t| {
+                try @import("../comptime/typefn.zig").returned(it, t);
+                return .{ .type = t };
+            },
             else => {},
         }
         try cx.table.append(cx.gpa, v);
