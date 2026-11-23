@@ -179,12 +179,22 @@ pub const Frame = struct {
     values: []const items_mod.Value,
     /// Nesting of instantiations, 1 for the outermost.
     depth: u32,
+    /// The instantiation this one runs inside, if any.
+    parent: ?*const Frame = null,
 };
 
 /// The instantiation context of comptime evaluation: the current instance,
 /// or `no_instance`.
 pub fn current(it: *const Items) Id {
     return if (it.instance) |f| f.id else no_instance;
+}
+
+/// Instance `id` is still being evaluated: it is the current instance or
+/// one the current instance runs inside.
+pub fn running(it: *const Items, id: Id) bool {
+    var f = it.instance;
+    while (f) |fr| : (f = fr.parent) if (fr.id == id) return true;
+    return false;
 }
 
 /// The value bound to `comptime` parameter `param` of module `m` in the
@@ -265,7 +275,7 @@ pub fn instance(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, skip
     const fid: tir.FnId = .from(bs.fns.items.len);
     try bs.fns.append(bs.arena.allocator(), .{ .module = m, .node = sig.node, .name = sig.name, .checked = true });
     const id = try it.memo.add(arena, key, .{ .func = .{ .id = fid, .sig = sig } });
-    var frame: Frame = .{ .id = id, .module = m, .params = params.items, .values = values.items, .depth = depth };
+    var frame: Frame = .{ .id = id, .module = m, .params = params.items, .values = values.items, .depth = depth, .parent = it.instance };
     const saved = it.instance;
     it.instance = &frame;
     defer it.instance = saved;

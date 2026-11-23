@@ -847,6 +847,9 @@ test "@type_name, @has_field, @has_method, @implements, @field_type and @variant
         \\}
         \\fn F(comptime T: type) -> type { const S = struct { v: T }; const info = @type_info([2]S); return S; }
         \\const OWN: str = @type_name(F(u8));
+        \\fn G(comptime T: type) -> type { const i = @type_info([1]T); return u8; }
+        \\fn H(comptime T: type) -> type { const S = struct { v: T }; const K = G(S); return S; }
+        \\const NESTED: str = @type_name(H(u8));
     );
     defer f.deinit();
     try f.expectDiags(&.{});
@@ -857,6 +860,8 @@ test "@type_name, @has_field, @has_method, @implements, @field_type and @variant
     // Reflection inside the instance that returns the type does not stop it
     // being named after the call.
     try testing.expectEqualStrings("F(u8)", (try f.computed("OWN")).data.str);
+    // Nor does reflection in a nested instance that runs inside it.
+    try testing.expectEqualStrings("H(u8)", (try f.computed("NESTED")).data.str);
     try testing.expectEqual(@as(u64, 3), try f.scalar("COUNT"));
     // In runtime code each call is a constant: no builtin is left to run.
     const body = f.bodies.find(0, "checks").?.func.?;
