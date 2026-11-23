@@ -27,6 +27,7 @@ const Types = @import("types.zig");
 const items_mod = @import("items.zig");
 const soa = @import("layout_soa.zig");
 const attrs_mod = @import("attrs.zig");
+const typefn = @import("../comptime/typefn.zig");
 
 const Items = items_mod.Items;
 const TypeId = Types.TypeId;
@@ -164,8 +165,9 @@ pub const Engine = struct {
             .distinct => return e.layoutOf(n.underlying),
             .protocol => return null,
             .@"struct" => {
-                const s = e.items.structOf(ty) orelse return null;
-                const m = e.items.declRef(ty).?.module;
+                // A struct made by a type function has its fields in `Items.generated`.
+                const s = typefn.structOf(e.items, ty) orelse return null;
+                const m = if (typefn.get(e.items, ty)) |g| g.module else e.items.declRef(ty).?.module;
                 const tys = try e.alloc().alloc(TypeId, s.fields.len);
                 const aligns = try e.alloc().alloc(u32, s.fields.len);
                 for (s.fields, tys, aligns) |f, *t, *al| {

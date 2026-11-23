@@ -366,7 +366,7 @@ pub fn bind(it: *Items, id: instantiate.Id, m: ModuleId, gens: []const Node.Inde
         try params.append(arena, g);
         try values.append(arena, v);
     }
-    return .{ .id = id, .module = m, .params = params.items, .values = values.items, .depth = depth };
+    return .{ .id = id, .module = m, .params = params.items, .values = values.items, .depth = depth, .parent = it.instance };
 }
 
 /// `methods` (of instance `inst`) marked as the instance's own.

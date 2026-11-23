@@ -1,4 +1,3 @@
-//@ expected-fail: T069
 //@ covers: W0801
 // §8.5, A.2: `@allow(W0801)` silences the warning for one item.
 

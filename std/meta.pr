@@ -1,0 +1,131 @@
+//! Reflection (§8.4, §14.8): the types `@type_info` and `@fn_info` return,
+//! and the target enums behind `@target()`.
+//!
+//! Reflection is read-only and comptime-only: every type here that holds a
+//! `type` is comptime-only, so its values never reach runtime (E0802).
+//!
+//! The compiler declares the block between the `compiler` markers itself
+//! (`stage0/src/comptime/reflect.zig` holds the same text and its tests
+//! check that it matches), so reflection works before the standard library
+//! is loaded. `@target` (T073) fills `Target`; `Target.has_feature` comes
+//! with T115.
+
+// compiler: begin
+/// What `@type_info(T)` returns (§8.4): one case per type class. A distinct
+/// type reports the type it wraps.
+pub enum TypeInfo {
+    int(IntInfo),
+    float(FloatInfo),
+    bool_,
+    void_,
+    noreturn_,
+    type_,
+    vector(VectorInfo),
+    array(ArrayInfo),
+    slice(SliceInfo),
+    pointer(PointerInfo),
+    struct_(StructInfo),
+    enum_(EnumInfo),
+    tuple(TupleInfo),
+    function(FnInfo),
+    handle(type),
+}
+
+/// `uN`, `iN`, `usize` and `isize`: `bits` is the target width for the last two.
+pub struct IntInfo { pub signed: bool, pub bits: u8 }
+
+/// `f32` and `f64`.
+pub struct FloatInfo { pub bits: u8 }
+
+/// `vec<len, child>`.
+pub struct VectorInfo { pub len: usize, pub child: type }
+
+/// `[len]child`, and `soa [len]child` with `soa` set.
+pub struct ArrayInfo { pub len: usize, pub child: type, pub r#soa: bool }
+
+/// `[]child`, and `soa []child` with `soa` set.
+pub struct SliceInfo { pub child: type, pub r#soa: bool }
+
+/// `*child` and `*const child`.
+pub struct PointerInfo { pub child: type, pub is_const: bool }
+
+/// A struct: its fields in declaration order and its layout (§4.11). A
+/// comptime-only struct has no layout: `size`, `align` and the field
+/// offsets are 0.
+pub struct StructInfo {
+    pub fields: []FieldInfo,
+    pub is_soa: bool,
+    pub is_resource: bool,
+    pub size: usize,
+    pub align: usize,
+}
+
+/// One struct field. `offset` is the byte offset of the field, or of the
+/// unit holding it for a bit field (§4.11.2), whose first bit in the unit
+/// is `bit_offset`; `bit_width` is 0 for a field that is not a bit field.
+pub struct FieldInfo {
+    pub name: str,
+    pub ty: type,
+    pub offset: usize,
+    pub bit_offset: u8,
+    pub bit_width: u8,
+    pub is_pub: bool,
+    pub is_pub_mut: bool,
+    pub has_default: bool,
+}
+
+/// An enum: its variants in declaration order and its discriminant type
+/// (§4.11.4).
+pub struct EnumInfo { pub variants: []VariantInfo, pub backing: type }
+
+/// One enum variant: `payload` is empty without parentheses, and
+/// `discriminant` holds the bits of its discriminant (two's complement for
+/// a signed backing type).
+pub struct VariantInfo { pub name: str, pub payload: []type, pub discriminant: u64 }
+
+/// A tuple: its element types.
+pub struct TupleInfo { pub fields: []type }
+
+/// A function (`@fn_info`) or function-pointer type: its parameters, return
+/// type and attribute names (without `@`). Function-pointer parameters
+/// have empty names, and their attributes are empty.
+pub struct FnInfo { pub params: []ParamInfo, pub ret: type, pub attrs: []str }
+
+/// One parameter of a `FnInfo`.
+pub struct ParamInfo { pub name: str, pub mode: ParamMode, pub ty: type, pub attrs: []str }
+
+/// How a parameter is passed (§7.2.1).
+pub enum ParamMode { value, r#mut, r#move, r#comptime }
+
+/// Instruction-set architectures the implementation supports (§13.2.1).
+pub enum Arch { x86_64, aarch64, riscv64, wasm32 }
+
+/// Operating systems the implementation supports (§13.2.1).
+pub enum Os { linux, windows, macos, ios, android, wasi, freestanding }
+
+/// C ABI flavours; `none` when the target names none (§13.2.1).
+pub enum Abi { none, gnu, musl, msvc }
+
+/// Byte order.
+pub enum Endian { big, little }
+
+/// The target being compiled for (`@target()`, §8.6). `has_feature` is
+/// added with the rest of `std.meta` (T115).
+pub struct Target { pub arch: Arch, pub os: Os, pub abi: Abi, pub pointer_bits: u8, pub endian: Endian }
+
+/// CPU features the implementation knows, for `Target.has_feature`.
+pub enum CpuFeature {
+    sse2, sse3, ssse3, sse4_1, sse4_2, popcnt, avx, avx2, fma, bmi, bmi2, avx512f, avx512bw,
+    neon, fullfp16, dotprod, sve, sve2,
+    m, a, f, d, c, v,
+    simd128, bulk_memory,
+}
+// compiler: end
+
+/// The fields of struct `T` (§14.8): the `struct_` case of `@type_info(T)`.
+pub fn fields(comptime T: type) -> []FieldInfo {
+    match @type_info(T) {
+        .struct_(s) => s.fields,
+        _ => @compile_error("`meta.fields` needs a struct type"),
+    }
+}

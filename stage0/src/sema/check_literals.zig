@@ -349,7 +349,8 @@ pub fn inferredCall(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
 }
 
 fn member(c: *Checker, at: Node.Index, name_node: Node.Index, args: ?[]const Node.Index, expected: TypeId) Error!Typed {
-    const name = c.ast.tokenSlice(c.ast.mainToken(name_node));
+    const text = c.ast.tokenSlice(c.ast.mainToken(name_node));
+    const name = if (std.mem.startsWith(u8, text, "r#")) text[2..] else text; // `.r#mut` is member `mut` (§2.3)
     if (expected == .err) {
         c.failed = true;
         return .err;

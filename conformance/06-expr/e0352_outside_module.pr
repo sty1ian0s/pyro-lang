@@ -1,4 +1,3 @@
-//@ expected-fail: T163
 // §6.2.1, §7.3.3: outside its module, a struct with a field that is not
 // `pub mut` and has no default cannot be constructed. `std.meta.FieldInfo`
 // (§8.4) has only `pub` fields without defaults.

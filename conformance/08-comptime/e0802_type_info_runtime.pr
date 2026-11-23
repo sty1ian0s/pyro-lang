@@ -1,0 +1,21 @@
+// §8.4, §8.3: reflection data exists only at comptime. A `TypeInfo` holds
+// types, so it cannot reach runtime, and neither can the type `@field_type`
+// gives.
+
+use std.meta.{TypeInfo};
+
+struct Particle { pos: [3]f32, id: u32 }
+
+const INFO: TypeInfo = @type_info(Particle);
+
+fn leak_info() {
+    let i = @type_info(Particle); //~ E0802
+}
+
+fn leak_const() -> TypeInfo {
+    INFO //~ E0802
+}
+
+fn leak_field_type() {
+    let t = @field_type(Particle, "id"); //~ E0802
+}

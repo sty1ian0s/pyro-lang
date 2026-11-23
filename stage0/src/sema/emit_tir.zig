@@ -48,6 +48,7 @@ const protocols_mod = @import("protocols.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
 const instantiate = @import("../comptime/instantiate.zig");
 const purity = @import("purity.zig");
+const reflect = @import("../comptime/reflect.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -633,6 +634,8 @@ fn unsupportedBodies(bs: *Bodies, ast: *const Ast, m: ModuleId, decl: Node.Index
 /// program has then not been shown valid.
 pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
     var incomplete = false;
+    var meta: reflect.Meta = try .init(comp);
+    defer meta.deinit(comp.gpa);
     for (comp.files.items) |*f| {
         if (f.poisoned) continue;
         // Same module naming as `imports.eachFile`.
@@ -643,7 +646,7 @@ pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
         var scratch: diag.Sink = .init(comp.gpa, comp.io);
         defer scratch.deinit();
         const in: module_graph.Input = .{ .module = .{ .path = name, .file = file }, .file = f.id, .ast = &f.ast };
-        var g = try module_graph.build(comp.gpa, &scratch, &.{in}, .{ .kind = .exe });
+        var g = try module_graph.build(comp.gpa, &scratch, &.{ in, meta.input() }, .{ .kind = .exe });
         defer g.deinit();
         var im = try imports.resolve(comp.gpa, &scratch, &g, .{ .partial = true });
         defer im.deinit();

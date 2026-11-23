@@ -442,7 +442,7 @@ fn literal(c: *Checker, n: Node.Index, ty: TypeId) Error!?i128 {
 
 /// `.name` or `.name(p, ...)` (§3.7) against enum `ty`.
 fn variant(c: *Checker, n: Node.Index, ty: TypeId, ok: *bool) Error!Pat {
-    const name = c.ast.tokenSlice(c.ast.mainToken(n));
+    const name = bindName(c, n); // `.r#mut` names variant `mut` (§2.3)
     const elems = c.ast.data(n).pat_variant.elems;
     const u = c.underlying(ty);
     if (c.types.get(u) == .nominal and c.types.get(u).nominal.lang == .none) {

@@ -1,4 +1,3 @@
-//@ expected-fail: T063
 //@ covers: E0804
 // §8.5: a `@compile_error` that is not evaluated has no effect; the untaken
 // branch of `comptime if` is not even type-checked (`wrong` would be E0310).
