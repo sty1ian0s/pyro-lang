@@ -1,0 +1,21 @@
+//@ covers: E1002
+// §11.1.1: workgroup sizes up to the limits, without vector swizzles (see
+// e1002_workgroup_sizes.pr): 1024 for compute, 128 for task; the default is 64.
+
+pub struct Payload { n: u32 }
+
+@gpu_kernel(workgroup: 1024)
+fn flat(mut xs: []f32) {
+    xs[0] *= 2.0;
+}
+
+@gpu_kernel(workgroup: (4, 4, 64))
+fn cube(mut xs: []f32) {}
+
+@gpu_kernel
+fn default_size(mut xs: []f32) {}
+
+@gpu_task(workgroup: (4, 4, 8))
+fn ts_wide(mut payload: Payload) -> vec3<u32> {
+    vec3(1, 1, 1)
+}

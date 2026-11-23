@@ -1,0 +1,20 @@
+//@ covers: E1001
+// §4.11.3, §11.1.2: `@c_layout` and `@soa` structs never bit-pack, so their
+// `bool` fields are not bit fields and the structs are valid uniform and
+// storage element types.
+
+@c_layout
+pub struct Config { count: u32, enabled: bool }
+
+@soa
+pub struct Particle { x: f32, alive: bool }
+
+@gpu_kernel
+fn uniform_c_layout(c: Config, mut out: []u32) {
+    out[0] = c.count;
+}
+
+@gpu_kernel
+fn soa_bool_storage(mut ps: soa []Particle, dt: f32) {
+    ps[0].x += dt;
+}

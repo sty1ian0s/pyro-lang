@@ -42,6 +42,7 @@ const check_stmt = @import("check_stmt.zig");
 const kinds_mod = @import("kinds.zig");
 const layout_mod = @import("layout.zig");
 const attrs_mod = @import("attrs.zig");
+const gpu_stages = @import("../gpu/stages.zig");
 const protocols_mod = @import("protocols.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
 const instantiate = @import("../comptime/instantiate.zig");
@@ -650,6 +651,7 @@ pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
         defer lay.deinit();
         try lay.check();
         try attrs_mod.check(&it);
+        _ = try gpu_stages.check(&it, &lay);
         var protos = try protocols_mod.check(comp.gpa, &comp.sink, &it, .{});
         defer protos.deinit();
         var bs = try checkBodies(comp.gpa, &it, &protos);

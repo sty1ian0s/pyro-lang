@@ -1,4 +1,3 @@
-//@ expected-fail: T176
 // §11.1.2: a parameter of a non-compute stage outside every parameter class is E1008.
 
 use std.gpu;
