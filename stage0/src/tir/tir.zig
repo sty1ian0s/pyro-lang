@@ -28,7 +28,7 @@
 //!   register a body region (blocks ending in `defer_end`) in it, and
 //!   `scope_end` is emitted on *every* route out of the scope (end of block,
 //!   and before each `return`, `break`, `continue` and `?` that leaves it,
-//!   innermost first). Defer expansion (T078) clones the registered bodies at
+//!   innermost first). Defer expansion (`sema/defer.zig`) clones the bodies at
 //!   each `scope_end` in LIFO order.
 //! - A `nursery` body is a scope too. On every route out of it, its
 //!   `nursery_end` (the join) comes *before* the `scope_end` of the body's

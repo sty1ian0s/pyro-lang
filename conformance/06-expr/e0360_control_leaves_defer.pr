@@ -1,4 +1,3 @@
-//@ expected-fail: T078
 // §6.8.1: a deferred statement must not leave itself with `return`, `break`,
 // `continue` or `?`.
 

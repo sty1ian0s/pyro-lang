@@ -106,7 +106,7 @@ pub const PendingBreak = struct { block: tir.Block, value: Typed, node: Node.Ind
 pub const Unsupported = struct {
     module: ModuleId,
     node: Node.Index,
-    /// What it is and the task that adds it: "`defer`, `errdefer` and `return tail` (T078)".
+    /// What it is and the task that adds it: "`nursery` and `spawn` (T125)".
     what: []const u8,
 };
 
@@ -204,6 +204,11 @@ pub const Checker = struct {
     self_local: tir.Local = .none,
     /// Enclosing loops, innermost last.
     loops: std.ArrayList(Loop) = .empty,
+    /// Open scopes with defers, innermost last (`defer.zig`).
+    scopes: std.ArrayList(@import("defer.zig").Scope) = .empty,
+    /// `scopes.items.len` when the innermost block began: a `defer` of the
+    /// block opens its scope if none is open above it.
+    scope_base: usize = 0,
     /// Inside an `unsafe` block (§12.1).
     in_unsafe: bool = false,
     /// Checking comptime code (§8.6); set by comptime evaluation (`comptime_ctx.zig`).
@@ -994,12 +999,12 @@ test "E0371: missing return value" {
 test "pyro check stage: unsupported constructs make the check incomplete" {
     var f: Fixture = undefined;
     try f.init(
-        \\fn a(x: u32) -> u32 { defer {} x }
+        \\fn a(x: u32) -> u32 { nursery {} x }
         \\fn b() -> u32 { 2 }
     );
     defer f.deinit();
     try f.expectDiags(&.{});
-    try testing.expectEqualStrings("`defer`, `errdefer` and `return tail` (T078)", f.bodies.unsupported.?.what);
+    try testing.expectEqualStrings("`nursery` and `spawn` (T125)", f.bodies.unsupported.?.what);
     try testing.expectEqual(null, f.bodies.find(0, "a").?.func);
     _ = try f.func("b");
 }

@@ -1,4 +1,3 @@
-//@ expected-fail: T078
 //@ covers: E0362
 // §6.8.2: `errdefer` in a function returning `Result` runs only on `.err`.
 
@@ -10,4 +9,21 @@ fn setup(ok: bool) -> Result<u32, SetupError> {
     errdefer log_failure();
     if !ok { return .err(.failed); }
     .ok(1)
+}
+
+fn step() -> Result<u32, SetupError> { .ok(2) }
+
+// `?` leaves through the `errdefer`; loop bodies run their defers per iteration.
+fn chain() -> Result<u32, SetupError> {
+    errdefer log_failure();
+    defer log_failure();
+    let v = step()?;
+    outer: for i in 0..3 {
+        defer log_failure();
+        while true {
+            if i == 1 { continue :outer; }
+            break :outer;
+        }
+    }
+    .ok(v)
 }

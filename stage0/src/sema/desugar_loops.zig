@@ -71,7 +71,7 @@ pub fn forLabeled(c: *Checker, n: Node.Index, label: ?[]const u8) Error!Typed {
         return .{ .ty = it.ty };
     }
     // `let __r = xs;` (§6.12.3): name the temporary so `--expand` can print it.
-    if (c.b.data(it.ref) == .local) {
+    if (it.ref != .none and c.b.data(it.ref) == .local) { // none once the body failed
         const l = c.b.data(it.ref).local.local;
         const names = c.b.locals.items(.name);
         if (names[l.int()] == .none) names[l.int()] = try c.types.strings.intern("__r");
