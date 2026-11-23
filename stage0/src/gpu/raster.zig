@@ -16,7 +16,8 @@
 //!   (**E1009**).
 //!
 //! The errors of a struct are reported once, at the struct, however many
-//! stages use it. Matching a fragment input against the varyings of the
+//! stages use it. A fragment input with no `@position` field at all is
+//! reported at the parameter instead, since the struct may be fine elsewhere. Matching a fragment input against the varyings of the
 //! stage before it, and color targets against the pipeline's formats, are
 //! pipeline checks (§11.6.1, T190).
 
@@ -28,6 +29,7 @@ const Types = @import("../sema/types.zig");
 const items_mod = @import("../sema/items.zig");
 const attrs = @import("../sema/attrs.zig");
 const stages = @import("stages.zig");
+const layout = @import("../sema/layout.zig");
 
 const Items = items_mod.Items;
 const Node = Ast.Node;
@@ -39,8 +41,9 @@ const Error = std.mem.Allocator.Error;
 pub const max_targets = 8;
 
 /// Checks the vertex and fragment stages of `fns` (see the file comment).
-/// Run after `stages.check`, which returned `fns`.
-pub fn check(it: *Items, fns: []const stages.StageFn) Error!void {
+/// Run after `stages.check`, which returned `fns`; `lay` is the engine
+/// it used.
+pub fn check(it: *Items, lay: *layout.Engine, fns: []const stages.StageFn) Error!void {
     var seen: Seen = .{};
     for (fns) |sf| {
         const a = it.im.graph.modules[sf.module].ast;
@@ -52,15 +55,22 @@ pub fn check(it: *Items, fns: []const stages.StageFn) Error!void {
             .vertex => {
                 for (sf.f.params, decl.params, sf.params, 0..) |p, pn, c, i| {
                     if (c.class == .stage_specific and (i == 0 or items_mod.hasAttr(a, paramAttrs(a, pn), .instance)))
-                        try vertexInput(it, p);
+                        try vertexInput(it, &seen, p);
                 }
-                if (sf.f.ret != .err) try varyings(it, &seen, sf.f.ret, ret);
+                if (sf.f.ret != .err) try varyings(it, lay, &seen, sf.f.ret, ret, null);
             },
             .fragment => {
-                // `stages` puts a struct first parameter in the fragment-input slot.
-                if (sf.params.len > 0 and sf.params[0].class == .stage_specific)
-                    try varyings(it, &seen, sf.f.params[0].type, ret);
-                if (sf.f.ret != .err) try fragmentOutput(it, &seen, sf.f.ret, ret);
+                // `stages` puts a struct first parameter in the fragment-input
+                // slot; a `@per_primitive` one is not the input.
+                // shortcut: the input is not matched against the varyings of
+                // the stage before it (§11.3.2), until pipelines are checked (T190 owner)
+                if (sf.params.len > 0 and sf.params[0].class == .stage_specific and
+                    !items_mod.hasAttr(a, paramAttrs(a, decl.params[0]), .per_primitive))
+                {
+                    const p = sf.f.params[0];
+                    try varyings(it, lay, &seen, p.type, ret, .{ .site = .{ .m = sf.module, .tok = a.mainToken(p.node) }, .param = p.name, .stage = sf.f.name });
+                }
+                if (sf.f.ret != .err) try fragmentOutput(it, lay, &seen, sf.f.ret, ret);
             },
             else => {},
         }
@@ -69,6 +79,7 @@ pub fn check(it: *Items, fns: []const stages.StageFn) Error!void {
 
 /// Struct types already checked, so that each is reported once.
 const Seen = struct {
+    inputs: std.AutoHashMapUnmanaged(TypeId, void) = .empty,
     varyings: std.AutoHashMapUnmanaged(TypeId, void) = .empty,
     outputs: std.AutoHashMapUnmanaged(TypeId, void) = .empty,
 
@@ -79,6 +90,9 @@ const Seen = struct {
 
 /// A token of module `m`, for reports.
 const Site = struct { m: ModuleId, tok: Ast.TokenIndex };
+
+/// The fragment-input parameter a varyings struct comes from.
+const Input = struct { site: Site, param: []const u8, stage: []const u8 };
 
 fn paramAttrs(a: *const Ast, pn: Node.Index) []const Node.Index {
     return if (a.kind(pn) == .attributed) a.data(pn).attributed.attrs else &.{};
@@ -106,8 +120,9 @@ fn stageAttrs(it: *Items, sf: stages.StageFn, pns: []const Node.Index) Error!voi
 
 /// A vertex or instance input: its fields are scalars, vectors or arrays
 /// of them (§11.3.1). `stages` checked the rest of the plain-struct rule.
-fn vertexInput(it: *Items, p: items_mod.Param) Error!void {
+fn vertexInput(it: *Items, seen: *Seen, p: items_mod.Param) Error!void {
     const s = it.structOf(p.type) orelse return;
+    if (!try Seen.first(it, &seen.inputs, p.type)) return;
     const m = it.declRef(p.type).?.module;
     for (s.fields) |fd| {
         var t = fd.type;
@@ -139,26 +154,36 @@ fn isVec4F32(it: *Items, t: TypeId) bool {
 
 /// Checks that `t`, a vertex stage's return type or a fragment stage's
 /// input, is a varyings struct (§11.3.1, E1009). `ret` is the stage's
-/// function name, where a vertex stage returning no struct is reported.
-fn varyings(it: *Items, seen: *Seen, t: TypeId, ret: Site) Error!void {
+/// function name, where a vertex stage returning no struct is reported;
+/// `input` is the fragment-input parameter `t` comes from, if any.
+// shortcut: private to raster stages; the `V` of `MeshOut` needs these rules, when mesh stages are checked (T197 owner)
+fn varyings(it: *Items, lay: *layout.Engine, seen: *Seen, t: TypeId, ret: Site, input: ?Input) Error!void {
     const s = it.structOf(t) orelse
         return it.report(ret.m, ret.tok, .E1009, &.{"return a struct with one `@position clip: vec4<f32>` field"}, "a vertex stage returns a varyings struct, not `{s}`", .{try it.tyName(t)});
-    if (!try Seen.first(it, &seen.varyings, t)) return;
+    // No layout: it contains itself (E0376), already reported.
+    if (try lay.layoutOf(t) == null) return;
     const ref = it.declRef(t).?;
     const a = it.im.graph.modules[ref.module].ast;
     const name = try it.tyName(t);
+    if (input) |in| {
+        const has_position = for (s.fields) |fd| {
+            if (items_mod.hasAttr(a, fd.attrs, .position)) break true;
+        } else false;
+        if (!has_position) return it.report(in.site.m, in.site.tok, .E1009, &.{"a fragment stage's first parameter is the varyings struct its vertex stage returns"}, "fragment input `{s}: {s}` of fragment stage `{s}` is not a varyings struct: `{s}` has no `@position` field", .{ in.param, name, in.stage, name });
+    }
+    if (!try Seen.first(it, &seen.varyings, t)) return;
     var position = false;
     for (s.fields) |fd| {
-        if (fd.type == .err) continue;
         const tok = a.mainToken(fd.node);
         if (items_mod.hasAttr(a, fd.attrs, .position)) {
             if (position)
                 try it.report(ref.module, tok, .E1009, &.{}, "varyings struct `{s}` has a second `@position` field `{s}`", .{ name, fd.name })
-            else if (!isVec4F32(it, fd.type))
+            else if (fd.type != .err and !isVec4F32(it, fd.type))
                 try it.report(ref.module, tok, .E1009, &.{}, "`@position` field `{s}` of varyings struct `{s}` has type `{s}`, but clip-space position is `vec4<f32>`", .{ fd.name, name, try it.tyName(fd.type) });
             position = true;
             continue;
         }
+        if (fd.type == .err) continue;
         const flat = items_mod.hasAttr(a, fd.attrs, .flat);
         const linear = items_mod.hasAttr(a, fd.attrs, .linear);
         const c = component(it, fd.type) orelse {
@@ -181,10 +206,12 @@ fn varyings(it: *Items, seen: *Seen, t: TypeId, ret: Site) Error!void {
 /// Checks that `t`, a fragment stage's return type, is `vec4<f32>`
 /// or a struct of `@target(n)` fields and at most one `@depth f32` field
 /// (§11.3.2, E1009).
-fn fragmentOutput(it: *Items, seen: *Seen, t: TypeId, ret: Site) Error!void {
+fn fragmentOutput(it: *Items, lay: *layout.Engine, seen: *Seen, t: TypeId, ret: Site) Error!void {
     if (isVec4F32(it, t)) return;
     const s = it.structOf(t) orelse
         return it.report(ret.m, ret.tok, .E1009, &.{"return `vec4<f32>` for one color target, or a struct of `@target(n)` fields"}, "a fragment stage returns `vec4<f32>` or a struct of color targets, not `{s}`", .{try it.tyName(t)});
+    // No layout: it contains itself (E0376), already reported.
+    if (try lay.layoutOf(t) == null) return;
     if (!try Seen.first(it, &seen.outputs, t)) return;
     const m = it.declRef(t).?.module;
     const a = it.im.graph.modules[m].ast;
@@ -207,10 +234,15 @@ fn fragmentOutput(it: *Items, seen: *Seen, t: TypeId, ret: Site) Error!void {
                 try it.report(m, tok, .E1009, &.{}, "`@depth` field `{s}` of fragment output `{s}` has type `{s}`, but depth is `f32`", .{ fd.name, name, try it.tyName(fd.type) });
             depth = true;
         } else if (target) |at| {
+            // shortcut: the field type is not checked against the target's
+            // format, until pipelines are checked (§11.6.1, T190 owner)
             const v = attrs.arg(a, at, "n") orelse continue;
             // Null when not a comptime integer, which `attrs.check` reports.
             const n = attrs.intValue(it, try attrs.argValue(it, m, v)) orelse continue;
-            if (n >= max_targets)
+            // `intValue` maps negative and oversized values to maxInt.
+            if (n == std.math.maxInt(u64))
+                try it.report(m, a.mainToken(v), .E1009, &.{}, "`@target` on field `{s}` is negative or too large: color targets are 0 to {d}", .{ fd.name, max_targets - 1 })
+            else if (n >= max_targets)
                 try it.report(m, a.mainToken(v), .E1009, &.{}, "`@target({d})` on field `{s}`: color targets are 0 to {d}", .{ n, fd.name, max_targets - 1 })
             else if (targets.isSet(n))
                 try it.report(m, tok, .E1009, &.{}, "fragment output `{s}` has a second field `{s}` for `@target({d})`", .{ name, fd.name, n })
@@ -227,7 +259,6 @@ fn fragmentOutput(it: *Items, seen: *Seen, t: TypeId, ret: Site) Error!void {
 
 const testing = std.testing;
 const emit_tir = @import("../sema/emit_tir.zig");
-const layout = @import("../sema/layout.zig");
 const diag = @import("../diag/diag.zig");
 
 /// Checks the stage functions of `src` and expects the diagnostics `want`
@@ -238,7 +269,7 @@ fn expectRaster(src: []const u8, want: []const struct { ?diag.DiagCode, []const 
     defer f.deinit();
     var lay: layout.Engine = .init(testing.allocator, &f.items);
     defer lay.deinit();
-    try check(&f.items, try stages.check(&f.items, &lay));
+    try check(&f.items, &lay, try stages.check(&f.items, &lay));
     try f.expectDiags(want);
 }
 
@@ -288,8 +319,41 @@ test "varyings: missing or doubled @position, integers without @flat (E1009)" {
 test "fragment input is a varyings struct (E1009)" {
     try expectRaster(
         \\struct Material { light_dir: vec3<f32>, ambient: f32 }
+        \\struct Prim { material: u32 }
         \\@gpu_fragment fn fs(m: Material) -> vec4<f32> { loop {} }
-    , &.{.{ .E1009, "Material" }});
+        \\@gpu_fragment fn fs2(n: Material) -> vec4<f32> { loop {} }
+        \\@gpu_fragment fn prim_only(@per_primitive p: Prim) -> vec4<f32> { loop {} }
+    , &.{ .{ .E1009, "m" }, .{ .E1009, "n" } });
+}
+
+test "no cascades from unresolved or recursive types" {
+    try expectRaster(
+        \\struct VsOut { @position clip: Unknown, uv: vec2<f32> }
+        \\struct A { b: B }
+        \\struct B { a: A }
+        \\struct V { p: vec3<f32> }
+        \\@gpu_vertex fn vs(v: V) -> VsOut { loop {} }
+        \\@gpu_vertex fn vr(v: V) -> A { loop {} }
+        \\@gpu_fragment fn fs(i: VsOut) -> A { loop {} }
+    , &.{ .{ null, "Unknown" }, .{ .E0376, "A" }, .{ .E0376, "B" } });
+}
+
+test "negative @target index (E1009)" {
+    try expectRaster(
+        \\struct In { @position clip: vec4<f32> }
+        \\struct O { @target(-1) c: vec4<f32> }
+        \\@gpu_fragment fn f(i: In) -> O { loop {} }
+    , &.{.{ .E1009, "-" }});
+}
+
+test "a vertex input struct is reported once (E1008)" {
+    try expectRaster(
+        \\struct Color { rgb: vec3<f32> }
+        \\struct Nested { pos: vec3<f32>, color: Color }
+        \\struct Out { @position clip: vec4<f32> }
+        \\@gpu_vertex fn vs1(v: Nested) -> Out { loop {} }
+        \\@gpu_vertex fn vs2(v: Nested, @instance i: Nested) -> Out { loop {} }
+    , &.{.{ .E1008, "color" }});
 }
 
 test "fragment outputs: targets and depth (E1009)" {
