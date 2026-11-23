@@ -16,7 +16,9 @@
 //! - it binds one name, whose TIR local is marked `workgroup`.
 //!
 //! Barrier placement (E1013) is `uniformity.zig` (T180) and races on
-//! workgroup memory are `races.zig` (T181).
+//! workgroup memory are `races.zig` (T181). A `@workgroup let` is an
+//! implicit barrier (§11.1.4), so T180 holds it to the same placement rules
+//! as `@workgroup_barrier()` (§11.1.5).
 
 const std = @import("std");
 const Ast = @import("../ast/Ast.zig");
@@ -25,6 +27,7 @@ const builtins = @import("../sema/builtins.zig");
 const kinds = @import("../sema/kinds.zig");
 const emit_tir = @import("../sema/emit_tir.zig");
 const Types = @import("../sema/types.zig");
+const dump = @import("../tir/dump.zig");
 
 const Checker = emit_tir.Checker;
 const Error = emit_tir.Error;
@@ -60,6 +63,7 @@ pub fn workgroupLet(c: *Checker, s: Node.Index, comptime checkLet: fn (*Checker,
     if (ty != .err and !try shareable(c, ty))
         try c.reportAt(a.mainToken(ld.ty orelse ld.pattern), .E1003, &.{"use a plain type, `Atomic<T>`, or a fixed array of either"}, "`@workgroup` variable `{s}` has type `{s}`, which workgroup memory cannot hold", .{ a.tokenSlice(a.mainToken(ld.pattern)), try c.tyName(ty) });
     // shortcut: TIR stores the initializer as for any `let`; §11.1.4 runs it in local invocation 0 followed by a barrier, which the compute emitters lower (T184, T185, T186).
+    // shortcut: a @workgroup let is an implicit barrier (§11.1.4) but is not yet held to the top-level rule of §11.1.5, so one nested in control flow is accepted; uniformity.zig must treat it like @workgroup_barrier() (T180).
     return diverges;
 }
 
@@ -99,6 +103,14 @@ test "@workgroup variables are marked in TIR" {
     var n: usize = 0;
     for (0..func.locals.len) |i| n += @intFromBool(func.locals.items(.workgroup)[i]);
     try testing.expectEqual(2, n);
+
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try dump.dump(func, &f.types, "k", &out.writer);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "workgroup mut tile: ") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "workgroup cells: ") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), " plain: u32") != null);
+    try testing.expect(std.mem.indexOf(u8, out.written(), "workgroup plain") == null);
 }
 
 test "@workgroup types: plain, Atomic, arrays of either; others E1003; stages E1005" {
