@@ -1,4 +1,3 @@
-//@ expected-fail: T078
 //@ covers: E0363
 // §6.9: tail calls with plain arguments and with views of parameters.
 
@@ -7,7 +6,17 @@ fn sum_to(n: u64, acc: u64) -> u64 {
     return tail sum_to(n - 1, acc + n);
 }
 
-fn scan(xs: []u32, i: usize, acc: u32) -> u32 {
-    if i >= xs.len() { return acc; }
-    return tail scan(xs, i + 1, acc + xs[i]);
+fn scan(xs: []u32, i: usize, n: usize, acc: u32) -> u32 {
+    if i >= n { return acc; }
+    return tail scan(xs, i + 1, n, acc + xs[i]);
+}
+
+fn rest(xs: []u32, n: usize) -> u32 {
+    return tail scan(xs[1..], 0, n - 1, 0);
+}
+
+fn bump(mut total: u32, n: u32) -> u32 {
+    if n == 0 { return total; }
+    total += 1;
+    return tail bump(mut total, n - 1);
 }

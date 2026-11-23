@@ -101,6 +101,7 @@ pub fn tryOp(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
         if (from) |f| e = try c.emit(want.err, .{ .call = .{ .callee = f, .args = &.{e} } });
         break :blk try c.emit(ret, .{ .variant = .{ .variant = 1, .payload = &.{e} } });
     };
+    try @import("defer.zig").leave(c, 0); // runs `errdefer`s too (§6.8.2)
     _ = try c.emit(.void, .{ .ret = .{ .value = early } });
 
     c.setBlock(ok_blk);

@@ -23,6 +23,7 @@ const mutability = @import("mutability.zig");
 const must_use = @import("must_use.zig");
 const patterns = @import("patterns.zig");
 const gpu_builtins = @import("../gpu/builtins.zig");
+const defer_mod = @import("defer.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -47,6 +48,13 @@ pub fn valueNode(ast: *const Ast, n: Node.Index) Node.Index {
 pub fn block(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const d = c.ast.data(n).block;
     var diverges = false;
+    // The scope a `defer` of this block opens (`defer.zig`).
+    const scope_base = c.scope_base;
+    c.scope_base = c.scopes.items.len;
+    defer {
+        c.scopes.shrinkRetainingCapacity(c.scope_base);
+        c.scope_base = scope_base;
+    }
     for (d.stmts) |s| {
         const saved = c.b.node;
         c.b.node = s;
@@ -55,7 +63,13 @@ pub fn block(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     }
     // A `mut T` tail is a view of a place, as for `return` (§5.5.4).
     const view = expected != .none and expected != .err and c.types.get(expected) == .mut_view;
-    const v: Typed = if (d.tail) |t| (if (view) try check_expr.checkAs(c, t, expected) else try check_expr.check(c, t, expected)) else .void_value;
+    var v: Typed = if (d.tail) |t| (if (view) try check_expr.checkAs(c, t, expected) else try check_expr.check(c, t, expected)) else .void_value;
+    if (!diverges and v.ty != .noreturn) {
+        // The value is complete before the scope ends, so a body's `scope_end`
+        // sits right before its `ret` (an `errdefer` route, `defer.zig`).
+        if (c.scopes.items.len > c.scope_base and expected != .none and v.ty != .void and v.ty != .err) v = try c.coerce(v, expected, valueNode(c.ast, n));
+        try defer_mod.leave(c, c.scope_base);
+    }
     return if (diverges and v.ty != .err) .never else v;
 }
 
@@ -75,7 +89,8 @@ fn stmt(c: *Checker, s: Node.Index) Error!bool {
             if (k.value == .unknown and k.type != .err) _ = c.unsupported(s, "values the comptime evaluator could not compute");
             return false;
         },
-        .@"defer", .@"errdefer", .return_tail => _ = c.unsupported(s, "`defer`, `errdefer` and `return tail` (T078)"),
+        .@"defer", .@"errdefer" => return defer_mod.deferStmt(c, s),
+        .return_tail => return defer_mod.returnTail(c, s),
         .guard_let => return patterns.guardLet(c, s),
         .spawn, .nursery => _ = c.unsupported(s, "`nursery` and `spawn` (T125)"),
         .launch => _ = c.unsupported(s, "`launch` (T187)"),
@@ -258,7 +273,9 @@ fn @"return"(c: *Checker, s: Node.Index) Error!bool {
         }
         break :blk .void_value;
     };
-    if (r.ty != .noreturn) _ = try c.emit(.void, .{ .ret = .{ .value = r.ref.unwrap() } });
+    if (r.ty == .noreturn) return true;
+    try defer_mod.leave(c, 0);
+    _ = try c.emit(.void, .{ .ret = .{ .value = r.ref.unwrap() } });
     return true;
 }
 
@@ -279,6 +296,7 @@ fn @"break"(c: *Checker, s: Node.Index) Error!bool {
             const ty = if (loop.result != .none) loop.result else loop.pending.items[0].value.ty;
             try c.report(s, .E0310, "mismatched types: `break` without a value in a `loop` whose `break`s give `{s}`", .{try c.tyName(ty)});
         }
+        try defer_mod.leaveLoop(c, loop);
         try c.br(loop.exit, .none);
         return true;
     };
@@ -298,13 +316,16 @@ fn @"break"(c: *Checker, s: Node.Index) Error!bool {
             return true;
         }
         if (v.isUntyped()) {
+            try defer_mod.leaveLoop(c, l);
             try l.pending.append(c.arena, .{ .block = c.b.block, .value = v, .node = at });
             c.setBlock(try c.addBlock()); // for the dead code after the `break`
             return true;
         }
         try settle(c, l, v.ty);
     }
-    try c.br(l.exit, (try c.coerce(v, l.result, at)).ref);
+    const r = try c.coerce(v, l.result, at);
+    try defer_mod.leaveLoop(c, l);
+    try c.br(l.exit, r.ref);
     return true;
 }
 
@@ -332,6 +353,7 @@ fn @"continue"(c: *Checker, s: Node.Index) Error!bool {
         c.failed = true; // E0210 (parser)
         return true;
     };
+    try defer_mod.leaveLoop(c, loop);
     try c.br(loop.head, .none);
     return true;
 }

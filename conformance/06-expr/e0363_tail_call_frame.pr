@@ -1,4 +1,3 @@
-//@ expected-fail: T078
 // §6.9: `return tail` must reuse the frame; a pending `defer` or a view
 // argument into the current frame's locals prevents that.
 

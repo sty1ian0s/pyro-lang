@@ -1,4 +1,3 @@
-//@ expected-fail: T078
 // §6.8.2: `errdefer` needs the enclosing function to return `Result`.
 
 fn log_done() {}

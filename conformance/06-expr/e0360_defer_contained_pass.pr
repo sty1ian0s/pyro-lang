@@ -1,4 +1,3 @@
-//@ expected-fail: T078
 //@ covers: E0360
 // §6.8.1: control flow that stays inside the deferred statement is fine.
 
