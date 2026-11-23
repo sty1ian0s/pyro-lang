@@ -636,14 +636,14 @@ graph TD
   - Size: S · Parallel: W17
   - Blocked by: T043, T062
   - Blocks: T135
-- [ ] **T068** Generic argument inference
+- [x] **T068** Generic argument inference
   - Spec: §7.6.3, §4.8, §6.2.2, §7.2.5, E0372
   - Deliverable: `stage0/src/sema/infer.zig`.
   - Acceptance: max(1, x_f32) -> f32; max(1,2) -> i64; T only in return E0372; explicit comptime T path; `let f: fn(f32) -> f32 = clamp;` instantiates generic `clamp` from the expected type (§7.2.5; replaces the `instantiating generic functions (T068)` site in check_call.fnValue).
   - Size: M · Parallel: W18
   - Blocked by: T047, T064
   - Blocks: T070
-- [ ] **T069** Reflection builtins and std.meta TypeInfo types **[GATE]**
+- [x] **T069** Reflection builtins and std.meta TypeInfo types **[GATE]**
   - Spec: §8.4, §8.7, §14.8
   - Deliverable: `std/meta.pr` (TypeInfo family, Target enums, `meta.fields`); `stage0/src/comptime/reflect.zig` (@type_info, @size_of, @align_of, @type_name, @has_field, @has_method, @implements, @field_type, @variant_count).
   - Acceptance: Info matches layout engine for every type class; TypeInfo with type fields at runtime E0802.
@@ -710,7 +710,7 @@ graph TD
   - Size: M · Parallel: W17
   - Blocked by: T044, T047, T063
   - Blocks: T078, T211, T217
-- [ ] **T078** defer / errdefer and tail-call checks **[CRITICAL]**
+- [x] **T078** defer / errdefer and tail-call checks **[CRITICAL]**
   - Spec: §6.8.1, §6.8.2, §6.9, E0360, E0362, E0363
   - Deliverable: `stage0/src/sema/defer.zig`: materialize defers LIFO at every exit, per iteration; errdefer only on .err paths; `return tail` validation.
   - Acceptance: Fail cases E0360, E0362, E0363; TIR shows defers on all exits.
@@ -1433,21 +1433,21 @@ graph TD
   - Size: M · Parallel: W17
   - Blocked by: T037, T043, T062
   - Blocks: T177, T178, T179, T183
-- [ ] **T177** GPU sema: builtins, @workgroup vars, barriers
+- [x] **T177** GPU sema: builtins, @workgroup vars, barriers
   - Spec: §11.1.4, §11.1.7, E1005
   - Deliverable: `stage0/src/gpu/builtins.zig`.
   - Acceptance: E1005 for @vertex_index in compute, @discard in vertex; non-plain @workgroup rejected.
   - Size: S · Parallel: W18
   - Blocked by: T048, T176
   - Blocks: T180, T182, T199
-- [ ] **T178** GPU buffer/uniform layout and binding numbering
+- [x] **T178** GPU buffer/uniform layout and binding numbering
   - Spec: §11.2.2, §4.11.2, §4.3.1
   - Deliverable: `stage0/src/gpu/layout.zig`.
   - Acceptance: std430/std140 offsets vs reference; §11.2 binding map exact.
   - Size: M · Parallel: W18
   - Blocked by: T041, T176
   - Blocks: T184, T185, T186
-- [ ] **T179** Vertex/fragment stage sema
+- [x] **T179** Vertex/fragment stage sema
   - Spec: §11.3.1, §11.3.2, §11.4.4, E1008, E1009
   - Deliverable: `stage0/src/gpu/raster.zig`.
   - Acceptance: Fail cases: missing @position, int w/o @flat, two @depth, input mismatch.
