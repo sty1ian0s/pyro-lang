@@ -95,6 +95,7 @@ fn let(c: *Checker, s: Node.Index) Error!bool {
     const pk = c.ast.kind(d.pattern);
     if (pk != .pat_bind and pk != .pat_bind_mut and pk != .pat_wildcard) return patterns.letPattern(c, s);
     const decl: TypeId = if (d.ty) |t| try c.resolveType(t) else .none;
+    c.comp_dest = d.init;
     const v = if (decl != .none) try check_expr.checkAs(c, d.init, decl) else try c.materialize(try check_expr.check(c, d.init, .none), d.init);
     if (pk == .pat_wildcard) return v.ty == .noreturn;
     const ty = if (decl != .none) decl else v.ty;
@@ -205,6 +206,7 @@ fn assign(c: *Checker, s: Node.Index) Error!bool {
     }
     var v: Typed = undefined;
     if (op == .eq) {
+        c.comp_dest = d.rhs;
         v = try check_expr.checkAs(c, d.rhs, p.ty);
     } else {
         const cur: Typed = .{ .ty = p.ty, .ref = try c.emit(p.ty, .{ .load = .{ .place = p.ref } }) };

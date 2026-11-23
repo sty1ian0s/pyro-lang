@@ -208,6 +208,9 @@ pub const Checker = struct {
     in_unsafe: bool = false,
     /// Checking comptime code (§8.6); set by comptime evaluation (`comptime_ctx.zig`).
     in_comptime: bool = false,
+    /// The value node of the `let`, assignment or argument being checked:
+    /// the one position a comprehension may take (§6.2.5).
+    comp_dest: Node.Index = .none,
     /// An error was reported or a construct is unsupported: nothing more is
     /// emitted and the body gets no TIR.
     failed: bool = false,

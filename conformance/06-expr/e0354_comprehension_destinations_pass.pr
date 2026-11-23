@@ -1,4 +1,4 @@
-//@ expected-fail: T077
+//@ expected-fail: T111
 //@ covers: E0354
 // §6.2.5: `[N]T` and `Bounded<T, N>` destinations, and a `[N]T` argument.
 

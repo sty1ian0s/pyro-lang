@@ -1,0 +1,15 @@
+//@ covers: E0354
+// §6.2.5: a comprehension into a `[N]T` initializer, assigned value and
+// argument; the source is an array of `N` elements or a slice (length
+// checked at run time; at compile time for constant slice bounds), with an
+// optional index binding. Parentheses keep the destination (§6.2.6).
+
+fn sum4(xs: [4]f32) -> f32 { xs[0] + xs[1] + xs[2] + xs[3] }
+
+fn demo(quad: [4]f32, speeds: []f32) -> f32 {
+    let doubled: [4]f32 = [x * 2.0 for x in quad];
+    let mut first: [2]f32 = ([v for v in speeds]);
+    let mid: [2]f32 = [x for x in quad[1..3]];
+    first = [v + i as f32 for v, i in speeds];
+    sum4([x + 1.0 for x in quad]) + doubled[0] + first[1] + mid[0]
+}

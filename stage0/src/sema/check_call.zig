@@ -295,6 +295,7 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
             return .{ .ty = ty, .ref = try c.emit(ty, .{ .view = .{ .place = place } }) };
         }
     }
+    c.comp_dest = value;
     const v = try check_expr.checkAs(c, value, p.type);
     if (marked and v.ty != .noreturn) return .err;
     return v;

@@ -1,4 +1,3 @@
-//@ expected-fail: T077
 //@ covers: E0601
 // §6.12.1: `?` with the same error type needs no conversion; a different error
 // type converts through the function error type's `From` impl.

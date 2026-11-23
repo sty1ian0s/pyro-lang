@@ -253,6 +253,8 @@ fn compile(bs: *Bodies, it: *Items, m: ModuleId, n: Node.Index, expected: TypeId
         .sig = .{ .node = n, .name = "comptime", .is_pub = false, .generics = &.{}, .params = &.{}, .ret = expected, .attrs = &.{} },
         .b = .init(a, expected),
         .in_comptime = true,
+        // A `const`/`static` initializer is a comprehension destination (§6.2.5).
+        .comp_dest = n,
     };
     c.b.node = n;
     c.setBlock(try c.addBlock());
