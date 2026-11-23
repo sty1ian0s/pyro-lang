@@ -1,0 +1,15 @@
+// §11.1.4: a `@workgroup` variable has a plain type, `Atomic<T>`, or a fixed array of
+// either. Views and types holding them cannot live in workgroup memory.
+
+pub struct Cell { v: f32, n: u32 }
+pub struct Named { name: str, n: u32 }
+
+@gpu_kernel(workgroup: 64)
+fn shared(xs: []f32) {
+    @workgroup let mut tile: [64]f32 = [0.0; 64];
+    @workgroup let cells: [4]Cell = @zero([4]Cell);
+    @workgroup let view: []f32 = xs; //~ E1003
+    @workgroup let named: Named = Named { name: "a", n: 0 }; //~ E1003
+    @workgroup let names: [2]str = ["a", "b"]; //~ E1003
+    @workgroup_barrier();
+}

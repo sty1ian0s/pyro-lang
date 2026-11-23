@@ -71,6 +71,7 @@ pub fn dump(f: *const Func, types: *Types, name: []const u8, w: *Writer) Writer.
 fn local(f: *const Func, types: *Types, l: tir.Local, w: *Writer) Writer.Error!void {
     const info = f.local(l);
     try w.print("l{d} ", .{l.int()});
+    if (info.workgroup) try w.writeAll("workgroup ");
     switch (info.kind) {
         .let_mut, .param_mut => try w.writeAll("mut "),
         .param_move => try w.writeAll("move "),

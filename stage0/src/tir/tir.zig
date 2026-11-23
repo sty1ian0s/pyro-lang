@@ -132,6 +132,8 @@ pub const LocalInfo = struct {
     name: StrId,
     kind: LocalKind,
     node: NodeIndex = .none,
+    /// A `@workgroup` variable (§11.1.4): one slot shared by the workgroup.
+    workgroup: bool = false,
 };
 
 /// Opcodes. The payload and meaning of each is documented on the `Data`
