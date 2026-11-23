@@ -203,7 +203,7 @@ const Names = struct { display: []const u8, mangled: []const u8 };
 /// is a struct made in an instance other than the evaluation's own, the
 /// instance returned it, so it takes the instance's names `F(args)` and
 /// `F__a1__a2…` (§8.3.2).
-// shortcut: a type that leaves its instance other than as the result (reflection on a field type) is taken as returned; check the instance's result once reflection exists (T066).
+// shortcut: a type that leaves its instance other than as the result (reflection on a field type) is taken as returned; check the instance's result once reflection exists (T069).
 pub fn returned(it: *Items, t: TypeId) Error!void {
     const g = it.generated.get(t) orelse return;
     if (g.naming == .returned or g.instance == instantiate.no_instance or g.instance == instantiate.current(it)) return;
