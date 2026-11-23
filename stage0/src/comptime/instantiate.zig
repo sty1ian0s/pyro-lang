@@ -220,11 +220,6 @@ pub fn instance(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, skip
     const own = sig.params[skip..];
     for (own, 0..) |p, i| {
         if (p.mode != .@"comptime") continue;
-        // A type function (§8.3.1) takes types; other functions wait for T068.
-        if (p.type == .type and sig.ret != .type) {
-            _ = c.unsupported(n, "`comptime` type parameters (T068)");
-            return null;
-        }
         const before = c.sink.diags.items.len;
         const at = argNode(c.ast, args, own, i);
         const v: items_mod.Value = if (at) |a| v: {
@@ -456,15 +451,20 @@ test "signature errors of the template are not repeated by its instances" {
     try f.expectDiags(&.{.{ null, "Bogus" }});
 }
 
-test "`comptime` type parameters are left to T068" {
+test "`comptime T: type` parameters are bound per instance (§7.6.3)" {
     var f: Fixture = undefined;
     try f.init(
         \\fn id(comptime T: type, x: T) -> T { x }
-        \\fn d() -> u32 { id(u32, 5) }
+        \\fn zero(comptime T: type) -> T { @zero(T) }
+        \\fn d() -> u32 { let z: u32 = zero(u32); id(u32, 5) + id(u32, z) + id(T: u32, x: 1) }
+        \\fn e() -> u8 { id(u8, 1) }
     );
     defer f.deinit();
-    try testing.expect(std.mem.indexOf(u8, f.bodies.unsupported.?.what, "T068") != null);
-    try testing.expectEqual(0, f.items.memo.count());
+    try f.expectDiags(&.{});
+    try f.expectComplete();
+    // id(u32), zero(u32), id(u8).
+    try testing.expectEqual(3, f.items.memo.count());
+    try testing.expectEqual(TypeId.int(.unsigned, 32), f.bodies.find(0, "d").?.func.?.ret);
 }
 
 test "unbounded nested instantiation is E0812" {

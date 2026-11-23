@@ -29,8 +29,8 @@
 //! their `T: plain` element rule in `kinds.zig`.
 //!
 //! Inside a generic declaration its parameters stay symbolic
-//! (`Ring<T, CAP>`, `.param` types); generic function calls and argument
-//! inference are T068's.
+//! (`Ring<T, CAP>`, `.param` types). Generic functions are instantiated
+//! by argument inference (`infer.zig`) with the helpers below.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -295,7 +295,7 @@ fn paramNodes(it: *const Items, m: ModuleId, node: Node.Index) []const Node.Inde
 
 /// E0329 at `at` (module `m`) for each type argument of a `plain`
 /// parameter among `gens` (of module `dm`) that is not plain (§7.6.1).
-fn plainBounds(it: *Items, m: ModuleId, at: Node.Index, dm: ModuleId, gens: []const Node.Index, args: []const Types.Arg) Error!bool {
+pub fn plainBounds(it: *Items, m: ModuleId, at: Node.Index, dm: ModuleId, gens: []const Node.Index, args: []const Types.Arg) Error!bool {
     const da = it.im.graph.modules[dm].ast;
     var ok = true;
     for (gens, args) |g, arg| {
@@ -333,7 +333,7 @@ fn deferBounds(it: *Items, m: ModuleId, at: Node.Index, dm: ModuleId, gens: []co
 
 /// The memo key of declaration `decl` of module `m` applied to `args`,
 /// allocated in the `Items` arena.
-fn keyOf(it: *Items, m: ModuleId, decl: Node.Index, args: []const Types.Arg) Error!instantiate.Key {
+pub fn keyOf(it: *Items, m: ModuleId, decl: Node.Index, args: []const Types.Arg) Error!instantiate.Key {
     const vs = try it.arena.allocator().alloc(Value, args.len);
     for (args, vs) |arg, *v| v.* = switch (arg) {
         .type => |t| .{ .ty = .type, .data = .{ .type = t } },
@@ -344,7 +344,7 @@ fn keyOf(it: *Items, m: ModuleId, decl: Node.Index, args: []const Types.Arg) Err
 
 /// The nesting depth of a new instantiation of `name` at `at` in module
 /// `m`, or null after E0812 if it exceeds the limit (§4.12).
-fn nextDepth(it: *Items, m: ModuleId, at: Node.Index, name: []const u8) Error!?u32 {
+pub fn nextDepth(it: *Items, m: ModuleId, at: Node.Index, name: []const u8) Error!?u32 {
     const depth = if (it.instance) |f| f.depth + 1 else 1;
     if (depth <= instantiate.max_depth) return depth;
     const a = it.im.graph.modules[m].ast;
@@ -354,7 +354,7 @@ fn nextDepth(it: *Items, m: ModuleId, at: Node.Index, name: []const u8) Error!?u
 
 /// The frame of instance `id`: parameters `gens` of module `m` bound to
 /// `args`. A value parameter given a symbolic argument stays unbound.
-fn bind(it: *Items, id: instantiate.Id, m: ModuleId, gens: []const Node.Index, args: []const Types.Arg, depth: u32) Error!instantiate.Frame {
+pub fn bind(it: *Items, id: instantiate.Id, m: ModuleId, gens: []const Node.Index, args: []const Types.Arg, depth: u32) Error!instantiate.Frame {
     const arena = it.arena.allocator();
     var params: std.ArrayList(Node.Index) = .empty;
     var values: std.ArrayList(items_mod.Value) = .empty;
@@ -383,7 +383,7 @@ fn concrete(t: *Types, args: []const Types.Arg) bool {
 }
 
 /// Whether `ty` mentions a generic parameter.
-fn mentionsParam(t: *Types, ty: TypeId) bool {
+pub fn mentionsParam(t: *Types, ty: TypeId) bool {
     return switch (t.get(ty)) {
         .param => true,
         inline .array, .soa_array, .slice, .soa_slice, .handle, .ptr, .mut_view, .vec => |x| mentionsParam(t, x.elem),

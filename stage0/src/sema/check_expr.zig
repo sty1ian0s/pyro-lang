@@ -176,7 +176,7 @@ fn stringLit(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     return .{ .ty = .str, .ref = try c.emit(.str, .{ .str = .{ .string = s } }) };
 }
 
-pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
+pub fn ident(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const e = c.items.names.get(c.m, n) orelse {
         try c.report(n, null, "cannot find `{s}` in this scope", .{c.ast.tokenSlice(c.ast.mainToken(n))});
         return .err;
@@ -207,7 +207,7 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
                 const item = c.items.im.graph.modules[ref.module].items[ref.item];
                 return switch (item.kind) {
                     .@"const" => constValue(c, n, try c.items.constValue(ref.module, item.node, .none)),
-                    .@"fn", .extern_fn => check_call.fnValue(c, n, ref),
+                    .@"fn", .extern_fn => check_call.fnValue(c, n, ref, expected),
                     else => typefn.typeValue(c, n, try c.items.resolveType(c.m, n, c.self_ty)),
                 };
             },

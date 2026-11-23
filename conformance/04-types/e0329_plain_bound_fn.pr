@@ -1,4 +1,3 @@
-//@ expected-fail: T068
 // §7.6.1: the `plain` parameter of a generic function rejects a view.
 
 fn keep<T: plain>(x: T) -> T { x }

@@ -23,7 +23,8 @@
 //!   receiver for its first parameter; method calls (`check_member.zig`)
 //!   bind through it.
 //!
-//! Generic calls are T068's.
+//! A call or function value of a generic function infers its generic
+//! arguments and calls their instance (`infer.zig`).
 
 const std = @import("std");
 const Ast = @import("../ast/Ast.zig");
@@ -54,11 +55,21 @@ const Mode = items_mod.Mode;
 
 /// A parameter as a call binds it: from a declaration, or unnamed and
 /// without default from a function-pointer type.
-const Param = struct {
+pub const Param = struct {
     name: ?[]const u8 = null,
     mode: Mode,
     type: TypeId,
     default: ?items_mod.Value = null,
+    /// The argument, already checked while inferring generic arguments
+    /// (`infer.zig`): only converted to `type` when bound.
+    pre: ?Pre = null,
+};
+
+/// An argument checked before binding: a value not yet converted, or the
+/// place of a `mut` argument not yet viewed.
+pub const Pre = union(enum) {
+    value: Typed,
+    place: mutability.Place,
 };
 
 /// `f(args)` (§6.9).
@@ -112,7 +123,7 @@ fn direct(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), ref: Ref)
 pub fn callFn(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod.Fn, recv: ?Typed, args: []const Node.Index) Error!Typed {
     if (items_mod.hasAttr(c.items.im.graph.modules[m].ast, sig.attrs, .unsafe))
         try unsafe.callee(c, c.ast.data(n).call.callee, c.items.im.graph.modules[m].ast, sig, false);
-    if (sig.generics.len > 0) return c.unsupported(n, "generic calls (T068)");
+    if (sig.generics.len > 0) return @import("infer.zig").call(c, n, m, sig, recv, args);
     const skip = @intFromBool(recv != null);
     // A type function always has an instance: its type's name (§8.3.2).
     const has_comptime = sig.ret == .type or for (sig.params[skip..]) |p| {
@@ -176,13 +187,13 @@ fn indirect(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call")) Error!T
 }
 
 /// Bound arguments in parameter order.
-const Bound = struct { args: []tir.Ref, ok: bool, diverges: bool };
+pub const Bound = struct { args: []tir.Ref, ok: bool, diverges: bool };
 
 /// Binds and checks `args` of the call of `callee` against `params` (§6.9, §7.2.4): explicit
 /// arguments left to right in source order, then the missing parameters'
 /// defaults in parameter order (§6.12.7). `named_ok` is false through a
 /// function pointer.
-fn bind(c: *Checker, n: Node.Index, callee: Node.Index, args: []const Node.Index, params: []const Param, named_ok: bool) Error!Bound {
+pub fn bind(c: *Checker, n: Node.Index, callee: Node.Index, args: []const Node.Index, params: []const Param, named_ok: bool) Error!Bound {
     const ast = c.ast;
     var b: Bound = .{ .args = try c.arena.alloc(tir.Ref, params.len), .ok = true, .diverges = false };
     const given = try c.arena.alloc(bool, params.len);
@@ -265,7 +276,7 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
             _ = try check_expr.check(c, value, .none);
             return .err;
         }
-        const place = try mutability.mutArg(c, a, value) orelse return .err;
+        const place = if (p.pre) |x| x.place else try mutability.mutArg(c, a, value) orelse return .err;
         if (place.ty == .noreturn) return .never;
         if (place.ty == .err or p.type == .err) return .err;
         if (place.ty != p.type) {
@@ -301,6 +312,7 @@ fn arg(c: *Checker, a: Node.Index, p: Param) Error!Typed {
             return .{ .ty = ty, .ref = try c.emit(ty, .{ .view = .{ .place = place } }) };
         }
     }
+    if (p.pre) |x| return c.coerce(x.value, p.type, check_stmt.valueNode(ast, value));
     c.comp_dest = value;
     const v = try check_expr.checkAs(c, value, p.type);
     if (marked and v.ty != .noreturn) return .err;
@@ -347,7 +359,7 @@ fn defaultArg(c: *Checker, n: Node.Index, v: items_mod.Value, ty: TypeId) Error!
 }
 
 /// Emits call `data` returning `ret` once its arguments `b` are checked.
-fn finish(c: *Checker, ret: TypeId, b: Bound, data: tir.Data) Error!Typed {
+pub fn finish(c: *Checker, ret: TypeId, b: Bound, data: tir.Data) Error!Typed {
     if (!b.ok) return .err;
     if (b.diverges) return .never;
     const r = try c.emit(ret, data);
@@ -386,8 +398,8 @@ fn firstToken(ast: *const Ast, a: Node.Index) Ast.TokenIndex {
 // Function values
 
 /// Function item `ref` named at `n` without a call: an `fn(...) -> R` value
-/// (§7.2.5, §4.6).
-pub fn fnValue(c: *Checker, n: Node.Index, ref: Ref) Error!Typed {
+/// (§7.2.5, §4.6). A generic function is instantiated for `expected`.
+pub fn fnValue(c: *Checker, n: Node.Index, ref: Ref, expected: TypeId) Error!Typed {
     const item = c.items.im.graph.modules[ref.module].items[ref.item];
     const sig = switch ((try c.items.info(ref)).*) {
         .@"fn" => |f| f,
@@ -400,13 +412,22 @@ pub fn fnValue(c: *Checker, n: Node.Index, ref: Ref) Error!Typed {
         try c.reportAt(c.ast.mainToken(n), null, &.{"`fn` pointers use the Pyro calling convention; wrap the call in a Pyro function"}, "`extern` function `{s}` cannot be used as a value", .{item.name});
         return .err;
     }
+    if (sig.generics.len > 0) return @import("infer.zig").fnValue(c, n, ref.module, sig, expected);
     return fnOf(c, n, ref.module, sig);
 }
 
 /// Function `sig` of module `m` (an item or a member function) named at
 /// `n` without a call: an `fn(...) -> R` value (§7.2.5).
 pub fn fnOf(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod.Fn) Error!Typed {
-    if (sig.generics.len > 0) return c.unsupported(n, "instantiating generic functions (T068)");
+    if (sig.generics.len > 0) return @import("infer.zig").fnValue(c, n, m, sig, .none);
+    const ty = try fnType(c, n, sig) orelse return .err;
+    const id = if (sig.instance != .none) try generics.methodFn(c, n, m, sig) orelse return .err else try c.bodies.fnId(m, sig.node, sig.name);
+    return .{ .ty = ty, .ref = try c.emit(ty, .{ .fn_ref = .{ .func = id } }) };
+}
+
+/// The `fn(...) -> R` type of function `sig` named at `n` as a value, or
+/// null after a diagnostic (§4.6, §8.2).
+pub fn fnType(c: *Checker, n: Node.Index, sig: items_mod.Fn) Error!?TypeId {
     const params = try c.arena.alloc(Types.FnParam, sig.params.len);
     var bad = sig.ret == .err;
     for (sig.params, params) |p, *o| {
@@ -420,18 +441,16 @@ pub fn fnOf(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod
                 .@"comptime" => {
                     // An `fn` type has no `comptime` parameters (§4.6, §8.2).
                     try c.reportAt(c.ast.mainToken(n), null, &.{"call it with its `comptime` arguments instead"}, "`{s}` has `comptime` parameters and cannot be used as a value", .{sig.name});
-                    return .err;
+                    return null;
                 },
             },
         };
     }
     if (bad) {
         c.failed = true; // reported with the signature
-        return .err;
+        return null;
     }
-    const ty = try c.types.intern(.{ .fn_ptr = .{ .params = params, .ret = sig.ret } });
-    const id = if (sig.instance != .none) try generics.methodFn(c, n, m, sig) orelse return .err else try c.bodies.fnId(m, sig.node, sig.name);
-    return .{ .ty = ty, .ref = try c.emit(ty, .{ .fn_ref = .{ .func = id } }) };
+    return try c.types.intern(.{ .fn_ptr = .{ .params = params, .ret = sig.ret } });
 }
 
 // ---------------------------------------------------------------------------

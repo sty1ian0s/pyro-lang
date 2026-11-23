@@ -1,4 +1,4 @@
-//@ expected-fail: T068
+//@ expected-fail: T106
 //@ covers: E0372
 // §7.6.3: `larger(1, x)` infers `f32` from `x`; `larger(1, 2)` defaults to
 // `i64`; a parameter only in the result is passed as `comptime T: type`.

@@ -1,4 +1,3 @@
-//@ expected-fail: T070
 //@ covers: E0373
 // §7.5.2: bounds with one and with two protocols, satisfied by explicit impls.
 
