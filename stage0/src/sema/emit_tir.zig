@@ -194,6 +194,8 @@ pub const Checker = struct {
     /// What `Self` means in the body; `.none` outside a type.
     self_ty: TypeId,
     sig: items_mod.Fn,
+    /// The body being checked; null for a comptime thunk.
+    id: ?tir.FnId = null,
     b: Builder,
     /// The TIR local of each `param` and `let` binding node.
     locals: std.AutoHashMapUnmanaged(Node.Index, tir.Local) = .empty,
@@ -414,9 +416,9 @@ fn operandsPresent(d: tir.Data) bool {
 // ---------------------------------------------------------------------------
 // Functions
 
-/// Checks the body of function `sig` (declared in module `m`, inside type
-/// `self_ty` or `.none`) and returns its TIR, or null if it failed.
-pub fn checkFn(bodies: *Bodies, it: *Items, m: ModuleId, sig: items_mod.Fn, self_ty: TypeId) Error!?tir.Func {
+/// Checks the body `id` of function `sig` (declared in module `m`, inside
+/// type `self_ty` or `.none`) and returns its TIR, or null if it failed.
+pub fn checkFn(bodies: *Bodies, it: *Items, m: ModuleId, id: tir.FnId, sig: items_mod.Fn, self_ty: TypeId) Error!?tir.Func {
     const ast = it.im.graph.modules[m].ast;
     const body = ast.data(sig.node).fn_decl.body.?;
     const arena = bodies.arena.allocator();
@@ -430,6 +432,7 @@ pub fn checkFn(bodies: *Bodies, it: *Items, m: ModuleId, sig: items_mod.Fn, self
         .ast = ast,
         .self_ty = self_ty,
         .sig = sig,
+        .id = id,
         .b = .init(arena, sig.ret),
     };
     if (sig.ret == .err) c.failed = true;
@@ -589,7 +592,7 @@ pub fn checkDecl(bs: *Bodies, it: *Items, m: ModuleId, f: items_mod.Fn, self_ty:
         return;
     }
     // Checking may add bodies (callees) and move `bs.fns.items`.
-    const func = try checkFn(bs, it, m, f, self_ty);
+    const func = try checkFn(bs, it, m, id, f, self_ty);
     bs.fns.items[id.int()].func = func;
 }
 

@@ -38,7 +38,10 @@ pub const Effect = struct {
         atomic,
         channel,
         extern_call,
-        /// A call through a function pointer, whose callee is unknown.
+        /// A call through a function value, whose callee is unknown.
+        /// shortcut: §8.8 does not list it, but function types carry no
+        /// effects, so stage 0 counts it as impure to keep `@pure` sound;
+        /// accept it once function types (or call sites) carry purity.
         indirect_call,
 
         fn describe(k: Kind) []const u8 {
@@ -47,7 +50,7 @@ pub const Effect = struct {
                 .atomic => "accesses an `Atomic`",
                 .channel => "accesses a `Channel`",
                 .extern_call => "calls an `extern` function",
-                .indirect_call => "calls through a function pointer",
+                .indirect_call => "calls through a function value",
             };
         }
     };
@@ -56,7 +59,7 @@ pub const Effect = struct {
 /// Records that the body being checked by `c` has effect `kind` at `n`.
 /// Only the first effect of a body is kept.
 pub fn note(c: *Checker, n: Node.Index, kind: Effect.Kind) void {
-    const id = c.bodies.ids.get(.{ c.m, c.sig.node }) orelse return;
+    const id = c.id orelse return;
     const b = &c.bodies.fns.items[id.int()];
     if (b.effect == null) b.effect = .{ .kind = kind, .node = n };
 }
@@ -117,6 +120,8 @@ fn firstImpure(f: *const tir.Func, why: []const ?Why) ?Why {
     return null;
 }
 
+const indirect_help = "stage 0 treats calls through function values as effects; call a named `@pure` function instead";
+
 fn checkFn(it: *Items, bs: *const Bodies, why: []const ?Why, m: ModuleId, f: items_mod.Fn) Error!void {
     const a = it.im.graph.modules[m].ast;
     if (!attrs.flags(a, f.attrs).pure) return;
@@ -124,7 +129,7 @@ fn checkFn(it: *Items, bs: *const Bodies, why: []const ?Why, m: ModuleId, f: ite
         try it.report(m, a.mainToken(p.node), .E0809, &.{"take the parameter by value and return the new value"}, "`@pure` function `{s}` has a `mut` parameter `{s}`", .{ f.name, p.name });
     const id = bs.ids.get(.{ m, f.node }) orelse return;
     switch (why[id.int()] orelse return) {
-        .direct => |e| try it.report(m, check_stmt.firstToken(a, e.node), .E0809, &.{}, "`@pure` function `{s}` {s}", .{ f.name, e.kind.describe() }),
+        .direct => |e| try it.report(m, check_stmt.firstToken(a, e.node), .E0809, if (e.kind == .indirect_call) &.{indirect_help} else &.{}, "`@pure` function `{s}` {s}", .{ f.name, e.kind.describe() }),
         .calls => |c| {
             const callee = bs.fns.items[c.callee.int()].name;
             const reason = switch (why[c.callee.int()].?) {
@@ -214,9 +219,18 @@ test "E0809: `Atomic` and `Channel` access" {
     , &.{ .{ .E0809, "load" }, .{ .E0809, "send" } });
 }
 
-test "E0809: a call through a function pointer" {
+test "E0809: stage 0 deliberately rejects calls through function values" {
     try expectPurity(
         \\@pure
         \\fn apply(f: fn(u32) -> u32, x: u32) -> u32 { f(x) }
     , &.{.{ .E0809, "f" }});
+}
+
+test "E0809: an effect inside an instance of a function with `comptime` parameters" {
+    try expectPurity(
+        \\extern "C" { fn rand() -> i32; }
+        \\fn roll(comptime k: i32) -> i32 { let r = unsafe { rand() }; r + k }
+        \\@pure
+        \\fn q() -> i32 { roll(1) }
+    , &.{.{ .E0809, "roll" }});
 }

@@ -263,7 +263,7 @@ pub fn instance(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, skip
     it.memo.get(id).func.sig = isig;
     // shortcut: an instance first checked before protocols exist and stopped at a method call is not checked again (`Body.retry`).
     // Checking may add bodies and move `bs.fns.items`.
-    const func = try emit_tir.checkFn(bs, it, m, isig, decl.self_ty) orelse {
+    const func = try emit_tir.checkFn(bs, it, m, fid, isig, decl.self_ty) orelse {
         it.memo.get(id).* = .failed;
         c.failed = true; // reported or recorded by the body
         return null;
