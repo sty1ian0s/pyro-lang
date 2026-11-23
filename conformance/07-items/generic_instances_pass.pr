@@ -1,0 +1,39 @@
+// §7.6.1, §7.6.2, §4.10: a generic declaration is a memoized type function.
+// Equal arguments give the same type, `Ring(u32, 64)` applies it in
+// expression position, and each instance has its own fields and methods.
+
+pub struct Ring<T, CAP: usize> {
+    items: [CAP]T,
+    head: usize = 0,
+    len: usize = 0,
+
+    pub fn init() -> Self { Self { items: [0; CAP], .. } }
+    pub fn push(mut self, x: T) {
+        self.items[(self.head + self.len) % CAP] = x;
+        self.len += 1;
+    }
+    pub fn capacity(self) -> usize { CAP }
+}
+
+pub enum Slot<T> { full(T), empty }
+
+type Samples = Ring<u32, 64>;
+const N: usize = 64;
+
+fn larger(a: Samples, b: Ring<u32, N>) -> Ring<u32, 64> {
+    if a.len > b.len { a } else { b }
+}
+
+fn value(s: Slot<u8>) -> u8 {
+    match s { .full(x) => x, .empty => 0 }
+}
+
+fn demo() -> usize {
+    let mut r = Ring(u32, 64).init();
+    r.push(5);
+    let s: Samples = .init();
+    let small: Ring<u8, 4> = .init();
+    let t = larger(r, s);
+    let v = value(.full(3)) + value(Slot(u8).empty);
+    t.capacity() + t.len + small.capacity() + v as usize
+}

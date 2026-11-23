@@ -8,7 +8,8 @@
 //! - a type holding both a resource and a view (§5.1, §5.4.1, **E0330**),
 //!   and a view as an element of a standard container;
 //! - a resource as an element of a fixed array or standard container
-//!   (§5.3.1, **E0325**);
+//!   (§5.3.1, **E0325**), and a shared cell as an element of a standard
+//!   container (`T: plain`, §14.4, **E0329**);
 //! - a `mask<N>` in a struct field or array (§4.3.2, **E0304**).
 //!
 //! `checkCopy` is the **E0328** hook of the expression checker. Views in
@@ -223,6 +224,7 @@ fn checkWritten(it: *Items, m: ModuleId, node: Ast.Node.Index, ty: TypeId, store
     const inner = try it.tyName(p.inner);
     switch (p.code) {
         .E0304 => try it.report(m, tok, .E0304, &.{"masks live only in locals and registers; store the compared vectors, or a `bool` per lane"}, "`{s}` cannot be stored in a struct field or array", .{inner}),
+        .E0329 => try it.report(m, tok, .E0329, &.{"the standard containers require plain element types (§14.4)"}, "`{s}` is not plain, but the elements of `{s}` must be", .{ inner, outer }),
         .E0325 => try it.report(m, tok, .E0325, &.{"keep the resources in a container of plain data and refer to them with `Handle`s"}, "resource `{s}` cannot be an element of `{s}`", .{ inner, outer }),
         else => if (p.inner == p.outer)
             try it.report(m, tok, .E0330, &.{"a type cannot contain both a resource and a view"}, "`{s}` holds both a resource and a view", .{outer})
@@ -252,6 +254,8 @@ fn problem(it: *Items, ty: TypeId, stored: bool, depth: u32) Error!?Problem {
                     const f = try flagsOf(it, arg.type);
                     if (f.resource) return .{ .code = .E0325, .outer = ty, .inner = arg.type };
                     if (f.view) return .{ .code = .E0330, .outer = ty, .inner = arg.type };
+                    // The containers' element parameters are `T: plain` (§14.4, §7.6.1).
+                    if (f.shared) return .{ .code = .E0329, .outer = ty, .inner = arg.type };
                 }
             };
             // A declaration that mixes for any arguments is reported where it is declared.

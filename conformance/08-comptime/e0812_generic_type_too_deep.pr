@@ -1,0 +1,9 @@
+// §4.12, §7.6.2: instantiating a generic type instantiates the types of its
+// fields; a type naming a growing instance of itself exceeds the limit of 256.
+
+struct Deep<T> {
+    value: T,
+    next: Handle<Deep<[1]T>>, //~ E0812
+}
+
+fn first(d: Deep<u8>) -> u8 { d.value }

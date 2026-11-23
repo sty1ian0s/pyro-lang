@@ -582,6 +582,8 @@ pub fn checkDecl(bs: *Bodies, it: *Items, m: ModuleId, f: items_mod.Fn, self_ty:
     const id = try bs.fnId(m, f.node, f.name);
     bs.fns.items[id.int()].checked = true;
     if (f.generics.len > 0 or type_generics.len > 0) {
+        // A method of a generic type is checked per instance when called.
+        if (@import("generics.zig").perInstance(it, m, f)) return;
         if (bs.unsupported == null) bs.unsupported = .{ .module = m, .node = f.node, .what = "generic function bodies (T070)" };
         return;
     }

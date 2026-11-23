@@ -186,7 +186,7 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
                 return c.unsupported(n, "bindings of `for` loops and lambdas (T074, T076)");
             }),
             .const_decl => return constValue(c, n, try c.items.constValue(c.m, l, c.self_ty)),
-            .generic_param => return c.unsupported(n, "generic value parameters (T064)"),
+            .generic_param => return (try instantiate.boundParam(c, n, l)) orelse c.unsupported(n, "generic value parameters outside an instance (T070)"),
             else => return c.unsupported(n, "`result` in contracts (T135)"),
         },
         .global => |t| switch (t) {
@@ -350,7 +350,7 @@ pub fn operate(c: *Checker, n: Node.Index, op: TokenKind, l_in: Typed, r_in: Typ
     const ok = switch (class) {
         .arith => isNumeric(c, ty),
         .bitwise => isBitwise(c, ty),
-        .eq => (try supportsEq(c, ty, 0)) orelse return c.unsupported(n, "`==` on generic and standard library types (T064, T163)"),
+        .eq => (try supportsEq(c, ty, 0)) orelse return c.unsupported(n, "`==` on generic and standard library types (T070, T163)"),
         .ord => supportsOrd(c, ty),
         .shift => unreachable,
     };
@@ -544,8 +544,8 @@ fn supportsEq(c: *Checker, ty: TypeId, depth: u32) Error!?bool {
         .tuple => |t| return allEq(c, t.elems, depth),
         .nominal => |nm| {
             if (nm.kind == .distinct) return supportsEq(c, nm.underlying, depth + 1);
-            // shortcut: generic instances need substitution (T064); standard library types are not loaded (T163).
-            if (nm.args.len > 0) return null;
+            // shortcut: standard library types are not loaded (T163); generic templates are checked per instance (T070).
+            if (nm.args.len > 0 and !@import("generics.zig").isInstance(c.items, ty)) return null;
             if (c.items.structOf(ty)) |s| {
                 if (try check_stmt.isResource(c, ty)) return false;
                 for (s.fields) |f| if (!((try supportsEq(c, f.type, depth + 1)) orelse return null)) return false;

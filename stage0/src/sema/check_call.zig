@@ -43,6 +43,7 @@ const tir = @import("../tir/tir.zig");
 const module_graph = @import("../resolve/module_graph.zig");
 const Ref = @import("../resolve/imports.zig").Ref;
 const instantiate = @import("../comptime/instantiate.zig");
+const generics = @import("generics.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -136,7 +137,8 @@ pub fn callFn(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_m
         b.args = b.args[0..len];
         return finish(c, f.ret, b, .{ .call = .{ .callee = i.id, .args = b.args } });
     }
-    const id = try c.bodies.fnId(m, sig.node, sig.name);
+    // A method of a generic type instance calls that instance's copy (§7.6.4).
+    const id = if (sig.instance != .none) try generics.methodFn(c, n, m, sig) orelse return .err else try c.bodies.fnId(m, sig.node, sig.name);
     return finish(c, sig.ret, b, .{ .call = .{ .callee = id, .args = b.args } });
 }
 
@@ -420,7 +422,7 @@ pub fn fnOf(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod
         return .err;
     }
     const ty = try c.types.intern(.{ .fn_ptr = .{ .params = params, .ret = sig.ret } });
-    const id = try c.bodies.fnId(m, sig.node, sig.name);
+    const id = if (sig.instance != .none) try generics.methodFn(c, n, m, sig) orelse return .err else try c.bodies.fnId(m, sig.node, sig.name);
     return .{ .ty = ty, .ref = try c.emit(ty, .{ .fn_ref = .{ .func = id } }) };
 }
 

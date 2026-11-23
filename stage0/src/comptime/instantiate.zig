@@ -290,7 +290,7 @@ fn signature(it: *Items, m: ModuleId, sig: items_mod.Fn, self_ty: TypeId) Error!
 
 /// Drops the diagnostics from index `from` on that repeat an earlier one:
 /// errors of the template's signature, reported when it was checked.
-fn dropRepeats(sink: *diag.Sink, from: usize) void {
+pub fn dropRepeats(sink: *diag.Sink, from: usize) void {
     const ds = &sink.diags;
     var len = from;
     for (ds.items[from..]) |d| {

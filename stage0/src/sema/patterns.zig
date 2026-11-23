@@ -436,7 +436,7 @@ fn variant(c: *Checker, n: Node.Index, ty: TypeId, ok: *bool) Error!Pat {
             return errPat(c, n, ok);
         }
         if (c.items.enumOf(u)) |e| if (e.generics.len > 0) {
-            _ = c.unsupported(n, "variants of generic enums (T064)");
+            _ = c.unsupported(n, "variants of generic enums (T070)");
             return errPat(c, n, ok);
         };
     }
@@ -488,7 +488,7 @@ fn structPat(c: *Checker, n: Node.Index, ty: TypeId, ok: *bool) Error!Pat {
         return errPat(c, n, ok);
     };
     if (s.generics.len > 0) {
-        _ = c.unsupported(n, "patterns of generic structs (T064)");
+        _ = c.unsupported(n, "patterns of generic structs (T070)");
         return errPat(c, n, ok);
     }
     // shortcut: private fields are matched from any module; T050's field visibility rules (§7.3.3) apply once shared.

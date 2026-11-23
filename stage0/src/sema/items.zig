@@ -46,6 +46,7 @@ const type_kinds = @import("kinds.zig");
 const layout_soa = @import("layout_soa.zig");
 const tir = @import("../tir/tir.zig");
 const instantiate = @import("../comptime/instantiate.zig");
+const generics_mod = @import("generics.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -122,6 +123,9 @@ pub const Fn = struct {
     /// `.void` when `-> R` is omitted.
     ret: TypeId,
     attrs: []const Node.Index,
+    /// For a method of an instance of a generic type: that instance, whose
+    /// copy of the method a call calls (`generics.zig`); `.none` otherwise.
+    instance: TypeId = .none,
 };
 
 /// Field visibility (§7.3.3).
@@ -271,6 +275,9 @@ pub const Items = struct {
     /// The instantiation whose body or signature is being checked, if any:
     /// its `comptime` parameters are bound to values (§8.2).
     instance: ?*const instantiate.Frame = null,
+    /// Instances of generic declarations, owned by `generics.zig`
+    /// (arena-backed).
+    generic: generics_mod.State = .{},
 
     pub fn deinit(it: *Items) void {
         const gpa = it.arena.child_allocator;
@@ -315,9 +322,11 @@ pub const Items = struct {
         return null;
     }
 
-    /// The struct declaration behind `ty` (also an instance of a generic
-    /// struct, whose fields are in terms of its parameters), once checked.
+    /// The struct declaration behind `ty`, once checked: for an instance of
+    /// a generic struct, the instance's own (`generics.zig`), in terms of its
+    /// arguments; for a symbolic one (`Ring<T, CAP>`), the template's.
     pub fn structOf(it: *Items, ty: TypeId) ?*const Struct {
+        if (it.generic.infos.get(ty)) |i| return if (i.* == .@"struct") &i.@"struct" else null;
         const ref = it.declRef(ty) orelse return null;
         if (it.mods[ref.module].states[ref.item] != .done) return null;
         return switch (it.mods[ref.module].infos[ref.item]) {
@@ -328,6 +337,7 @@ pub const Items = struct {
 
     /// The enum declaration behind `ty`, once checked.
     pub fn enumOf(it: *Items, ty: TypeId) ?*const Enum {
+        if (it.generic.infos.get(ty)) |i| return if (i.* == .@"enum") &i.@"enum" else null;
         const ref = it.declRef(ty) orelse return null;
         if (it.mods[ref.module].states[ref.item] != .done) return null;
         return switch (it.mods[ref.module].infos[ref.item]) {
@@ -377,14 +387,18 @@ pub const Items = struct {
         const md = &it.mods[m];
         if (md.states[i] != .todo) return &md.infos[i];
         md.states[i] = .active;
+        // An item never sees the bindings of an instantiation that uses it.
+        const saved = it.instance;
+        it.instance = null;
+        defer it.instance = saved;
         const item = it.im.graph.modules[m].items[i];
         const result: Info = switch (item.kind) {
             .@"const" => .{ .@"const" = try it.constValue(m, item.node, .none) },
             .type_alias => .{ .alias = try it.resolveType(m, it.ast(m).data(item.node).type_alias.ty, .none) },
             .type_distinct => .{ .distinct = try it.distinctType(m, i) },
             .@"fn", .extern_fn => .{ .@"fn" = try it.signature(m, item.node, .none) },
-            .@"struct" => .{ .@"struct" = try it.structDecl(m, i) },
-            .@"enum" => .{ .@"enum" = try it.enumDecl(m, i) },
+            .@"struct" => .{ .@"struct" = try it.structDecl(m, i, try it.selfType(m, i)) },
+            .@"enum" => .{ .@"enum" = try it.enumDecl(m, i, try it.selfType(m, i)) },
             .protocol => .{ .protocol = try it.selfType(m, i) },
         };
         md.infos[i] = result;
@@ -399,10 +413,8 @@ pub const Items = struct {
         switch (item.kind) {
             .@"struct", .@"enum", .protocol => return it.nominalOf(m, at, ref, args, self_ty),
             .type_alias, .type_distinct => {
-                if (args != null or generics(it.ast(ref.module), item.node) != null) {
-                    // shortcut: generic aliases and distinct types are instantiated by generics.zig (T064).
-                    return .err;
-                }
+                if (args != null or generics(it.ast(ref.module), item.node) != null)
+                    return generics_mod.aliasType(it, m, at, ref, args, self_ty);
                 if (it.mods[ref.module].states[ref.item] == .active) {
                     try it.report(ref.module, it.ast(ref.module).mainToken(item.node) + 1, .E0376, &.{}, "type `{s}` is defined in terms of itself", .{item.name});
                     return .err;
@@ -425,8 +437,9 @@ pub const Items = struct {
     }
 
     /// The nominal type of declaration `ref` with arguments `args` written
-    /// at `at` in module `m`.
-    fn nominalOf(it: *Items, m: ModuleId, at: Node.Index, ref: Ref, args: ?[]const Node.Index, self_ty: TypeId) Error!TypeId {
+    /// at `at` in module `m`; an instance of a generic declaration is
+    /// instantiated (`generics.zig`).
+    pub fn nominalOf(it: *Items, m: ModuleId, at: Node.Index, ref: Ref, args: ?[]const Node.Index, self_ty: TypeId) Error!TypeId {
         const item = it.im.graph.modules[ref.module].items[ref.item];
         const gens = generics(it.ast(ref.module), item.node) orelse &.{};
         const given = args orelse &.{};
@@ -439,7 +452,8 @@ pub const Items = struct {
             const vt = try it.paramValueType(ref.module, g);
             o.* = try it.genericArg(m, arg, vt, self_ty) orelse return .err;
         }
-        return it.internNominal(ref, out);
+        const ty = try it.internNominal(ref, out);
+        return if (gens.len > 0) generics_mod.instance(it, m, at, ref, ty) else ty;
     }
 
     fn internNominal(it: *Items, ref: Ref, args: []const Types.Arg) Error!TypeId {
@@ -499,8 +513,10 @@ pub const Items = struct {
     }
 
     /// Argument `n` for a generic parameter whose value type is `value_ty`
-    /// (`.none` for a type parameter). Null if it cannot be determined.
-    fn genericArg(it: *Items, m: ModuleId, n: Node.Index, value_ty: TypeId, self_ty: TypeId) Error!?Types.Arg {
+    /// (`.none` for a type parameter). Null if it cannot be determined. An
+    /// unbound value parameter (`CAP` in `Ring<T, CAP>` inside `Ring`) is
+    /// symbolic: its `.param` type, as in `selfType`.
+    pub fn genericArg(it: *Items, m: ModuleId, n: Node.Index, value_ty: TypeId, self_ty: TypeId) Error!?Types.Arg {
         const a = it.ast(m);
         const inner = if (a.kind(n) == .generic_expr_arg) a.data(n).generic_expr_arg.value else n;
         if (value_ty == .none and inner == n and !isValueArg(a, n)) return .{ .type = try it.resolveType(m, n, self_ty) };
@@ -508,8 +524,10 @@ pub const Items = struct {
         const v = try it.coerceValue(m, inner, try it.fold(m, inner, self_ty, want), want);
         return switch (v) {
             .scalar => |s| .{ .value = s },
-            // shortcut: symbolic arguments (`Ring<T, CAP>` inside a generic body) wait for generics.zig (T064).
-            else => null,
+            else => if (a.kind(inner) == .ident or a.kind(inner) == .path) if (it.names.get(m, inner)) |e| switch (e.res) {
+                .local => |l| if (a.kind(l) == .generic_param) .{ .type = it.mods[m].params.get(l).?.type } else null,
+                .global => null,
+            } else null else null,
         };
     }
 
@@ -577,6 +595,7 @@ pub const Items = struct {
             .local => |l| switch (a.kind(l)) {
                 .generic_param => {
                     if (args != null) return .err;
+                    if (instantiate.boundValue(it, m, l)) |v| if (v == .type) return v.type;
                     return it.mods[m].params.get(l).?.type;
                 },
                 .const_decl => {
@@ -725,7 +744,8 @@ pub const Items = struct {
     /// enclosing type for methods (`.none` for free functions). Each
     /// declaration is checked once; later calls return the same result.
     pub fn signature(it: *Items, m: ModuleId, n: Node.Index, self_ty: TypeId) Error!Fn {
-        if (it.mods[m].fns.get(n)) |f| return f;
+        // An instance's methods have their own signatures (`generics.zig`).
+        if (it.instance == null) if (it.mods[m].fns.get(n)) |f| return f;
         const a = it.ast(m);
         const d = a.data(n).fn_decl;
         const kinds = a.tokens.items(.kind);
@@ -764,7 +784,7 @@ pub const Items = struct {
             .ret = if (d.ret) |r| try it.resolveType(m, r, self_ty) else .void,
             .attrs = it.attrsOf(m, n),
         };
-        try it.mods[m].fns.put(it.alloc(), n, f);
+        if (it.instance == null) try it.mods[m].fns.put(it.alloc(), n, f);
         return f;
     }
 
@@ -844,11 +864,12 @@ pub const Items = struct {
         return c;
     }
 
-    fn structDecl(it: *Items, m: ModuleId, i: u32) Error!Struct {
+    /// Struct item `i` of module `m` whose `Self` is `self_ty`: its own
+    /// type, or an instance whose parameters are bound (`generics.zig`).
+    pub fn structDecl(it: *Items, m: ModuleId, i: u32, self_ty: TypeId) Error!Struct {
         const item = it.im.graph.modules[m].items[i];
         const a = it.ast(m);
         const d = a.data(item.node).struct_decl;
-        const self_ty = try it.selfType(m, i);
         const kinds = a.tokens.items(.kind);
         if (d.fields.len > max_members) try it.tooMany(m, item, "fields", d.fields.len);
         const fields = try it.alloc().alloc(Field, d.fields.len);
@@ -877,11 +898,11 @@ pub const Items = struct {
         };
     }
 
-    fn enumDecl(it: *Items, m: ModuleId, i: u32) Error!Enum {
+    /// Enum item `i` of module `m` whose `Self` is `self_ty`; see `structDecl`.
+    pub fn enumDecl(it: *Items, m: ModuleId, i: u32, self_ty: TypeId) Error!Enum {
         const item = it.im.graph.modules[m].items[i];
         const a = it.ast(m);
         const d = a.data(item.node).enum_decl;
-        const self_ty = try it.selfType(m, i);
         if (d.variants.len > max_members) try it.tooMany(m, item, "variants", d.variants.len);
 
         var has_payload = false;
@@ -1056,12 +1077,14 @@ pub const Items = struct {
                 const v = try it.fold(m, c.value, self_ty, .none);
                 return if (v == .unknown) .unknown else it.foldCast(m, n, v, try it.resolveType(m, c.ty, self_ty), expected);
             },
-            .ident => {
+            // A name in a generic argument list is a `path` (`Ring<u32, N>`).
+            .ident, .path => {
                 const e = it.names.get(m, n) orelse return .unknown; // reported by the expression checker
+                if (e.rest != 0) return it.hook(m, n, expected);
                 return switch (e.res) {
                     .local => |l| switch (a.kind(l)) {
                         .const_decl => (try it.constValue(m, l, self_ty)).value,
-                        .param => instantiate.boundValue(it, m, l) orelse .unknown,
+                        .param, .generic_param => instantiate.boundValue(it, m, l) orelse .unknown,
                         else => .unknown,
                     },
                     .global => |t| it.targetValue(m, n, t, self_ty),
@@ -1251,7 +1274,7 @@ pub const Items = struct {
     /// Converts the value of expression `n` to `to`, where a `to` is
     /// declared (const, default, discriminant, array length): rule 1 for
     /// untyped constants (E0306, E0310), widening for typed integers.
-    /// A generic parameter `to` is checked per instantiation (§7.6.4, T064),
+    /// A generic parameter `to` is checked per instantiation (§7.6.4, `generics.zig`),
     /// so `v` is kept as is; other types built from parameters reject
     /// scalars whatever the arguments.
     fn coerceValue(it: *Items, m: ModuleId, n: Node.Index, v: Value, to: TypeId) Error!Value {
@@ -1360,7 +1383,7 @@ pub const Items = struct {
     /// walked with its arguments substituted.
     fn contains(it: *Items, ty: TypeId, root: Types.Decl, depth: u32, seen: *std.AutoHashMapUnmanaged(TypeId, void)) Error!bool {
         // shortcut: the visit budget cuts off polymorphic recursion
-        // (`L<T>` holding `L<(T, T)>`); exact once T064 bounds instantiation depth.
+        // (`L<T>` holding `L<(T, T)>`), which instantiation reports as E0812.
         if (depth > 64 or seen.count() > 4096) return false;
         switch (it.types.get(ty)) {
             .array => |x| return it.contains(x.elem, root, depth + 1, seen),
