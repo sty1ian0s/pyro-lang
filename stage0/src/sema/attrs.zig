@@ -51,6 +51,7 @@ pub const Flags = packed struct {
     doc_hidden: bool = false,
     @"inline": bool = false,
     no_inline: bool = false,
+    pure: bool = false,
 };
 
 /// The flags set by `attrs`, the attribute nodes of one declaration
@@ -62,6 +63,7 @@ pub fn flags(a: *const Ast, attrs: []const Node.Index) Flags {
         .doc_hidden => f.doc_hidden = true,
         .@"inline" => f.@"inline" = true,
         .no_inline => f.no_inline = true,
+        .pure => f.pure = true,
         else => {},
     };
     return f;

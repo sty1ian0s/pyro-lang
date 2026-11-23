@@ -699,6 +699,7 @@ fn typeCall(a: *Args, rule: Rule, expected: TypeId) Error!Typed {
         .format => {
             try comptimeStr(a, 0);
             for (1..a.nodes.len) |i| _ = try a.value(i, .none);
+            @import("purity.zig").note(c, a.at, .io);
             return c.unsupported(a.at, "format strings and their arguments (T112)");
         },
     }

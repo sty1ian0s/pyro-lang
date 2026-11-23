@@ -94,7 +94,10 @@ fn direct(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), ref: Ref)
         else => return c.unsupported(n, "calls of this form (T046, T065)"),
     };
     const item = c.items.im.graph.modules[ref.module].items[ref.item];
-    if (item.kind == .extern_fn) try unsafe.callee(c, d.callee, c.items.im.graph.modules[ref.module].ast, sig, true);
+    if (item.kind == .extern_fn) {
+        try unsafe.callee(c, d.callee, c.items.im.graph.modules[ref.module].ast, sig, true);
+        @import("purity.zig").note(c, n, .extern_call);
+    }
     return callFn(c, n, ref.module, sig, null, d.args);
 }
 

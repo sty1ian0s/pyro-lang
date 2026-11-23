@@ -1,4 +1,3 @@
-//@ expected-fail: T067
 // §8.8: an `@pure` function has no `mut` parameters, no `Atomic`/`Channel`
 // access, no I/O, no `extern` calls and no impure calls.
 

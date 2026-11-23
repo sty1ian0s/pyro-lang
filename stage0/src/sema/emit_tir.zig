@@ -45,6 +45,7 @@ const attrs_mod = @import("attrs.zig");
 const protocols_mod = @import("protocols.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
 const instantiate = @import("../comptime/instantiate.zig");
+const purity = @import("purity.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -128,6 +129,8 @@ pub const Body = struct {
     /// Checked before protocols (`Bodies.before_protos`) and stopped at a
     /// method call an impl may provide; `checkBodies` checks it again.
     retry: bool = false,
+    /// The first direct effect of the body (`purity.note`).
+    effect: ?purity.Effect = null,
 };
 
 /// The checked bodies of one package.
@@ -648,6 +651,7 @@ pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
         defer protos.deinit();
         var bs = try checkBodies(comp.gpa, &it, &protos);
         defer bs.deinit();
+        try purity.check(&it, &bs);
         if (bs.unsupported != null) incomplete = true;
     }
     if (incomplete and !comp.sink.hasErrors()) return error.CheckIncomplete;
