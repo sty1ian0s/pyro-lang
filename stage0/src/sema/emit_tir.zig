@@ -106,7 +106,7 @@ pub const PendingBreak = struct { block: tir.Block, value: Typed, node: Node.Ind
 pub const Unsupported = struct {
     module: ModuleId,
     node: Node.Index,
-    /// What it is and the task that adds it: "`for` loops (T076)".
+    /// What it is and the task that adds it: "`defer`, `errdefer` and `return tail` (T078)".
     what: []const u8,
 };
 
@@ -990,12 +990,12 @@ test "E0371: missing return value" {
 test "pyro check stage: unsupported constructs make the check incomplete" {
     var f: Fixture = undefined;
     try f.init(
-        \\fn a(x: u32) -> u32 { for i in x { } 1 }
+        \\fn a(x: u32) -> u32 { defer {} x }
         \\fn b() -> u32 { 2 }
     );
     defer f.deinit();
     try f.expectDiags(&.{});
-    try testing.expectEqualStrings("`for` loops (T076)", f.bodies.unsupported.?.what);
+    try testing.expectEqualStrings("`defer`, `errdefer` and `return tail` (T078)", f.bodies.unsupported.?.what);
     try testing.expectEqual(null, f.bodies.find(0, "a").?.func);
     _ = try f.func("b");
 }

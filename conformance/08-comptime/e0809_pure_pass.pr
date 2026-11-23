@@ -1,4 +1,3 @@
-//@ expected-fail: T076
 //@ covers: E0809
 // §8.8: arithmetic, local mutation, loops and calls to other effect-free
 // functions are pure.

@@ -163,7 +163,7 @@ fn nameTarget(c: *Checker, n: Node.Index) Error!?Place {
     const what: []const u8 = switch (e.res) {
         .local => |l| switch (c.ast.kind(l)) {
             .pat_bind, .pat_bind_mut, .field_pat, .field_pat_mut, .param => {
-                _ = c.unsupported(n, "bindings of `for` loops and lambdas (T074, T076)");
+                _ = c.unsupported(n, "bindings of lambdas (T074)");
                 return null;
             },
             .const_decl => "constant",
@@ -280,7 +280,7 @@ fn @"break"(c: *Checker, s: Node.Index) Error!bool {
         return true;
     };
     if (!loop.is_loop) {
-        try c.report(s, .E0310, "`break` with a value is only allowed in `loop`; `while` has type `void`", .{});
+        try c.report(s, .E0310, "`break` with a value is only allowed in `loop`; `while` and `for` loops have type `void`", .{});
         _ = try check_expr.check(c, value, .none);
         return true;
     }
@@ -493,6 +493,7 @@ pub fn labeled(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     return switch (c.ast.kind(inner)) {
         .loop => loopLabeled(c, inner, expected, label),
         .@"while" => whileLabeled(c, inner, label),
+        .@"for" => @import("desugar_loops.zig").forLabeled(c, inner, label),
         else => check_expr.check(c, inner, expected),
     };
 }

@@ -1,0 +1,43 @@
+//@ covers: E0357
+// §6.7.2, §6.12.3-§6.12.5: `for` over ranges, arrays, slices and SoA, with an
+// index, `where`, labels, irrefutable destructuring and `mut T` element views.
+
+struct P { pub mut x: f32, pub vx: f32 }
+
+fn step(mut ps: []P, dt: f32) {
+    for p in ps { p.x += p.vx * dt; }
+}
+
+fn step_soa(mut ps: soa [8]P) {
+    for p in ps { p.x += p.vx; }
+}
+
+fn dot(pairs: [3](u32, u32)) -> u32 {
+    let mut t: u32 = 0;
+    for (a, b) in pairs { t += a * b; }
+    t
+}
+
+fn evens(xs: []u32) -> usize {
+    let mut n: usize = 0;
+    for x, i in xs where x % 2 == 0 { n += i; }
+    n
+}
+
+fn last_bytes() -> u32 {
+    let mut n: u32 = 0;
+    for b in 250u8..=255u8 { n += b as u32; }
+    n
+}
+
+fn grid(w: u32, h: u32) -> u32 {
+    let mut cells: u32 = 0;
+    rows: for y in 0..h {
+        for x in 0..w {
+            if x == y { continue :rows; }
+            if y > 100 { break :rows; }
+            cells += 1;
+        }
+    }
+    cells
+}

@@ -1,0 +1,10 @@
+//@ expected-fail: T095
+// §6.12.3: a range ends without computing past its last value, so a range
+// ending at the type's maximum terminates; an empty range runs no iteration.
+
+pub fn main() {
+    let mut n: u32 = 0;
+    for b in 250u8..=255u8 { n += 1; }
+    for i in 0u8..0 { n += 100; }
+    print("{}\n", n);
+}

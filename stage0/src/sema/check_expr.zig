@@ -30,6 +30,7 @@ const unsafe = @import("unsafe.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
 const comptime_flow = @import("comptime_flow.zig");
 const desugar_misc = @import("desugar_misc.zig");
+const desugar_loops = @import("desugar_loops.zig");
 const tir = @import("../tir/tir.zig");
 const interp_expr = @import("../comptime/interp_expr.zig");
 const instantiate = @import("../comptime/instantiate.zig");
@@ -83,6 +84,7 @@ const handlers = blk: {
         .{ .for_inline, comptime_flow.inlineFor },
         .{ .try_op, desugar_misc.tryOp },
         .{ .array_comp, desugar_misc.arrayComp },
+        .{ .@"for", desugar_loops.forExpr },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -91,7 +93,6 @@ const handlers = blk: {
 fn owner(k: NodeKind) []const u8 {
     return switch (k) {
         .lambda => "lambdas (T074)",
-        .@"for" => "`for` loops (T076)",
         .ml_string => "multi-line strings (T112)",
         else => "this expression (a later task)",
     };
@@ -185,7 +186,7 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
                     try c.report(n, .E0801, "`{s}` is a runtime value and cannot be used at comptime", .{c.ast.tokenSlice(c.ast.mainToken(n))});
                     return .err;
                 }
-                return c.unsupported(n, "bindings of `for` loops and lambdas (T074, T076)");
+                return c.unsupported(n, "bindings of lambdas (T074)");
             }),
             .const_decl => return constValue(c, n, try c.items.constValue(c.m, l, c.self_ty)),
             .generic_param => return c.unsupported(n, "generic value parameters (T064)"),
@@ -306,9 +307,19 @@ fn binary(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
         const l = try check(c, d.lhs, if (r.isUntyped() or r.ty == .noreturn) .none else r.ty);
         return operate(c, n, op, l, r, expected);
     }
-    const l = try check(c, d.lhs, l_expected);
+    const l = try readView(c, try check(c, d.lhs, l_expected), d.lhs);
     const r = try check(c, d.rhs, if (class == .shift) .none else if (l.isUntyped()) .none else l.ty);
-    return operate(c, n, op, l, r, expected);
+    return operate(c, n, op, l, try readView(c, r, d.rhs), expected);
+}
+
+/// `v`, or the `T` it views when it is a `mut T` view: an operand reads
+/// the value (§4.5.3).
+fn readView(c: *Checker, v: Typed, at: Node.Index) Error!Typed {
+    if (v.ty == .err or v.ty == .noreturn) return v;
+    return switch (c.types.get(v.ty)) {
+        .mut_view => |mv| c.coerce(v, mv.elem, at),
+        else => v,
+    };
 }
 
 /// `n` takes its type only from the expected type: `.name`, `.name(args)`
