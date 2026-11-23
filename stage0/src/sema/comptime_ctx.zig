@@ -56,6 +56,7 @@ const interp_ctrl = @import("../comptime/interp_ctrl.zig");
 const limits = @import("../comptime/limits.zig");
 const comptime_flow = @import("comptime_flow.zig");
 const instantiate = @import("../comptime/instantiate.zig");
+const hash = @import("../comptime/hash.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -97,6 +98,10 @@ pub const Ctx = struct {
     copy: u32 = 0,
     /// Copies numbered so far (`nextCopy`).
     copies: u32 = 0,
+    /// Every string `@hash` has hashed in this package (§8.6.1), in `values`.
+    /// shortcut: per package, not per program; merge the tables for
+    /// cross-package E0811 when multi-package builds land (T115).
+    names: hash.Names = .{},
 
     pub fn init(gpa: Allocator) Ctx {
         return .{ .gpa = gpa, .values = .init(gpa), .ev = .init(gpa) };

@@ -1,0 +1,11 @@
+//! Hashing (§14.9).
+
+/// The 64-bit FNV-1a hash of `bytes`: the same function as `@hash`
+/// (§8.6.1), at runtime.
+pub fn fnv1a64(bytes: []u8) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        h = @mul_wrap(h ^ (b as u64), 0x100000001b3);
+    }
+    h
+}

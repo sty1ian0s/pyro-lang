@@ -1,4 +1,3 @@
-//@ expected-fail: T066
 //@ covers: E0811
 // §8.6.1: `@hash` is FNV-1a; hashing the same string twice is not a collision.
 

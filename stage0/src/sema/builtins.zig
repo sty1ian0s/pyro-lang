@@ -196,7 +196,7 @@ pub const Rule = enum {
     eval_quota,
     /// `@embed_file`, `@env`, `@env_or`, `@target` (T073).
     comptime_input,
-    /// `(x) -> u64` (T066).
+    /// `(comptime str) -> u64` (`comptime_flow.zig`).
     hash,
     /// `(vec<N, T>, comptime [M]u32) -> vec<M, T>` (T126).
     shuffle,
@@ -556,7 +556,7 @@ fn typeCall(a: *Args, rule: Rule, expected: TypeId) Error!Typed {
             return a.finish(.void);
         },
         .comptime_input => return c.unsupported(a.at, "comptime inputs (T073)"),
-        .hash => return c.unsupported(a.at, "`@hash` (T066)"),
+        .hash => return comptime_flow.hash(a),
         .shuffle => return c.unsupported(a.at, "`@shuffle` (T126)"),
         .vector_width => return c.unsupported(a.at, "`@vector_width` (T129)"),
         .todo_err => return c.unsupported(a.at, "`@todo_err` (T140)"),
@@ -1034,12 +1034,12 @@ test "GPU builtin signatures in their stages" {
 test "a builtin typed by a later task names it from its rule's arm" {
     var f: Fixture = undefined;
     try f.init(
-        \\fn later(x: u8) { let y = @hash(x); }
+        \\fn later() -> usize { @vector_width(u8) }
     );
     defer f.deinit();
     try f.expectDiags(&.{});
-    try testing.expectEqual(Rule.hash, info(.hash).rule);
-    try testing.expect(std.mem.indexOf(u8, f.bodies.unsupported.?.what, "T066") != null);
+    try testing.expectEqual(Rule.vector_width, info(.vector_width).rule);
+    try testing.expect(std.mem.indexOf(u8, f.bodies.unsupported.?.what, "T129") != null);
 }
 
 test "formatting intrinsics: comptime format string; the rest waits for T112" {
