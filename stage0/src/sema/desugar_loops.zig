@@ -70,11 +70,18 @@ pub fn forLabeled(c: *Checker, n: Node.Index, label: ?[]const u8) Error!Typed {
         if (it.ty == .err) c.failed = true;
         return .{ .ty = it.ty };
     }
+    // `let __r = xs;` (§6.12.3): name the temporary so `--expand` can print it.
+    if (c.b.data(it.ref) == .local) {
+        const l = c.b.data(it.ref).local.local;
+        const names = c.b.locals.items(.name);
+        if (names[l.int()] == .none) names[l.int()] = try c.types.strings.intern("__r");
+    }
     const u = c.underlying(it.ty);
     switch (c.types.get(u)) {
         inline .array, .slice => |x| return sequence(c, d, label, it, x.elem, try c.types.intern(.{ .slice = .{ .elem = x.elem } })),
         inline .soa_array, .soa_slice => |x| return sequence(c, d, label, it, x.elem, try c.types.intern(.{ .soa_slice = .{ .elem = x.elem } })),
-        .nominal => |nm| if (nm.args.len == 1 and nm.args[0] == .type) {
+        // Only the standard ranges, not user types of the same name.
+        .nominal => |nm| if (nm.args.len == 1 and nm.args[0] == .type and std.meta.eql(nm.decl.package, c.items.std_pkg)) {
             const name = c.types.strings.get(nm.name);
             if (std.mem.eql(u8, name, "Range")) return range(c, d, label, it, nm.args[0].type, false);
             if (std.mem.eql(u8, name, "RangeInclusive")) return range(c, d, label, it, nm.args[0].type, true);
@@ -107,6 +114,9 @@ fn sequence(c: *Checker, d: For, label: ?[]const u8, it: mutability.Place, elem:
         .pat_bind => if (it.mutable) {
             const view = try c.types.intern(.{ .mut_view = .{ .elem = elem } });
             _ = try bindName(c, d.pattern, view, try c.emit(view, .{ .view_mut = .{ .place = at } }));
+        } else if (try check_stmt.isResource(c, elem)) {
+            // A resource element is viewed, not copied, as by `forPattern` (§5.5.3).
+            _ = try bindName(c, d.pattern, elem, try c.emit(elem, .{ .view = .{ .place = at } }));
         } else {
             _ = try bindName(c, d.pattern, elem, try c.emit(elem, .{ .load = .{ .place = at } }));
         },
@@ -313,7 +323,7 @@ test "§6.12.3: an inclusive range stops at its end; `continue` goes to the incr
     try f.expectDump("count",
         \\fn count() -> u32 {
         \\  l0 mut n: u32
-        \\  l1 : RangeInclusive<u8>
+        \\  l1 __r: RangeInclusive<u8>
         \\  l2 __e: u8
         \\  l3 x: u8
         \\b0:
@@ -450,4 +460,49 @@ test "§6.12.5: `where` in `inline for` skips copies" {
     defer f.deinit();
     try f.expectDiags(&.{});
     try testing.expectEqual(0 + 2 + 4, try constBits(&f, "E"));
+}
+
+test "§6.12.3: a user type named `Range` is not iterated as a range" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\struct Range<T> { pub a: T, pub b: T }
+        \\fn g(r: Range<u32>) -> u32 { let mut n: u32 = 0; for x in r { n += x; } n }
+    );
+    defer f.deinit();
+    try testing.expectEqualStrings("`for` over `Indexable` types (T110)", f.bodies.unsupported.?.what);
+}
+
+test "§4.5.3: a `mut T` element is read as a `T` in `where` and arithmetic" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn c(mut xs: []u32) { for x in xs where x > 1 { x = 0; } }
+        \\fn d(mut xs: []u32) -> u32 { let mut t: u32 = 0; for x in xs { x += 2; let y: u32 = x + 1; t += 1 + x + y; } t }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    _ = try f.func("c");
+    _ = try f.func("d");
+}
+
+test "§5.5.3: a resource element of an immutable iterable is viewed, not copied" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\@resource struct H { fd: i32 }
+        \\fn rs(hs: [2]H) { for h in hs { } }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    const func = try f.func("rs");
+    var views: usize = 0;
+    for (0..func.insts.len) |i| views += @intFromBool(func.op(.from(i)) == .view);
+    try testing.expectEqual(1, views);
+}
+
+test "§6.7.1: `break` with a value in a `for` is E0310" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn b(xs: []u32) { for x in xs { break 3; } }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{.{ .E0310, "break" }});
 }

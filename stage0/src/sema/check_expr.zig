@@ -305,9 +305,19 @@ fn binary(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
         const l = try check(c, d.lhs, if (r.isUntyped() or r.ty == .noreturn) .none else r.ty);
         return operate(c, n, op, l, r, expected);
     }
-    const l = try check(c, d.lhs, l_expected);
+    const l = try readView(c, try check(c, d.lhs, l_expected), d.lhs);
     const r = try check(c, d.rhs, if (class == .shift) .none else if (l.isUntyped()) .none else l.ty);
-    return operate(c, n, op, l, r, expected);
+    return operate(c, n, op, l, try readView(c, r, d.rhs), expected);
+}
+
+/// `v`, or the `T` it views when it is a `mut T` view: an operand reads
+/// the value (§4.5.3).
+fn readView(c: *Checker, v: Typed, at: Node.Index) Error!Typed {
+    if (v.ty == .err or v.ty == .noreturn) return v;
+    return switch (c.types.get(v.ty)) {
+        .mut_view => |mv| c.coerce(v, mv.elem, at),
+        else => v,
+    };
 }
 
 /// `n` takes its type only from the expected type: `.name`, `.name(args)`

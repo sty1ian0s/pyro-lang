@@ -70,7 +70,7 @@ pub fn inlineFor(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     const d = c.ast.data(n).for_inline;
     for ([_]?Node.Index{ d.pattern, d.pattern2 }) |p| if (p) |q| switch (c.ast.kind(q)) {
         .pat_bind, .pat_wildcard => {},
-        else => return c.unsupported(q, "destructuring in `inline for`"),
+        else => return c.unsupported(q, "destructuring in `inline for` (T076)"),
     };
     const elems = try sequence(c, d.iter) orelse {
         c.failed = true;

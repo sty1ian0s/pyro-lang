@@ -278,7 +278,7 @@ fn @"break"(c: *Checker, s: Node.Index) Error!bool {
         return true;
     };
     if (!loop.is_loop) {
-        try c.report(s, .E0310, "`break` with a value is only allowed in `loop`; `while` has type `void`", .{});
+        try c.report(s, .E0310, "`break` with a value is only allowed in `loop`; `while` and `for` loops have type `void`", .{});
         _ = try check_expr.check(c, value, .none);
         return true;
     }
