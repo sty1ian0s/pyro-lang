@@ -7,6 +7,8 @@
 //!     `bool`; backends store it as `u32`);
 //!   * `vec<2, T>` has size and alignment 2·s; `vec<3, T>` size 3·s and
 //!     alignment 4·s; `vec<4, T>` size and alignment 4·s (s = scalar size);
+//!   * `vec<N, T>` with N > 4 has no rule in either standard; it is laid
+//!     out as `[N]T`;
 //!   * `[N]T` has T's alignment and stride `T.size` rounded up to it;
 //!   * a struct has its largest member alignment, members placed in order,
 //!     size rounded up to the alignment;
@@ -43,7 +45,8 @@ pub const Rules = enum {
 
 /// The layout of `t` under `rules`, with one place per field for structs,
 /// allocated in `lay`'s arena. Null for types without a GPU layout: those
-/// without a Pyro layout, and vectors of more than 4 lanes.
+/// without a Pyro layout, and every type that is not a scalar, `bool`,
+/// vector, array, struct or `Atomic<T>` (tuples, enums, options, slices).
 pub fn layoutOf(lay: *layout.Engine, t: TypeId, rules: Rules) Error!?Layout {
     const it = lay.items;
     if (t == .bool) return .{ .size = 4, .@"align" = 4 };
@@ -55,17 +58,15 @@ pub fn layoutOf(lay: *layout.Engine, t: TypeId, rules: Rules) Error!?Layout {
                 2 => .{ .size = 2 * s, .@"align" = @intCast(2 * s) },
                 3 => .{ .size = 3 * s, .@"align" = @intCast(4 * s) },
                 4 => .{ .size = 4 * s, .@"align" = @intCast(4 * s) },
-                else => null,
+                else => arrayOf(rules, v.len, .{ .size = s, .@"align" = @intCast(s) }),
             };
         },
         .array => |a| {
-            const e = try layoutOf(lay, a.elem, rules) orelse return null;
-            const al = round(rules, e.@"align");
-            return .{ .size = a.len *| stride(rules, e), .@"align" = al };
+            return arrayOf(rules, a.len, try layoutOf(lay, a.elem, rules) orelse return null);
         },
         .nominal => |n| {
             if (n.lang == .atomic) return if (n.args.len == 1 and n.args[0] == .type) layoutOf(lay, n.args[0].type, rules) else null;
-            const s = it.structOf(t) orelse return lay.layoutOf(t);
+            const s = it.structOf(t) orelse return null;
             // A struct that contains itself has no Pyro layout (E0376): stop.
             _ = try lay.layoutOf(t) orelse return null;
             const places = try lay.arena.allocator().alloc(Place, s.fields.len);
@@ -80,8 +81,19 @@ pub fn layoutOf(lay: *layout.Engine, t: TypeId, rules: Rules) Error!?Layout {
             al = round(rules, al);
             return .{ .size = layout.alignUp(end, al), .@"align" = al, .fields = places };
         },
-        else => return lay.layoutOf(t),
+        // shortcut: `usize`/`isize` take the host pointer width, not a GPU
+        // one, until the GPU backends fix their width (T184 owner).
+        .simple => |s| return switch (s) {
+            .f32, .f64, .isize, .usize => lay.layoutOf(t),
+            else => null,
+        },
+        .int => return lay.layoutOf(t),
+        else => return null,
     }
+}
+
+fn arrayOf(rules: Rules, len: u64, e: Layout) Layout {
+    return .{ .size = len *| stride(rules, e), .@"align" = round(rules, e.@"align") };
 }
 
 /// std140 raises array and struct alignments to 16.
@@ -89,8 +101,10 @@ fn round(rules: Rules, a: u32) u32 {
     return if (rules == .std140) @max(a, 16) else a;
 }
 
-/// The array stride of elements laid out as `l`.
-fn stride(rules: Rules, l: Layout) u64 {
+/// The array stride (`ArrayStride`) under `rules` of elements laid out as
+/// `l` (their `layoutOf`): `l.size` rounded up to the element alignment,
+/// which std140 raises to 16.
+pub fn stride(rules: Rules, l: Layout) u64 {
     return layout.alignUp(l.size, round(rules, l.@"align"));
 }
 
@@ -113,9 +127,10 @@ fn sameBytes(lay: *layout.Engine, t: TypeId, p: Layout, g: Layout) Error!bool {
     if (t == .bool) return false;
     switch (it.types.get(t)) {
         .vec => |v| return matchesPyro(lay, v.elem),
-        .array => |a| return matchesPyro(lay, a.elem),
+        // Pyro stores an array of an `@soa` struct column by column (§4.11.5).
+        .array => |a| return !soa.isSoa(lay, a.elem) and try matchesPyro(lay, a.elem),
         .nominal => |n| {
-            const s = it.structOf(t) orelse return p.size == g.size;
+            const s = it.structOf(t) orelse return false;
             if (p.size != g.size) return false;
             for (s.fields, p.fields, g.fields) |f, pp, gp| {
                 const ft = try it.subst(f.type, n.decl, n.args);
@@ -198,6 +213,10 @@ pub fn bindings(lay: *layout.Engine, sf: stages.StageFn) Error!Map {
                 } else try storage.append(gpa, try buffer(lay, pi, @intCast(storage.items.len), elem, null));
             },
             .uniform => {
+                // shortcut: a uniform-class type without a GPU layout (a
+                // generic field instantiated to a tuple, enum, option or
+                // slice) is dropped from the block without a diagnostic;
+                // reject it in stages.zig with E1001 (T176 owner).
                 const l = try layoutOf(lay, fp.type, .std140) orelse continue;
                 const off = layout.alignUp(end, l.@"align");
                 try uniforms.append(gpa, pi);
@@ -233,6 +252,9 @@ fn buffer(lay: *layout.Engine, param: u32, binding: u32, elem: TypeId, column: ?
         .class = .storage,
         .column = column,
         .elem = elem,
+        // shortcut: an element without a GPU layout, or an empty struct
+        // (WGSL has no zero-size struct), gets stride 0; reject both in
+        // stages.zig with E1001 (T176 owner).
         .stride = if (g) |l| stride(.std430, l) else 0,
         .converts = !try matchesPyro(lay, elem),
     };
@@ -369,4 +391,49 @@ test "Pyro layout vs std430: when `launch` needs a staging copy" {
     defer env.deinit();
     const want = [_]bool{ false, true, true, false, true, false };
     for (want, 0..) |w, i| try testing.expectEqual(w, !try matchesPyro(&env.lay, env.elem(0, i)));
+}
+
+test "staging copy: a nested array of an `@soa` struct is stored by column" {
+    var env: Env = undefined;
+    // Pyro and std430 sizes of H agree (128), but `ps` is SoA in Pyro.
+    try env.init(
+        \\@soa struct P { x: f32, y: f32 }
+        \\struct H { ps: [16]P }
+        \\@gpu_kernel fn k(h: []H) {}
+    );
+    defer env.deinit();
+    try testing.expectEqual(128, (try env.lay.layoutOf(env.elem(0, 0))).?.size);
+    try testing.expect(!try matchesPyro(&env.lay, env.elem(0, 0)));
+    try testing.expect((try bindings(&env.lay, env.fns[0])).bindings[0].converts);
+}
+
+test "vec<N, T> with N > 4 is laid out as [N]T; no uniform member is dropped" {
+    var env: Env = undefined;
+    try env.init(
+        \\struct W { a: vec<8, f32>, b: f32 }
+        \\@gpu_kernel fn k(s: f32, v: vec<8, f32>, w: W, xs: []vec<8, f32>, b: bool) {}
+    );
+    defer env.deinit();
+    try layout.expectLayout(32, 4, try env.param(0, 1, .std430));
+    try layout.expectLayout(128, 16, try env.param(0, 1, .std140));
+    try expectOffsets(&.{ 0, 32 }, try env.param(0, 2, .std430));
+    const map = try bindings(&env.lay, env.fns[0]);
+    // std140: s at 0, v (align 16, size 128) at 16, w (size 144) at 144, b at 288.
+    try testing.expectEqualSlices(u32, &.{ 0, 1, 2, 4 }, map.uniform.?.params);
+    try expectOffsets(&.{ 0, 16, 144, 288 }, map.uniform.?.layout);
+    try testing.expectEqual(32, map.bindings[0].stride);
+    try testing.expect(!map.bindings[0].converts);
+}
+
+test "types outside the GPU shapes have no GPU layout" {
+    var env: Env = undefined;
+    try env.init(
+        \\@gpu_kernel fn k(xs: []f32) {}
+    );
+    defer env.deinit();
+    const tup = try env.f.items.types.intern(.{ .tuple = .{ .elems = &.{ .bool, .f32 } } });
+    try testing.expectEqual(null, try layoutOf(&env.lay, tup, .std430));
+    try testing.expect(!try matchesPyro(&env.lay, tup));
+    try testing.expectEqual(4, stride(.std430, (try layoutOf(&env.lay, .f32, .std430)).?));
+    try testing.expectEqual(16, stride(.std140, (try layoutOf(&env.lay, .f32, .std140)).?));
 }
