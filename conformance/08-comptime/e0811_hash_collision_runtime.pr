@@ -1,0 +1,7 @@
+// §8.6.1: a collision is an error wherever `@hash` is, here in runtime code.
+
+fn keys() -> u64 {
+    let a = @hash("cfce3eaa8d97691a");
+    let b = @hash("6f98c950bd676157"); //~ E0811
+    a ^ b
+}

@@ -17,6 +17,9 @@
 //!   untaken `comptime if` branch is neither).
 //! - `@compile_log(args...)`: W0801 wherever it is in the build; when
 //!   evaluated it prints its arguments to `Ctx.log`.
+//! - `@hash(s)` (`hash`, `evalBuiltin`, §8.6.1): the FNV-1a hash of
+//!   comptime-known `s` (E0801), recorded in `Ctx.names`; a different
+//!   string with the same hash is E0811.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -34,6 +37,7 @@ const tir = @import("../tir/tir.zig");
 const interp_ctrl = @import("../comptime/interp_ctrl.zig");
 const limits = @import("../comptime/limits.zig");
 const Value = @import("../comptime/value.zig").Value;
+const hash_mod = @import("../comptime/hash.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -241,8 +245,31 @@ pub fn compileDiag(a: *builtins.Args) Error!Typed {
     return a.finish(.noreturn);
 }
 
-/// `Hooks.builtin` of the comptime driver: runs `@compile_error` and
-/// `@compile_log` reached by the interpreter.
+/// `@hash(s)` (§8.6.1); `a` is the call whose arity `builtins.zig`
+/// checked. In runtime code `s` is evaluated now and the hash is a
+/// constant; in comptime code the interpreter hashes it (`evalBuiltin`).
+pub fn hash(a: *builtins.Args) Error!Typed {
+    const c = a.c;
+    _ = try a.as(0, .str);
+    if (c.in_comptime or !a.ok) return a.finish(.int(.unsigned, 64));
+    const cx = comptime_ctx.of(c.items) orelse return c.unsupported(a.at, "comptime evaluation without an evaluator");
+    const s = try cx.eval(c.items, c.m, a.nodes[0], .str) orelse {
+        c.failed = true; // reported
+        return .err;
+    };
+    const str = cx.value(s.computed.id).data.str;
+    const h = cx.names.record(cx.values.allocator(), str) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.Collision => {
+            try c.report(a.at, .E0811, "`@hash(\"{s}\")` collides with `@hash(\"{s}\")`", .{ str, cx.names.nameOf(hash_mod.fnv1a64(str)).? });
+            return .err;
+        },
+    };
+    return c.constant(.{ .type = .int(.unsigned, 64), .bits = h });
+}
+
+/// `Hooks.builtin` of the comptime driver: runs `@compile_error`,
+/// `@compile_log` and `@hash` reached by the interpreter.
 pub fn evalBuiltin(ctx: *anyopaque, m: *interp_ctrl.Machine, b: tir.BuiltinId, args: []const Value) interp_ctrl.StepError!Value {
     const cx: *comptime_ctx.Ctx = @ptrCast(@alignCast(ctx));
     if (b == builtins.Builtin.compile_log.id()) {
@@ -254,6 +281,26 @@ pub fn evalBuiltin(ctx: *anyopaque, m: *interp_ctrl.Machine, b: tir.BuiltinId, a
             w.writeAll("\n") catch {};
         }
         return .{ .ty = .void, .data = .void };
+    }
+    if (b == builtins.Builtin.hash.id()) {
+        const str = args[0].data.str;
+        const h = cx.names.record(cx.values.allocator(), str) catch |e| switch (e) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Collision => {
+                const tr = try m.trace();
+                defer tr.deinit(m.gpa);
+                if (m.eval) |ev| ev.reported = true;
+                try m.sink.emit(.{
+                    .code = .E0811,
+                    .severity = .@"error",
+                    .message = try std.fmt.allocPrint(m.in.arena, "`@hash(\"{s}\")` collides with `@hash(\"{s}\")`", .{ str, cx.names.nameOf(hash_mod.fnv1a64(str)).? }),
+                    .spans = &.{.{ .span = tr.span, .primary = true }},
+                    .trace = tr.frames,
+                });
+                return m.fail("`@hash` collision");
+            },
+        };
+        return .{ .ty = .int(.unsigned, 64), .data = .{ .scalar = h } };
     }
     if (b != builtins.Builtin.compile_error.id()) return m.fail(unsupportedBuiltin(@fromBackingInt(b.int())));
     const tr = try m.trace();
@@ -276,7 +323,6 @@ fn unsupportedBuiltin(b: builtins.Builtin) []const u8 {
         inline else => |t| "`@" ++ @tagName(t) ++ "` in comptime code" ++ comptime switch (t) {
             .size_of, .align_of, .type_info, .type_name, .has_field, .has_method, .implements, .field_type, .field, .call, .fn_info, .variant_count => " (T069)",
             .embed_file, .env, .env_or, .target => " (T073)",
-            .hash => " (T066)",
             else => "",
         },
     };
