@@ -68,17 +68,21 @@ pub fn call(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, recv: ?T
     var s: Infer = try .init(c, sig);
     var next: usize = 0;
     var named = false;
+    const before = c.sink.diags.items.len;
+    var bad_arg = false;
     for (args, checked) |a, *done| {
         const pi = paramIndex(ast, own, a, &next, &named) orelse continue;
         if (seen[pi]) continue; // given twice: binding reports it
         seen[pi] = true;
-        try preArg(c, &s, a, &params[pi]);
+        if (!try preArg(c, &s, a, &params[pi])) bad_arg = true;
         done.* = params[pi].pre != null;
     }
     s.defaults(params);
+    // A failed argument already explains an open parameter: no E0372.
+    s.quiet = bad_arg or erredSince(c, before);
     // Diagnostics of the instantiation are at the callee's name.
     const callee = ast.data(n).call.callee;
-    if (!try s.complete(c, callee, m, sig, "generic arguments are inferred from the argument types only (§7.6.3); a parameter that appears only in the result is declared `comptime T: type` and passed")) {
+    if (!try s.complete(c, callee, sig, "generic arguments are inferred from the argument types only (§7.6.3); a parameter that appears only in the result is declared `comptime T: type` and passed")) {
         // The other arguments are still checked for their own errors.
         for (args, checked) |a, done| if (!done) {
             _ = try check_expr.check(c, check_call.unwrapArg(ast, a), .none);
@@ -105,13 +109,18 @@ pub fn call(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, recv: ?T
 pub fn fnValue(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, expected: TypeId) Error!Typed {
     var s: Infer = try .init(c, sig);
     if (expected != .none and expected != .err) switch (c.types.get(c.underlying(expected))) {
-        .fn_ptr => |fp| if (fp.params.len == sig.params.len) {
+        .fn_ptr => |fp| {
+            if (fp.params.len != sig.params.len) {
+                const plural = if (sig.params.len == 1) "" else "s";
+                try c.report(n, .E0310, "mismatched types: expected `{s}`, found `{s}`, which takes {d} parameter{s}", .{ try c.tyName(expected), sig.name, sig.params.len, plural });
+                return .err;
+            }
             for (sig.params, fp.params) |p, q| s.unify(p.type, q.type);
             s.unify(sig.ret, fp.ret);
         },
         else => {},
     };
-    if (!try s.complete(c, n, m, sig, "name it where an `fn` type is expected, as in `let f: fn(f32) -> f32 = clamp;` (§7.2.5)")) return .err;
+    if (!try s.complete(c, n, sig, "name it where an `fn` type is expected, as in `let f: fn(f32) -> f32 = clamp;` (§7.2.5)")) return .err;
     const inst = try instance(c, n, m, sig, try s.fixed(c)) orelse return .err;
     const ty = try check_call.fnType(c, n, inst.sig) orelse return .err;
     return .{ .ty = ty, .ref = try c.emit(ty, .{ .fn_ref = .{ .func = inst.id } }) };
@@ -127,6 +136,8 @@ const Infer = struct {
     gens: []const TypeId,
     /// The argument of each parameter; null while it is open.
     args: []?Types.Arg,
+    /// An argument failed: open parameters are not reported (E0372).
+    quiet: bool = false,
 
     fn init(c: *Checker, sig: items_mod.Fn) Error!Infer {
         const args = try c.arena.alloc(?Types.Arg, sig.generics.len);
@@ -152,6 +163,12 @@ const Infer = struct {
         }
         const ak = t.get(act);
         switch (t.get(pat)) {
+            // An array place converts to a slice of its elements (§4.9.1 rule 5).
+            .slice => |x| if (ak == .array) return s.unify(x.elem, ak.array.elem),
+            .soa_slice => |x| if (ak == .soa_array) return s.unify(x.elem, ak.soa_array.elem),
+            else => {},
+        }
+        switch (t.get(pat)) {
             inline .array, .soa_array, .slice, .soa_slice, .handle, .ptr, .mut_view, .vec => |x, tag| if (ak == tag) s.unify(x.elem, @field(ak, @tagName(tag)).elem),
             .tuple => |x| if (ak == .tuple and ak.tuple.elems.len == x.elems.len) for (x.elems, ak.tuple.elems) |p, a| s.unify(p, a),
             .fn_ptr => |x| if (ak == .fn_ptr and ak.fn_ptr.params.len == x.params.len) {
@@ -174,30 +191,38 @@ const Infer = struct {
     }
 
     /// Fixes each parameter that only untyped constants were passed for to
-    /// their default type (§4.8), in parameter order.
+    /// their default type (§4.8): `f64` if any of them is a float constant,
+    /// else `i64`, whatever their order.
     fn defaults(s: *Infer, params: []const check_call.Param) void {
-        for (params) |p| {
+        for (s.args, s.gens) |*a, g| if (a.* == null) for (params) |p| {
             const pre = p.pre orelse continue;
-            if (pre != .value) continue;
-            const i = s.index(p.type) orelse continue;
-            if (s.args[i] != null) continue;
-            s.args[i] = switch (pre.value.ty) {
-                .untyped_int => .{ .type = .int(.signed, 64) },
-                .untyped_float => .{ .type = .f64 },
-                else => continue,
-            };
-        }
+            if (pre != .value or p.type != g) continue;
+            switch (pre.value.ty) {
+                .untyped_int => if (a.* == null) {
+                    a.* = .{ .type = .int(.signed, 64) };
+                },
+                .untyped_float => a.* = .{ .type = .f64 },
+                else => {},
+            }
+        };
     }
 
     /// Whether every parameter is fixed; else E0372 at `n` for each open
-    /// type parameter, with `help`.
-    fn complete(s: *const Infer, c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, help: []const u8) Error!bool {
-        const gnodes = c.items.im.graph.modules[m].ast.data(sig.node).fn_decl.generics.?;
+    /// parameter, with `help`, unless a failed argument explains it.
+    fn complete(s: *const Infer, c: *Checker, n: Node.Index, sig: items_mod.Fn, help: []const u8) Error!bool {
+        // A parameter type that did not resolve may hide an `[N]T` length.
+        const hidden = for (sig.params) |p| {
+            if (instantiate.mentionsErr(s.types, p.type)) break true;
+        } else false;
         var ok = true;
-        for (s.args, s.gens, gnodes) |a, g, gn| if (a == null) {
+        for (s.args, s.gens) |a, g| if (a == null) {
             ok = false;
-            // shortcut: a value parameter is inferred only from generic argument lists, not from array lengths (`[N]T` parameters resolve to `.err`), until generic signatures keep symbolic lengths (T070).
-            if (try c.items.paramValueType(m, gn) != .none) {
+            if (s.quiet) {
+                c.failed = true; // the failed argument is reported
+                continue;
+            }
+            // shortcut: parameters are not inferred from an `[N]T` parameter type (it resolves to `.err`, hiding `N` and `T`), until generic signatures keep symbolic lengths (T070).
+            if (hidden) {
                 _ = c.unsupported(n, "inferring generic value parameters from array lengths (T070)");
                 continue;
             }
@@ -232,8 +257,9 @@ const Infer = struct {
 };
 
 /// Checks argument `a` for parameter `p` before binding, when it can be,
-/// and unifies `p`'s type with the argument's.
-fn preArg(c: *Checker, s: *Infer, a: Node.Index, p: *check_call.Param) Error!void {
+/// and unifies `p`'s type with the argument's. False if the argument
+/// failed (reported or unsupported).
+fn preArg(c: *Checker, s: *Infer, a: Node.Index, p: *check_call.Param) Error!bool {
     const ast = c.ast;
     const inner = if (ast.kind(a) == .named_arg) ast.data(a).named_arg.value else a;
     const marked = ast.kind(inner) == .mut_arg;
@@ -244,7 +270,8 @@ fn preArg(c: *Checker, s: *Infer, a: Node.Index, p: *check_call.Param) Error!voi
         .mut => if (marked) {
             const place = try mutability.mutArg(c, inner, value) orelse mutability.Place{ .ty = .err };
             p.pre = .{ .place = place };
-            return s.unify(p.type, place.ty);
+            s.unify(p.type, place.ty);
+            return place.ty != .err;
         },
         .value => if (!marked) {
             // A resource or shared cell local is passed as a view of its place (§5.5.2).
@@ -256,13 +283,26 @@ fn preArg(c: *Checker, s: *Infer, a: Node.Index, p: *check_call.Param) Error!voi
                 c.comp_dest = value;
                 const v = try check_expr.check(c, value, try s.expected(c, p.type));
                 p.pre = .{ .value = v };
-                return s.unify(p.type, v.ty);
+                s.unify(p.type, v.ty);
+                return v.ty != .err;
             }
         },
-        .move, .@"comptime" => {},
+        // shortcut: a `move` argument infers only from a local's type; any other is unsupported until `move` arguments are checked (T080).
+        .move => if (local == null) {
+            _ = c.unsupported(value, "`move` arguments (T080)");
+            return false;
+        },
+        .@"comptime" => {},
     }
     // Checked when bound; a local's type is known without reading it.
     if (local != null) s.unify(p.type, local_ty);
+    return local_ty != .err;
+}
+
+/// Whether an error was reported since diagnostic index `from`.
+fn erredSince(c: *Checker, from: usize) bool {
+    for (c.sink.diags.items[from..]) |d| if (d.severity == .@"error") return true;
+    return false;
 }
 
 /// The index among `params` of the parameter that argument `a` is for,
@@ -368,8 +408,10 @@ fn instances(f: *Fixture, name: []const u8) ![]const tir.Func {
     return out.items;
 }
 
-fn retOf(f: *Fixture, name: []const u8) !TypeId {
-    return f.bodies.find(0, name).?.func.?.ret;
+/// Whether an instance named `name` returns `ret`.
+fn hasInstance(f: *Fixture, name: []const u8, ret: TypeId) !bool {
+    for (try instances(f, name)) |i| if (i.ret == ret) return true;
+    return false;
 }
 
 test "`larger(1, x)` infers `f32` from `x`; `larger(1, 2)` defaults to `i64`" {
@@ -379,15 +421,16 @@ test "`larger(1, x)` infers `f32` from `x`; `larger(1, 2)` defaults to `i64`" {
         \\fn pick<T: plain>(a: T, b: T) -> T { a }
         \\fn floats(x: f32) -> f32 { larger(1, x) }
         \\fn ints() -> i64 { larger(1, 2) }
-        \\fn halves() -> f64 { larger(0.5, 2) }
+        \\fn halves() -> f64 { larger(0.5, 2) + larger(2, 0.5) }
         \\fn named(x: u8) -> u8 { larger(b: x, a: 3) }
         \\fn tuples(x: u8) -> (u8, u8) { pick(.{ x, x }, (x, 1)) }
     );
     defer f.deinit();
     try f.expectDiags(&.{});
     try f.expectComplete();
-    try testing.expectEqual(TypeId.f32, try retOf(&f, "floats"));
-    try testing.expectEqual(TypeId.int(.signed, 64), try retOf(&f, "ints"));
+    try testing.expect(try hasInstance(&f, "larger", .f32));
+    try testing.expect(try hasInstance(&f, "larger", .int(.signed, 64)));
+    try testing.expect(try hasInstance(&f, "larger", .f64));
     // f32, i64, f64, u8; pick((u8, u8)): the templates are not checked.
     try testing.expectEqual(4, (try instances(&f, "larger")).len);
     try testing.expectEqual(5, f.items.memo.count());
@@ -404,7 +447,7 @@ test "a parameter only in the result is E0372; `comptime T: type` passes it" {
     );
     defer f.deinit();
     try f.expectDiags(&.{ .{ .E0372, "zero" }, .{ .E0372, "zero" } });
-    try testing.expectEqual(TypeId.int(.unsigned, 32), try retOf(&f, "good"));
+    try testing.expect(try hasInstance(&f, "make", .int(.unsigned, 32)));
 }
 
 test "`let f: fn(f32) -> f32 = clamp;` instantiates `clamp` from the expected type" {
@@ -439,14 +482,51 @@ test "inference unifies through structure and generic type arguments" {
         \\    let xs: []u16 = arr[0..];
         \\    let mut y: u16 = 1;
         \\    bump(mut y, 2);
-        \\    first(xs) + cap(r) as u16 + y
+        \\    first(xs) + first(arr) + cap(r) as u16 + y
         \\}
     );
     defer f.deinit();
     try f.expectDiags(&.{});
     try f.expectComplete();
-    // Ring<u16, 8>, first(u16), cap(u16, 8), bump(u16).
+    // Ring<u16, 8>, first(u16), cap(u16, 8), bump(u16): `arr` converts to `[]u16`.
     try testing.expectEqual(4, f.items.memo.count());
+}
+
+test "a generic member function named as a value is instantiated from the expected type" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\struct S { w: u8  fn id<T: plain>(x: T) -> T { x } }
+        \\fn demo(g: u8) -> u8 { let f: fn(u8) -> u8 = S.id; f(1) + S.id(g) }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    try f.expectComplete();
+    try testing.expectEqual(1, (try instances(&f, "id")).len);
+}
+
+test "E0372 only for parameters that no failed argument explains" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn keep<T: plain>(x: T) -> T { x }
+        \\fn mk<N: usize>() -> usize { N }
+        \\fn a() -> u8 { keep(nope); 0 }
+        \\fn b() -> usize { mk() }
+        \\fn c() -> u8 { let f: fn(u8, u8) -> u8 = keep; 0 }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ null, "nope" }, .{ .E0372, "mk" }, .{ .E0310, "keep" } });
+}
+
+test "a `move` argument that is not a local is unsupported (T080)" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn take<T>(move x: T) -> u32 { 0 }
+        \\fn mk() -> str { "a" }
+        \\fn demo() -> u32 { take(mk()) }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    try testing.expectEqualStrings("`move` arguments (T080)", f.bodies.unsupported.?.what);
 }
 
 test "bounds are checked at the call: E0329 for `plain`, E0373 for a protocol" {

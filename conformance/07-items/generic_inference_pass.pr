@@ -9,10 +9,17 @@ fn clamp<T: plain>(x: T, hi: T) -> T { if x > hi { hi } else { x } }
 
 fn first<T: plain>(xs: []T) -> T { xs[0] }
 
+struct S {
+    w: u8
+    fn id<T: plain>(x: T) -> T { x }
+}
+
 fn demo(x: f32, xs: []u16) -> f32 {
     let i: i64 = larger(1, 2);
-    let h: f64 = larger(0.5, 2);
-    let s: u16 = first(xs) + clamp(hi: 3, x: xs[1]);
+    let h: f64 = larger(0.5, 2) + larger(2, 0.5);
+    let arr: [4]u16 = [1, 2, 3, 4];
+    let s: u16 = first(xs) + first(arr) + clamp(hi: 3, x: xs[1]);
+    let id: fn(u8) -> u8 = S.id;
     let f: fn(f32, f32) -> f32 = clamp;
     larger(1, x) + f(x, 2.0)
 }

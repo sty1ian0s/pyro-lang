@@ -1,0 +1,9 @@
+// §7.2.5, §4.9.1: a generic function named where an `fn` type of another
+// arity is expected is a type mismatch, not an inference failure.
+
+fn keep<T: plain>(x: T) -> T { x }
+
+fn demo() -> u8 {
+    let f: fn(u8, u8) -> u8 = keep; //~ E0310
+    0
+}

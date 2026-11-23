@@ -412,14 +412,14 @@ pub fn fnValue(c: *Checker, n: Node.Index, ref: Ref, expected: TypeId) Error!Typ
         try c.reportAt(c.ast.mainToken(n), null, &.{"`fn` pointers use the Pyro calling convention; wrap the call in a Pyro function"}, "`extern` function `{s}` cannot be used as a value", .{item.name});
         return .err;
     }
-    if (sig.generics.len > 0) return @import("infer.zig").fnValue(c, n, ref.module, sig, expected);
-    return fnOf(c, n, ref.module, sig);
+    return fnOf(c, n, ref.module, sig, expected);
 }
 
 /// Function `sig` of module `m` (an item or a member function) named at
-/// `n` without a call: an `fn(...) -> R` value (§7.2.5).
-pub fn fnOf(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod.Fn) Error!Typed {
-    if (sig.generics.len > 0) return @import("infer.zig").fnValue(c, n, m, sig, .none);
+/// `n` without a call: an `fn(...) -> R` value (§7.2.5). A generic
+/// function is instantiated for `expected`.
+pub fn fnOf(c: *Checker, n: Node.Index, m: module_graph.ModuleId, sig: items_mod.Fn, expected: TypeId) Error!Typed {
+    if (sig.generics.len > 0) return @import("infer.zig").fnValue(c, n, m, sig, expected);
     const ty = try fnType(c, n, sig) orelse return .err;
     const id = if (sig.instance != .none) try generics.methodFn(c, n, m, sig) orelse return .err else try c.bodies.fnId(m, sig.node, sig.name);
     return .{ .ty = ty, .ref = try c.emit(ty, .{ .fn_ref = .{ .func = id } }) };
