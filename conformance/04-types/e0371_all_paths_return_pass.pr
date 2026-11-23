@@ -1,4 +1,3 @@
-//@ expected-fail: T076
 //@ covers: E0371
 // §7.2.1, §6.11: final expressions, returns on every path, `match` arms and a
 // diverging tail all provide the result.

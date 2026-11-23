@@ -371,7 +371,7 @@ test "check: clean file exits 0 with no output" {
     try testing.expectEqual(Exit.ok, full.exit);
     try testing.expectEqualStrings("", full.stdout.written());
     // A construct the checker does not support yet cannot pass as checked.
-    const later = try writeCase(arena.allocator(), &tmp, "later.pr", "fn main() { for i in 1 {} }\n");
+    const later = try writeCase(arena.allocator(), &tmp, "later.pr", "fn main() { defer {} }\n");
     var inc: Captured = try .init(&.{ "check", "--message-format", "json", later });
     defer inc.deinit();
     try testing.expectEqual(Exit.internal, inc.exit);

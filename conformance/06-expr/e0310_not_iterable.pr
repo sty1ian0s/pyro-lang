@@ -1,0 +1,9 @@
+//@ covers: E0310
+// §6.7.2: the iterable of a `for` loop is a range, an array, a slice, SoA or
+// an `Indexable` type.
+
+fn count(n: u32) -> u32 {
+    let mut t: u32 = 0;
+    for i in n { t += 1; } //~ E0310
+    t
+}

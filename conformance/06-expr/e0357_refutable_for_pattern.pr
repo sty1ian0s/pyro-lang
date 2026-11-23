@@ -1,0 +1,8 @@
+//@ covers: E0357
+// §6.7.2, §3.7: the element pattern of a `for` loop must match every element.
+
+fn total(xs: []Option<u32>) -> u32 {
+    let mut t: u32 = 0;
+    for .some(v) in xs { t += v; } //~ E0357
+    t
+}

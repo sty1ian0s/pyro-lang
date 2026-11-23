@@ -1,5 +1,6 @@
 //! Patterns and binding modes (§3.7, §6.6.2, §6.6.3, §6.2.6, §5.3.3):
-//! `match`, `if let`, `while let`, `guard let` and destructuring `let`.
+//! `match`, `if let`, `while let`, `guard let`, destructuring `let` and
+//! `for` element patterns.
 //!
 //! A pattern is first checked against the type of the value it matches
 //! (E0310, E0306, E0353, E0211, E0212), giving an `exhaustive.Pat`. The
@@ -157,17 +158,31 @@ pub fn letPattern(c: *Checker, s: Node.Index) Error!bool {
     }
     const subj = try subject(c, d.init, decl, false);
     if (subj.value.ty == .noreturn) return true;
+    try irrefutable(c, d.pattern, subj, "let");
+    return false;
+}
+
+/// The element binding `P` of a `for` loop (§6.7.2) that is not a name:
+/// `P` destructures the element at place `elem` (of type `ty`, part of
+/// local `root`) into copies, and must match every value (E0357).
+pub fn forPattern(c: *Checker, pattern: Node.Index, ty: TypeId, elem: tir.Ref, root: tir.Local) Error!void {
+    const mode: Mode = if (try check_stmt.isResource(c, ty)) .view else .copy;
+    try irrefutable(c, pattern, .{ .root = root, .base = elem, .value = .{ .ty = ty }, .mode = mode }, "for");
+}
+
+/// Binds irrefutable pattern `pattern` (of a `let` or `for`, per `what`)
+/// to `subj`, reporting E0357 if it is refutable.
+fn irrefutable(c: *Checker, pattern: Node.Index, subj: Subject, what: []const u8) Error!void {
     var ok = true;
-    const p = try check(c, d.pattern, subj.value.ty, &ok);
+    const p = try check(c, pattern, subj.value.ty, &ok);
     if (ok and subj.value.ty != .err) {
         const miss = try exhaustive.missing(c, &.{p}, subj.value.ty, 4);
         if (miss.len > 0)
-            try c.reportAt(c.ast.mainToken(d.pattern), .E0357, &.{"use `guard let ... else { ... }` or `if let` to handle the other values"}, "refutable pattern in `let`: {s}{s} not covered", .{ try exhaustive.print(c, miss[0..@min(miss.len, 3)]), if (miss.len > 3) " and more" else "" });
+            try c.reportAt(c.ast.mainToken(pattern), .E0357, &.{"use `guard let ... else { ... }` or `if let` to handle the other values"}, "refutable pattern in `{s}`: {s}{s} not covered", .{ what, try exhaustive.print(c, miss[0..@min(miss.len, 3)]), if (miss.len > 3) " and more" else "" });
     }
     // No failure target: an irrefutable pattern without alternatives (§3.7)
     // emits no test, and after E0357 nothing is emitted.
     try bindTest(c, subj, p, .none, false);
-    return false;
 }
 
 /// The common type of the arm values `vals` (§6.6.3), as for `if` (§6.6.1):

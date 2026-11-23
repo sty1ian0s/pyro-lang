@@ -68,10 +68,9 @@ const Elem = union(enum) { type: TypeId, value: items_mod.Value };
 /// element of comptime-known `E`.
 pub fn inlineFor(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
     const d = c.ast.data(n).for_inline;
-    if (d.filter) |f| return c.unsupported(f, "`where` in `inline for` (T076)");
     for ([_]?Node.Index{ d.pattern, d.pattern2 }) |p| if (p) |q| switch (c.ast.kind(q)) {
         .pat_bind, .pat_wildcard => {},
-        else => return c.unsupported(q, "destructuring in `inline for` (T076)"),
+        else => return c.unsupported(q, "destructuring in `inline for`"),
     };
     const elems = try sequence(c, d.iter) orelse {
         c.failed = true;
@@ -95,6 +94,7 @@ pub fn inlineFor(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
         cx.copy = cx.nextCopy();
         try bind(c, d.pattern, e);
         if (d.pattern2) |p| try bind(c, p, .{ .value = .{ .scalar = .{ .type = .usize, .bits = i } } });
+        if (d.filter) |f| try @import("desugar_loops.zig").filter(c, f, next);
         try c.loops.append(c.arena, .{ .label = null, .is_loop = false, .head = next, .exit = exit, .expected = .none });
         const body = try check_expr.check(c, d.body, .void);
         _ = c.loops.pop();
@@ -320,7 +320,7 @@ const Interner = @import("../base/Interner.zig");
 
 /// A package checked up to function bodies with comptime evaluation;
 /// `@compile_log` prints to `log`.
-const Fixture = struct {
+pub const Fixture = struct {
     p: module_graph.TestPackage,
     g: module_graph.Graph,
     im: imports.Imports,
@@ -333,7 +333,7 @@ const Fixture = struct {
     bodies: emit_tir.Bodies,
     log: std.Io.Writer.Allocating,
 
-    fn init(f: *Fixture, source: []const u8) !void {
+    pub fn init(f: *Fixture, source: []const u8) !void {
         f.p = try .init(&.{.{ "a", source }});
         f.g = try f.p.graph(.{ .kind = .exe });
         f.im = try imports.resolve(testing.allocator, &f.p.sink, &f.g, .{});
@@ -349,7 +349,7 @@ const Fixture = struct {
         f.bodies = try emit_tir.checkBodies(testing.allocator, &f.items, &f.protos);
     }
 
-    fn deinit(f: *Fixture) void {
+    pub fn deinit(f: *Fixture) void {
         f.bodies.deinit();
         f.protos.deinit();
         f.items.deinit();
@@ -364,7 +364,7 @@ const Fixture = struct {
     }
 
     /// The diagnostics: code and the source text of the primary span.
-    fn expectDiags(f: *Fixture, want: []const struct { ?diag.DiagCode, []const u8 }) !void {
+    pub fn expectDiags(f: *Fixture, want: []const struct { ?diag.DiagCode, []const u8 }) !void {
         if (f.bodies.unsupported) |u| std.debug.print("unsupported: {s}\n", .{u.what});
         try testing.expect(f.bodies.unsupported == null);
         const ds = f.p.sink.finish();
