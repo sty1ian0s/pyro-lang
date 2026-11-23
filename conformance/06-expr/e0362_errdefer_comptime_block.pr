@@ -1,0 +1,11 @@
+// §6.8.2, §6.9: a `comptime` block is not a function: no `Result` is
+// returned from it, and it has no frame for `return tail` to reuse.
+
+fn f() -> u32 {
+    comptime { return tail f(); } //~ E0363
+    0
+}
+
+comptime {
+    errdefer { } //~ E0362
+}

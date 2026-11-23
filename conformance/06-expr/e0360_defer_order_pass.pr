@@ -1,0 +1,53 @@
+//@ covers: E0360
+// §6.8.1: a `break` to a loop inside a deferred statement stays inside it,
+// so the defers of the enclosing loop body still run once, LIFO.
+// §6.8.2: an `errdefer` runs only when the function returns `.err` through
+// its scope; the normal end of an inner block discards it.
+
+pub enum E { x }
+
+fn order() -> u32 {
+    let mut n: u32 = 1;
+    let mut k: u32 = 0;
+    while k < 1 {
+        k += 1;
+        defer { n += 10; }
+        defer {
+            let mut i: u32 = 0;
+            while i < 3 {
+                if i == 1 { break; }
+                i += 1;
+            }
+            n = n * 2;
+        }
+    }
+    n
+}
+
+fn get() -> Result<u32, E> { .err(.x) }
+
+fn inner(mut acc: u32) -> Result<u32, E> {
+    { errdefer { acc += 100; } }
+    acc += 1;
+    return get();
+}
+
+fn ends(mut acc: u32) -> Result<u32, E> {
+    errdefer { acc += 10; }
+    .err(.x)
+}
+
+fn run() -> u32 {
+    let mut a: u32 = 0;
+    _ = inner(mut a);
+    _ = ends(mut a);
+    a
+}
+
+const N: u32 = order();
+const R: u32 = run();
+
+comptime {
+    if N != 12 { @compile_error("defers ran out of order"); }
+    if R != 11 { @compile_error("an errdefer ran off a return route"); }
+}

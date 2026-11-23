@@ -62,8 +62,13 @@ pub fn block(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     }
     // A `mut T` tail is a view of a place, as for `return` (§5.5.4).
     const view = expected != .none and expected != .err and c.types.get(expected) == .mut_view;
-    const v: Typed = if (d.tail) |t| (if (view) try check_expr.checkAs(c, t, expected) else try check_expr.check(c, t, expected)) else .void_value;
-    if (!diverges and v.ty != .noreturn) try defer_mod.leave(c, c.scope_base);
+    var v: Typed = if (d.tail) |t| (if (view) try check_expr.checkAs(c, t, expected) else try check_expr.check(c, t, expected)) else .void_value;
+    if (!diverges and v.ty != .noreturn) {
+        // The value is complete before the scope ends, so a body's `scope_end`
+        // sits right before its `ret` (an `errdefer` route, `defer.zig`).
+        if (c.scopes.items.len > c.scope_base and expected != .none and v.ty != .void and v.ty != .err) v = try c.coerce(v, expected, valueNode(c.ast, n));
+        try defer_mod.leave(c, c.scope_base);
+    }
     return if (diverges and v.ty != .err) .never else v;
 }
 

@@ -1,0 +1,6 @@
+// §3.5, §6.9: `return tail` without a call is reported once, by the parser,
+// not again by the frame-reuse check (E0363).
+
+fn count(n: u32) -> u32 {
+    return tail n + 1; //~ E0208
+}

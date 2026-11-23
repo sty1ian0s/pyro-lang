@@ -23,9 +23,11 @@
 //! registered body cloned at each `scope_end` of its scope, LIFO, which is
 //! what lowering and the CFG (T079, T089) consume. `errdefer` bodies are
 //! cloned only on an error route, read as the comptime interpreter does
-//! (`interp_ctrl.zig`): the `scope_end`'s block ends in a `ret` of a
-//! `Result` `.err`. When the returned value is not a `variant` instruction
-//! its tag is tested at run time.
+//! (`interp_ctrl.zig`): only further `scope_end`s follow the `scope_end`
+//! before a `ret` of a `Result` `.err` computed before it (a `return`, `?`
+//! or the body's end; the end of an inner block is not a return route).
+//! When the returned value is not a `variant` instruction its tag is tested
+//! at run time.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -77,11 +79,17 @@ pub fn leaveLoop(c: *Checker, loop: *const emit_tir.Loop) Error!void {
 pub fn deferStmt(c: *Checker, s: Node.Index) Error!bool {
     const is_err = c.ast.kind(s) == .@"errdefer";
     const body = if (is_err) c.ast.data(s).@"errdefer".body else c.ast.data(s).@"defer".body;
-    if (is_err and c.sig.ret != .err and !isResult(c.types, c.sig.ret)) {
+    if (is_err and c.sig.ret == .none) {
+        // A `comptime` block: no function returns from it.
+        try c.reportAt(c.ast.mainToken(s), .E0362, &.{"use `defer`"}, "`errdefer` needs a function returning `Result`, but a `comptime` block returns nothing", .{});
+    } else if (is_err and c.sig.ret != .err and !isResult(c.types, c.sig.ret)) {
         try c.reportAt(c.ast.mainToken(s), .E0362, &.{"use `defer`, or return `Result<T, E>`"}, "`errdefer` needs a function returning `Result`, but `{s}` returns `{s}`", .{ c.sig.name, try c.tyName(c.sig.ret) });
     }
     var labels: std.ArrayList([]const u8) = .empty;
-    try contained(c, body, 0, &labels);
+    var reported = false;
+    try contained(c, body, 0, &labels, &reported);
+    // Checking `S` would only add follow-on errors for the routes reported.
+    if (reported) return false;
 
     if (c.scopes.items.len == c.scope_base) {
         try c.scopes.append(c.arena, .{ .begin = try c.emit(.void, .{ .scope_begin = .{} }), .loops = c.loops.items.len });
@@ -90,22 +98,30 @@ pub fn deferStmt(c: *Checker, s: Node.Index) Error!bool {
     const scope = c.scopes.getLast().begin;
     _ = try c.emit(.void, if (is_err) .{ .@"errdefer" = .{ .scope = scope, .body = region } } else .{ .@"defer" = .{ .scope = scope, .body = region } });
     const here = c.b.block;
-    // Outer loops are not targets inside `S` (E0360 above).
+    // Outer loops and scopes are not left from inside `S` (E0360 above):
+    // hide them, so a `break` to a loop of `S` ends only scopes of `S`.
     const loops = c.loops;
+    const scopes = c.scopes;
+    const scope_base = c.scope_base;
     c.loops = .empty;
+    c.scopes = .empty;
+    c.scope_base = 0;
     c.setBlock(region);
     const v = try check_expr.check(c, body, .none);
     try must_use.check(c, body, v.ty);
     _ = try c.emit(.void, .{ .defer_end = .{} });
     c.loops = loops;
+    c.scopes = scopes;
+    c.scope_base = scope_base;
     c.setBlock(here);
     return false;
 }
 
 /// Reports E0360 for each route in `n` (inside a deferred statement, under
 /// `depth` loops of it, whose labels are `labels`) that leaves the
-/// statement, and for each nested `defer`.
-fn contained(c: *Checker, n: Node.Index, depth: u32, labels: *std.ArrayList([]const u8)) Error!void {
+/// statement, and for each nested `defer` (rejected whole: its body is not
+/// walked). Sets `reported` if it reported anything.
+fn contained(c: *Checker, n: Node.Index, depth: u32, labels: *std.ArrayList([]const u8), reported: *bool) Error!void {
     const what: []const u8 = switch (c.ast.kind(n)) {
         .lambda => return, // its own function
         .@"return", .return_tail => "`return`",
@@ -115,34 +131,35 @@ fn contained(c: *Checker, n: Node.Index, depth: u32, labels: *std.ArrayList([]co
             const inside = if (label) |t| for (labels.items) |l| {
                 if (std.mem.eql(u8, l, c.ast.tokenSlice(t))) break true;
             } else false else depth > 0;
-            if (inside) return children(c, n, depth, labels);
+            if (inside) return children(c, n, depth, labels, reported);
             break :blk if (c.ast.kind(n) == .@"break") "`break`" else "`continue`";
         },
         .@"defer", .@"errdefer" => {
-            try c.reportAt(c.ast.mainToken(n), .E0360, &.{"move it out of the deferred statement"}, "a deferred statement cannot register further defers", .{});
-            return children(c, n, depth, labels);
+            reported.* = true;
+            return c.reportAt(c.ast.mainToken(n), .E0360, &.{"move it out of the deferred statement"}, "a deferred statement cannot register further defers", .{});
         },
-        .loop, .@"while", .@"for", .for_inline => return children(c, n, depth + 1, labels),
+        .loop, .@"while", .@"for", .for_inline => return children(c, n, depth + 1, labels, reported),
         .labeled => {
             try labels.append(c.arena, c.ast.tokenSlice(c.ast.mainToken(n)));
             defer _ = labels.pop();
-            return children(c, n, depth, labels);
+            return children(c, n, depth, labels, reported);
         },
-        else => return children(c, n, depth, labels),
+        else => return children(c, n, depth, labels, reported),
     };
+    reported.* = true;
     try c.reportAt(c.ast.mainToken(n), .E0360, &.{"deferred code runs while control already leaves the block; decide before the `defer`"}, "{s} cannot leave a deferred statement", .{what});
-    return children(c, n, depth, labels);
+    return children(c, n, depth, labels, reported);
 }
 
-fn children(c: *Checker, n: Node.Index, depth: u32, labels: *std.ArrayList([]const u8)) Error!void {
+fn children(c: *Checker, n: Node.Index, depth: u32, labels: *std.ArrayList([]const u8), reported: *bool) Error!void {
     switch (c.ast.data(n)) {
         inline else => |p| inline for (@typeInfo(@TypeOf(p)).@"struct".field_names) |name| {
             const v = @field(p, name);
             switch (@TypeOf(v)) {
-                Node.Index => try contained(c, v, depth, labels),
-                ?Node.Index => if (v) |x| try contained(c, x, depth, labels),
-                []const Node.Index => for (v) |x| try contained(c, x, depth, labels),
-                ?[]const Node.Index => if (v) |xs| for (xs) |x| try contained(c, x, depth, labels),
+                Node.Index => try contained(c, v, depth, labels, reported),
+                ?Node.Index => if (v) |x| try contained(c, x, depth, labels, reported),
+                []const Node.Index => for (v) |x| try contained(c, x, depth, labels, reported),
+                ?[]const Node.Index => if (v) |xs| for (xs) |x| try contained(c, x, depth, labels, reported),
                 else => {}, // token slots
             }
         },
@@ -160,13 +177,22 @@ fn isResult(types: *Types, ty: Types.TypeId) bool {
 pub fn returnTail(c: *Checker, s: Node.Index) Error!bool {
     const call = c.ast.data(s).return_tail.call;
     const ret = c.sig.ret;
+    if (c.ast.kind(call) != .call) {
+        c.failed = true; // E0208 (parser)
+        return true;
+    }
+    const at = c.ast.mainToken(s);
+    if (ret == .none) {
+        _ = try check_expr.check(c, call, .none);
+        try c.reportAt(at, .E0363, &.{"call the function outside the `comptime` block"}, "`return tail` needs a function frame to reuse, but a `comptime` block has none", .{});
+        return true;
+    }
     const v = try check_expr.check(c, call, ret);
     if (v.ty == .err or v.ty == .noreturn or ret == .err) return true;
     if (v.ty != ret) {
         try c.reportAt(@import("check_stmt.zig").firstToken(c.ast, call), .E0310, &.{"`return tail` needs a callee returning exactly the function's type"}, "mismatched types: expected `{s}`, found `{s}`", .{ try c.tyName(ret), try c.tyName(v.ty) });
         return true;
     }
-    const at = c.ast.mainToken(s);
     if (c.scopes.items.len > 0) {
         try c.reportAt(at, .E0363, &.{"drop the `tail`, or run the deferred code before the call"}, "`return tail` cannot reuse the frame: a `defer` or `errdefer` is pending", .{});
         return true;
@@ -291,8 +317,8 @@ const Expander = struct {
         var pending: std.ArrayList(Pending) = .empty;
         try pending.appendSlice(x.b.arena, entry);
         x.b.setBlock(x.heads[old.int()]);
-        const term = x.f.data(x.f.terminator(old));
-        for (x.f.blockInsts(old)) |r| switch (x.f.data(r)) {
+        const insts = x.f.blockInsts(old);
+        for (insts, 0..) |r, i| switch (x.f.data(r)) {
             .@"defer" => |d| try pending.append(x.b.arena, .{ .scope = d.scope, .body = d.body, .err_only = false }),
             .@"errdefer" => |d| try pending.append(x.b.arena, .{ .scope = d.scope, .body = d.body, .err_only = true }),
             .scope_end => |d| {
@@ -301,7 +327,7 @@ const Expander = struct {
                     const p = pending.pop().?;
                     if (!p.err_only) {
                         try x.run(p.body);
-                    } else if (term == .ret) if (term.ret.value) |v| switch (x.f.data(v)) {
+                    } else if (returned(x.f, insts[i + 1 ..])) |v| switch (x.f.data(v)) {
                         .variant => |vr| if (vr.variant == 1) try x.run(p.body),
                         else => try x.runIfErr(v, p.body),
                     };
@@ -309,6 +335,19 @@ const Expander = struct {
             },
             else => try x.copy(r, pending.items),
         };
+    }
+
+    /// The value returned by `rest`, the instructions after a `scope_end`,
+    /// if they are only further `scope_end`s and a `ret` of a computed
+    /// value: a return route (`return`, `?`, the body's end). The end of an
+    /// inner block followed by more code is not one.
+    fn returned(f: *const tir.Func, rest: []const Ref) ?Ref {
+        for (rest) |r| switch (f.data(r)) {
+            .scope_end => {},
+            .ret => |d| return d.value,
+            else => return null,
+        };
+        return null;
     }
 
     /// Clones body region `body` at the insertion point, then continues
@@ -455,9 +494,9 @@ test "every exit ends the scope; expansion runs the defer there" {
         \\b3:
         \\  br b4, []
         \\b4:
+        \\  %12: u32 = int 0
         \\  scope_end %0
-        \\  %13: u32 = int 0
-        \\  ret %13
+        \\  ret %12
         \\}
         \\
     );
@@ -475,14 +514,14 @@ test "every exit ends the scope; expansion runs the defer there" {
         \\b2:
         \\  br b3, []
         \\b3:
+        \\  %5: u32 = int 0
         \\  scope_end %0
         \\  br b5, []
         \\b4:
-        \\  %10: u32 = int 0
-        \\  ret %10
+        \\  ret %5
         \\b5:
-        \\  %7: u32 = int 1
-        \\  call @0, [%7]
+        \\  %8: u32 = int 1
+        \\  call @0, [%8]
         \\  br b4, []
         \\b6:
         \\  ret %12
@@ -640,11 +679,12 @@ test "E0360, E0362, E0363" {
         \\fn b() -> u32 { errdefer log(); 0 }
         \\fn c(n: u32) -> u32 {
         \\    let mut k = n;
-        \\    return tail c(k);
+        \\    return tail c(k); // fine: `k` is passed by value
         \\}
         \\fn d(mut k: u32) -> u32 { return tail d(mut k); }
         \\fn e(mut k: u32) -> u32 { let mut j: u32 = 0; return tail d(mut j); }
         \\fn g(n: u32) -> u64 { return tail c(n); }
+        \\fn p(n: u32) -> u32 { defer log(); return tail p(n); }
     );
     defer f.deinit();
     try f.expectDiags(&.{
@@ -653,5 +693,74 @@ test "E0360, E0362, E0363" {
         .{ .E0362, "errdefer" },
         .{ .E0363, "return" },
         .{ .E0310, "c" },
+        .{ .E0363, "return" },
     });
+}
+
+test "one diagnostic per rejected route in a deferred statement" {
+    var f: emit_tir.Fixture = undefined;
+    try f.init(
+        \\fn r() -> Result<u32, u32> { .ok(1) }
+        \\fn a() { defer { defer { return; } } }
+        \\fn b() { defer { defer { defer { } } } }
+        \\fn c() -> u32 { defer { return; } 0 }
+        \\fn d() { defer { return 5; } }
+        \\fn e() -> Result<u32, u32> { defer { let x = r()?; } .ok(0) }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{
+        .{ .E0360, "defer" },
+        .{ .E0360, "defer" },
+        .{ .E0360, "return" },
+        .{ .E0360, "return" },
+        .{ .E0360, "?" },
+    });
+}
+
+test "a `break` inside a deferred statement ends only scopes of the statement" {
+    var f: emit_tir.Fixture = undefined;
+    try f.init(
+        \\fn log(x: u32) {}
+        \\fn a(xs: []u32) { for x in xs { defer log(1); defer { for y in xs { break; } } } }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    const func = try f.func("a");
+    // Only the loop body's own end; none inside the second defer's region.
+    try testing.expectEqual(1, count(func, .scope_end));
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const e = try expand(arena.allocator(), func);
+    try testing.expectEqual(1, count(&e, .scope_end));
+    try testing.expectEqual(1, count(&e, .call));
+}
+
+test "the end of an inner block is not an error route" {
+    var f: emit_tir.Fixture = undefined;
+    try f.init(
+        \\pub enum E { x }
+        \\fn log(x: u32) {}
+        \\fn get() -> Result<u32, E> { .err(.x) }
+        \\fn call() -> Result<u32, E> { { errdefer log(100); } return get(); }
+        \\fn konst() -> Result<u32, E> { { errdefer log(100); } log(2); .err(.x) }
+        \\fn body() -> Result<u32, E> { errdefer log(100); .err(.x) }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    // The inner errdefers are discarded: only `get` and `log(2)` are called.
+    try expectExpanded(&f, "call",
+        \\fn call() -> Result<u32, E> {
+        \\b0:
+        \\  %0 = scope_begin
+        \\  scope_end %0
+        \\  %2: Result<u32, E> = call @1, []
+        \\  ret %2
+        \\}
+        \\
+    );
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectEqual(1, count(&try expand(arena.allocator(), try f.func("konst")), .call));
+    // The body's end returns its `.err` through the scope: it runs.
+    try testing.expectEqual(1, count(&try expand(arena.allocator(), try f.func("body")), .call));
 }
