@@ -1,0 +1,14 @@
+// §7.6.1, §7.5.2: a type argument of a generic struct must satisfy the
+// protocol bounds of its parameter.
+
+pub protocol Shape {
+    fn area(self) -> f32;
+}
+
+struct Label { w: f32 }
+
+struct Bag<T: Shape> { x: T }
+
+fn width(b: Bag<Label>) -> f32 { //~ E0373
+    b.x.w
+}

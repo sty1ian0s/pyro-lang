@@ -33,6 +33,7 @@ const check_stmt = @import("check_stmt.zig");
 const check_call = @import("check_call.zig");
 const check_literals = @import("check_literals.zig");
 const check_index = @import("check_index.zig");
+const generics = @import("generics.zig");
 const mutability = @import("mutability.zig");
 const prelude = @import("../resolve/prelude.zig");
 const ModuleId = @import("../resolve/module_graph.zig").ModuleId;
@@ -151,8 +152,8 @@ fn field(c: *Checker, n: Node.Index, ty: TypeId, access: mutability.Access) Erro
         .nominal => |nm| if (nm.kind == .protocol) {
             c.failed = true; // a protocol as a type is E0375
             return null;
-        } else if (nm.args.len > 0 and c.items.structOf(ty) != null) {
-            _ = c.unsupported(n, "fields of generic struct instances (T068)");
+        } else if (nm.args.len > 0 and if (c.items.structOf(ty)) |s| s.generics.len > 0 else false) {
+            _ = c.unsupported(n, "fields of generic struct instances (T070)");
             return null;
         } else if (c.items.declRef(ty) == null and nm.kind == .@"struct") {
             _ = c.unsupported(n, "fields of standard library types (T163)");
@@ -200,6 +201,7 @@ fn isColumns(c: *Checker, ty: TypeId) bool {
 pub fn typePath(c: *Checker, lhs: Node.Index) Error!?TypeId {
     switch (c.ast.kind(lhs)) {
         .self_type => return if (c.self_ty == .none) null else c.self_ty,
+        .call => return generics.applied(c, lhs),
         .ident, .field_access => {},
         else => return null,
     }
@@ -243,12 +245,12 @@ fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]
         _ = c.unsupported(fa, if (nm.lang == .option or nm.lang == .result) "members of `Option` and `Result` (T105)" else "members of standard library types (T163)");
         return failed(c, args);
     };
-    const generics: []const TypeId, const consts: []const items_mod.Const, const methods: []const items_mod.Fn = switch ((try c.items.info(ref)).*) {
+    const type_generics: []const TypeId, const consts: []const items_mod.Const, const methods: []const items_mod.Fn = switch ((try generics.infoOf(c.items, ty, ref)).*) {
         .@"struct" => |s| .{ s.generics, s.consts, s.methods },
         .@"enum" => |e| blk: {
             for (e.variants, 0..) |v, i| if (std.mem.eql(u8, v.name, name)) {
                 if (e.generics.len > 0) {
-                    _ = c.unsupported(fa, "variants of generic enums (T064)");
+                    _ = c.unsupported(fa, "variants of generic enums (T070)");
                     return failed(c, args);
                 }
                 return check_literals.variant(c, at, name, ty, @intCast(i), v.payload, args);
@@ -257,8 +259,8 @@ fn typeMember(c: *Checker, fa: Node.Index, at: Node.Index, ty: TypeId, args: ?[]
         },
         else => .{ &.{}, &.{}, &.{} },
     };
-    if (generics.len > 0) {
-        _ = c.unsupported(fa, "members of generic types (T068)");
+    if (type_generics.len > 0) {
+        _ = c.unsupported(fa, "members of generic types (T070)");
         return failed(c, args);
     }
     // Members are visible subject to their own `pub` (§7.9).
@@ -373,13 +375,13 @@ fn resolve(c: *Checker, fa: Node.Index, ty: TypeId) Error!?Callee {
     }
     // 1. A function member of the type, or of a visible protocol impl (§7.9).
     if (c.items.declRef(ty)) |ref| {
-        const generics: []const TypeId, const methods: []const items_mod.Fn = switch ((try c.items.info(ref)).*) {
+        const type_generics: []const TypeId, const methods: []const items_mod.Fn = switch ((try generics.infoOf(c.items, ty, ref)).*) {
             .@"struct" => |s| .{ s.generics, s.methods },
             .@"enum" => |e| .{ e.generics, e.methods },
             else => .{ &.{}, &.{} },
         };
         for (methods) |f| if (std.mem.eql(u8, f.name, name)) {
-            if (generics.len > 0) return unsupported(c, fa, "methods of generic types (T068)");
+            if (type_generics.len > 0) return unsupported(c, fa, "methods of generic types (T070)");
             if (ref.module != c.m and !f.is_pub) {
                 _ = try private(c, fa, "method", name, ty, null);
                 return null;

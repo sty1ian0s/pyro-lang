@@ -1,4 +1,3 @@
-//@ expected-fail: T064
 //@ covers: E0329
 // §7.6.1: plain types satisfy `plain`: primitives, vectors, plain structs.
 
@@ -9,9 +8,7 @@ type Ids = List<u32>;
 type Lanes = Pair<vec4<f32>>;
 type Points = Pair<Point>;
 
-fn keep<T: plain>(x: T) -> T { x }
-
-fn origin_x() -> f32 {
-    let p = keep(Point { x: 1.0, y: 2.0 });
-    p.x
+fn origin_x(ps: Points) -> f32 {
+    let p = ps.a;
+    p.x + ps.b.y
 }

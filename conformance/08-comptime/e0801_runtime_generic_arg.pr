@@ -1,0 +1,5 @@
+// §7.6.1: a generic value argument must be comptime-known.
+
+struct Buf<N: usize> { bytes: [N]u8 }
+
+fn fill(n: usize, b: Buf<n>) {} //~ E0801

@@ -1,0 +1,12 @@
+//@ expected-fail: T068
+//@ covers: E0329
+// §7.6.1: the `plain` parameter of a generic function accepts a plain struct.
+
+struct Point { x: f32, y: f32 }
+
+fn keep<T: plain>(x: T) -> T { x }
+
+fn origin_x() -> f32 {
+    let p = keep(Point { x: 1.0, y: 2.0 });
+    p.x
+}

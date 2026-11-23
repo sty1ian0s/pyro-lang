@@ -1,6 +1,5 @@
-//@ expected-fail: T064
-// §7.6.1, §14.4: `T: plain` rejects resource and view types; the standard
-// containers declare their element type `plain`.
+// §7.6.1, §14.4: `T: plain` rejects resource, view and shared-cell types; the
+// standard containers declare their element type `plain`.
 
 @resource
 pub struct File {
@@ -13,11 +12,8 @@ pub struct File {
 struct Pair<T: plain> { pub mut a: T, pub mut b: T }
 
 type Files = List<File>; //~ E0329
+type FilePair = Pair<File>; //~ E0329
 type Names = Pair<str>; //~ E0329
+type Counters = List<Atomic<u32>>; //~ E0329
 
-fn keep<T: plain>(x: T) -> T { x }
-
-fn name_len() -> usize {
-    let n = keep("orc"); //~ E0329
-    3
-}
+fn sum(p: Pair<u32>) -> u32 { p.a + p.b }

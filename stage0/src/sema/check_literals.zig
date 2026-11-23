@@ -89,7 +89,7 @@ pub fn structLit(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
 /// The struct declared by `ty` of this package, if it is one.
 fn structDecl(c: *Checker, ty: TypeId) Error!?*const items_mod.Struct {
     const ref = c.items.declRef(ty) orelse return null;
-    return switch ((try c.items.info(ref)).*) {
+    return switch ((try @import("generics.zig").infoOf(c.items, ty, ref)).*) {
         .@"struct" => |*s| s,
         else => null,
     };
@@ -105,7 +105,7 @@ fn construct(c: *Checker, at: Node.Index, ty: TypeId, inits: []const Node.Index)
         try c.report(at, .E0310, "`{s}` is not a struct and cannot be built from fields", .{try c.tyName(ty)});
         return checkAlone(c, inits);
     };
-    if (s.generics.len > 0) return c.unsupported(at, "generic struct literals (T068)");
+    if (s.generics.len > 0) return c.unsupported(at, "generic struct literals (T070)");
     const outside = c.items.declRef(ty).?.module != c.m;
     if (outside) for (s.fields) |f| if (f.vis != .pub_mut and f.default == null) {
         try c.report(at, .E0352, "`{s}` cannot be constructed outside its module: field `{s}` is not `pub mut` and has no default", .{ try c.tyName(ty), f.name });
@@ -383,11 +383,11 @@ fn lookup(c: *Checker, at: Node.Index, name: []const u8, args: ?[]const Node.Ind
         return null;
     }
     const ref = c.items.declRef(ty) orelse return c.unsupported(at, "members of standard library types (T163)");
-    const consts: []const items_mod.Const, const methods: []const items_mod.Fn = switch ((try c.items.info(ref)).*) {
+    const consts: []const items_mod.Const, const methods: []const items_mod.Fn = switch ((try @import("generics.zig").infoOf(c.items, ty, ref)).*) {
         .@"struct" => |s| .{ s.consts, s.methods },
         .@"enum" => |e| blk: {
             for (e.variants, 0..) |v, i| if (std.mem.eql(u8, v.name, name)) {
-                if (e.generics.len > 0) return c.unsupported(at, "variants of generic enums (T064)");
+                if (e.generics.len > 0) return c.unsupported(at, "variants of generic enums (T070)");
                 return try variant(c, at, name, ty, @intCast(i), v.payload, args);
             };
             break :blk .{ e.consts, e.methods };

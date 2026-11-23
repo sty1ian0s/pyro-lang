@@ -1,0 +1,23 @@
+// §7.6.1, §7.6.2: field defaults and associated consts of a generic
+// declaration may use its value parameters; each instance evaluates them
+// with its own arguments.
+
+pub struct Ring<T, CAP: usize> {
+    items: [CAP]T,
+    len: usize = CAP,
+
+    const MASK: usize = CAP - 1;
+    pub fn slot(self, i: usize) -> T { self.items[i & Self.MASK] }
+}
+
+pub enum Level<N: usize> { low, high, const TOP: usize = N + 1; }
+
+type Ring8 = Ring<u8, 8>;
+type Level3 = Level<3>;
+
+fn demo() -> usize {
+    let r: Ring8 = .{ items: [0; 8], .. };
+    let masks: [Ring8.MASK]u8 = [0; 7];
+    let tops: [Level3.TOP]u8 = [0; 4];
+    r.len + (r.slot(9) + masks[6] + tops[3]) as usize
+}
