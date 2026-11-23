@@ -306,6 +306,7 @@ fn parsePrimary(p: *Parser, ctx: Ctx) Error!Node.Index {
         },
         .pipe, .pipe_pipe => return parseLambda(p, ctx),
         .kw_struct => return items.parseAnonStruct(p),
+        .kw_enum => return p.fail("anonymous `enum` expressions are reserved for a future edition (§8.3.1)"),
         .l_brace, .kw_if, .kw_match, .kw_loop, .kw_unsafe, .kw_comptime => return parseBlockExpr(p),
         else => return p.failExpected("an expression"),
     }
@@ -890,4 +891,8 @@ test "malformed expressions report one error" {
     try types.testFail(parseExpr, "match a { 1 => 2 3 => 4 }", "expected `,` or `}`, found `3`");
     try types.testFail(parseExpr, "|x x", "expected `|`, found `x`");
     try types.testFail(parseExpr, "if a", "expected `{`, found end of file");
+}
+
+test "§8.3.1: anonymous `enum` expressions are rejected" {
+    try types.testFail(parseExpr, "enum { red, green }", "anonymous `enum` expressions are reserved for a future edition (§8.3.1)");
 }

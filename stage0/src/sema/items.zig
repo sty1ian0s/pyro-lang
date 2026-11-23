@@ -46,6 +46,7 @@ const type_kinds = @import("kinds.zig");
 const layout_soa = @import("layout_soa.zig");
 const tir = @import("../tir/tir.zig");
 const instantiate = @import("../comptime/instantiate.zig");
+const typefn = @import("../comptime/typefn.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -271,6 +272,9 @@ pub const Items = struct {
     /// The instantiation whose body or signature is being checked, if any:
     /// its `comptime` parameters are bound to values (§8.2).
     instance: ?*const instantiate.Frame = null,
+    /// The struct types made by `struct { ... }` expressions, owned by
+    /// `comptime/typefn.zig` (arena-backed).
+    generated: typefn.Table = .empty,
 
     pub fn deinit(it: *Items) void {
         const gpa = it.arena.child_allocator;
@@ -585,6 +589,8 @@ pub const Items = struct {
                     if (c.type == .err) return .err;
                 },
                 .pat_bind => if (it.mods[m].bound.get(l)) |t| return t,
+                // A `comptime T: type` parameter of a type function instance (§8.3.1).
+                .param => if (instantiate.boundValue(it, m, l)) |v| if (v == .type) return v.type,
                 else => {},
             },
             .global => |t| switch (t) {

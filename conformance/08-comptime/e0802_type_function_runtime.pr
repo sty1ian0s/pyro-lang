@@ -1,0 +1,18 @@
+// §8.3, §8.3.1: values of type `type` exist only at comptime, so a type
+// function cannot be called, nor a type used as a value, in runtime code.
+
+struct Monster { health: f32, threat: u32 }
+
+fn Pool(comptime T: type, comptime CAP: usize) -> type {
+    struct { items: [CAP]T, len: usize = 0 }
+}
+
+const ELEM: type = Monster;
+
+fn leak_call() {
+    let p = Pool(Monster, 4); //~ E0802
+}
+
+fn leak_type() {
+    let t = ELEM; //~ E0802
+}

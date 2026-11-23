@@ -158,6 +158,10 @@ pub const Nominal = struct {
     lang: Lang = .none,
     /// For `.distinct`: the type it wraps (§4.7). `.none` otherwise.
     underlying: TypeId = .none,
+    /// A type made by a comptime type function (§8.3.2): `name` is its
+    /// whole name (`SortedSoA(Monster, 512)`) and `args` only identify it,
+    /// so `print` leaves them out (`comptime/typefn.zig`).
+    generated: bool = false,
 };
 
 /// A generic type parameter (or protocol `Self`) of declaration `owner`, as
@@ -418,7 +422,7 @@ pub fn print(t: *Types, w: *Writer, id: TypeId, opts: PrintOptions) Writer.Error
                 try w.writeByte('.');
             }
             try w.writeAll(t.strings.get(n.name));
-            if (n.args.len == 0) return;
+            if (n.args.len == 0 or n.generated) return;
             try w.writeByte('<');
             for (n.args, 0..) |arg, i| {
                 if (i > 0) try w.writeAll(", ");

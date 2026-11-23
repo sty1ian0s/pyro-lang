@@ -26,7 +26,8 @@
 //!   structural equality.
 //! - `Memo.find(key)` returns the instance's `Id`; `Memo.add(gpa, key,
 //!   result)` adds one (the key's arguments must outlive the table: use the
-//!   `Items` arena); `Memo.get(id)` its `Result`, updatable in place.
+//!   `Items` arena); `Memo.get(id)` its `Result`, updatable in place;
+//!   `Memo.keyOf(id)` its `Key` (`mangle.zig` names instances from it).
 //! - `Result`: `.func` (a function instance: its TIR id and instantiated
 //!   signature), `.type` (a type instance), or `.failed` (a failed
 //!   instance: later uses report nothing more).
@@ -97,6 +98,8 @@ pub const Result = union(enum) {
 pub const Memo = struct {
     map: std.HashMapUnmanaged(Key, Id, KeyContext, std.hash_map.default_max_load_percentage) = .empty,
     results: std.ArrayList(Result) = .empty,
+    /// The key of each instance, by `Id`.
+    keys: std.ArrayList(Key) = .empty,
 
     /// The instance of `key`, if there is one.
     pub fn find(memo: *const Memo, key: Key) ?Id {
@@ -107,6 +110,7 @@ pub const Memo = struct {
     pub fn add(memo: *Memo, gpa: Allocator, key: Key, result: Result) Error!Id {
         const id: Id = @intCast(memo.results.items.len);
         try memo.results.append(gpa, result);
+        try memo.keys.append(gpa, key);
         try memo.map.putNoClobber(gpa, key, id);
         return id;
     }
@@ -114,6 +118,11 @@ pub const Memo = struct {
     /// The result of instance `id`.
     pub fn get(memo: *Memo, id: Id) *Result {
         return &memo.results.items[id];
+    }
+
+    /// The key of instance `id`.
+    pub fn keyOf(memo: *const Memo, id: Id) Key {
+        return memo.keys.items[id];
     }
 
     /// The number of instances.
@@ -211,7 +220,8 @@ pub fn instance(c: *Checker, n: Node.Index, m: ModuleId, sig: items_mod.Fn, skip
     const own = sig.params[skip..];
     for (own, 0..) |p, i| {
         if (p.mode != .@"comptime") continue;
-        if (p.type == .type) {
+        // A type function (§8.3.1) takes types; other functions wait for T068.
+        if (p.type == .type and sig.ret != .type) {
             _ = c.unsupported(n, "`comptime` type parameters (T068)");
             return null;
         }

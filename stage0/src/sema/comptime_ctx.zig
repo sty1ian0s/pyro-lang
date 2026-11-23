@@ -350,7 +350,7 @@ pub fn expr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     return switch (v) {
         .scalar => |s| c.constant(s),
         .computed => |cv| use(c, n, cv),
-        .type => c.unsupported(n, "types as values (T065)"),
+        .type => |t| @import("../comptime/typefn.zig").typeValue(c, n, t),
         .untyped, .unknown => unreachable, // evaluation gives typed values
     };
 }

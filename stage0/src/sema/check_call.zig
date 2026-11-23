@@ -65,7 +65,8 @@ pub fn call(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const d = c.ast.data(n).call;
     switch (c.ast.kind(d.callee)) {
         .inferred_member => return check_literals.inferredCall(c, n, expected),
-        .ident, .field_access => {
+        // A `path` callee is a type function call in a type (`SortedSoA(T, 4)`, §8.3.1).
+        .ident, .field_access, .path => {
             // A `field_access` is a module member (`geo.area`) or a method.
             const e = c.items.names.get(c.m, d.callee) orelse
                 return if (c.ast.kind(d.callee) == .field_access) check_member.call(c, n, expected) else failedCall(c, d);
@@ -91,8 +92,10 @@ pub fn call(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
 fn direct(c: *Checker, n: Node.Index, d: @FieldType(Ast.Data, "call"), ref: Ref) Error!Typed {
     const sig = switch ((try c.items.info(ref)).*) {
         .@"fn" => |f| f,
-        else => return c.unsupported(n, "calls of this form (T046, T065)"),
+        else => return c.unsupported(n, "calls of this form (T046)"),
     };
+    // A type function is called at comptime only (§8.3).
+    if (sig.ret == .type and !try @import("../comptime/typefn.zig").checkCall(c, n)) return .err;
     const item = c.items.im.graph.modules[ref.module].items[ref.item];
     if (item.kind == .extern_fn) try unsafe.callee(c, d.callee, c.items.im.graph.modules[ref.module].ast, sig, true);
     return callFn(c, n, ref.module, sig, null, d.args);
@@ -327,7 +330,7 @@ fn defaultArg(c: *Checker, n: Node.Index, v: items_mod.Value, ty: TypeId) Error!
     return switch (v) {
         .untyped => |k| c.constTo(k, ty, n),
         .scalar => |s| c.constant(s),
-        .type => c.unsupported(n, "types as values (T065)"),
+        .type => |t| @import("../comptime/typefn.zig").typeValue(c, n, t),
         .computed => |cv| @import("comptime_ctx.zig").use(c, n, cv),
         .unknown => if (ty == .err) blk: {
             c.failed = true; // reported with the default

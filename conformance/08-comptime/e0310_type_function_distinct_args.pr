@@ -1,0 +1,10 @@
+// §8.3.1, §8.3.2: distinct arguments give distinct types, named `F(args)`
+// in diagnostics ("expected `Ring(u32, 64)`, found `Ring(u32, -64)`").
+
+fn Ring(comptime T: type, comptime N: i32) -> type {
+    struct { slots: [4]T, len: i32 = N }
+}
+
+fn swap(r: Ring(u32, -64)) -> Ring(u32, 64) {
+    r //~ E0310
+}

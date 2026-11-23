@@ -32,6 +32,7 @@ const comptime_flow = @import("comptime_flow.zig");
 const tir = @import("../tir/tir.zig");
 const interp_expr = @import("../comptime/interp_expr.zig");
 const instantiate = @import("../comptime/instantiate.zig");
+const typefn = @import("../comptime/typefn.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
 const Node = Ast.Node;
@@ -80,6 +81,7 @@ const handlers = blk: {
         .{ .comptime_block, comptime_ctx.expr },
         .{ .comptime_if, comptime_flow.comptimeIf },
         .{ .for_inline, comptime_flow.inlineFor },
+        .{ .anon_struct, typefn.anonStruct },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -195,7 +197,7 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
                 return switch (item.kind) {
                     .@"const" => constValue(c, n, try c.items.constValue(ref.module, item.node, .none)),
                     .@"fn", .extern_fn => check_call.fnValue(c, n, ref),
-                    else => c.unsupported(n, "types as values (T065)"),
+                    else => typefn.typeValue(c, n, try c.items.resolveType(c.m, n, c.self_ty)),
                 };
             },
             // Already reported (the check fails anyway), or from a module a
@@ -216,7 +218,7 @@ pub fn constValue(c: *Checker, n: Node.Index, k: items_mod.Const) Error!Typed {
     return switch (k.value) {
         .untyped => |u| .{ .ty = u.typeOf(), .konst = u },
         .scalar => |s| c.constant(s),
-        .type => c.unsupported(n, "types as values (T065)"),
+        .type => |t| typefn.typeValue(c, n, t),
         .computed => |cv| comptime_ctx.use(c, n, cv),
         .unknown => if (k.type == .err) blk: {
             c.failed = true; // reported with the const
