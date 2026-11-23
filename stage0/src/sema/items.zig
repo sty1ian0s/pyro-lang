@@ -46,6 +46,7 @@ const type_kinds = @import("kinds.zig");
 const layout_soa = @import("layout_soa.zig");
 const tir = @import("../tir/tir.zig");
 const instantiate = @import("../comptime/instantiate.zig");
+const typefn = @import("../comptime/typefn.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -271,6 +272,9 @@ pub const Items = struct {
     /// The instantiation whose body or signature is being checked, if any:
     /// its `comptime` parameters are bound to values (§8.2).
     instance: ?*const instantiate.Frame = null,
+    /// The struct types made by `struct { ... }` expressions, owned by
+    /// `comptime/typefn.zig` (arena-backed).
+    generated: typefn.Table = .empty,
 
     pub fn deinit(it: *Items) void {
         const gpa = it.arena.child_allocator;
@@ -585,6 +589,8 @@ pub const Items = struct {
                     if (c.type == .err) return .err;
                 },
                 .pat_bind => if (it.mods[m].bound.get(l)) |t| return t,
+                // A `comptime T: type` parameter of a type function instance (§8.3.1).
+                .param => if (instantiate.boundValue(it, m, l)) |v| if (v == .type) return v.type,
                 else => {},
             },
             .global => |t| switch (t) {
@@ -764,6 +770,10 @@ pub const Items = struct {
             .ret = if (d.ret) |r| try it.resolveType(m, r, self_ty) else .void,
             .attrs = it.attrsOf(m, n),
         };
+        // A type function is called at comptime only (§8.3.1): every argument is a comptime argument.
+        if (f.ret == .type) for (params) |*p| if (p.mode == .value and !p.is_self) {
+            p.mode = .@"comptime";
+        };
         try it.mods[m].fns.put(it.alloc(), n, f);
         return f;
     }
@@ -840,6 +850,7 @@ pub const Items = struct {
             try it.report(m, if (d.ty) |t| typeToken(a, t) else name_tok, .E0341, &.{"a `const` must be plain, `str`, an array or slice of plain values, or comptime-only (§5.9)"}, "invalid type for a `const`: `{s}`", .{try it.tyName(ty)});
         }
         const c: Const = .{ .node = n, .name = identText(a, name_tok), .is_pub = isPub(a, a.mainToken(n)), .type = ty, .value = v };
+        if (v == .type) try typefn.alias(it, v.type, c.name);
         it.mods[m].consts.getPtr(key).?.* = .{ .state = .done, .c = c };
         return c;
     }

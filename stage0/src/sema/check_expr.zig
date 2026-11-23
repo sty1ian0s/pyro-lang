@@ -34,6 +34,7 @@ const desugar_loops = @import("desugar_loops.zig");
 const tir = @import("../tir/tir.zig");
 const interp_expr = @import("../comptime/interp_expr.zig");
 const instantiate = @import("../comptime/instantiate.zig");
+const typefn = @import("../comptime/typefn.zig");
 const TokenKind = @import("../lex/token.zig").TokenKind;
 
 const Node = Ast.Node;
@@ -85,6 +86,15 @@ const handlers = blk: {
         .{ .try_op, desugar_misc.tryOp },
         .{ .array_comp, desugar_misc.arrayComp },
         .{ .@"for", desugar_loops.forExpr },
+        .{ .anon_struct, typefn.anonStruct },
+        .{ .array_type, typefn.typeExpr },
+        .{ .slice_type, typefn.typeExpr },
+        .{ .soa_array_type, typefn.typeExpr },
+        .{ .soa_slice_type, typefn.typeExpr },
+        .{ .ptr_type, typefn.typeExpr },
+        .{ .ptr_const_type, typefn.typeExpr },
+        .{ .fn_type, typefn.typeExpr },
+        .{ .generic_inst, typefn.typeExpr },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -198,13 +208,13 @@ pub fn ident(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
                 return switch (item.kind) {
                     .@"const" => constValue(c, n, try c.items.constValue(ref.module, item.node, .none)),
                     .@"fn", .extern_fn => check_call.fnValue(c, n, ref),
-                    else => c.unsupported(n, "types as values (T065)"),
+                    else => typefn.typeValue(c, n, try c.items.resolveType(c.m, n, c.self_ty)),
                 };
             },
             // Already reported (the check fails anyway), or from a module a
             // single-file check did not load: not shown valid either way.
             .unresolved => return c.unsupported(n, "names from modules not loaded (multi-file check)"),
-            .prelude => return c.unsupported(n, "prelude functions and values (T105)"),
+            .prelude => |name| return if (typefn.isPrimitive(name)) typefn.typeExpr(c, n, .none) else c.unsupported(n, "prelude functions and values (T105)"),
             .external => return c.unsupported(n, "standard library items (T163)"),
             .module => {
                 try c.report(n, .E0310, "module `{s}` is not a value", .{c.ast.tokenSlice(c.ast.mainToken(n))});
@@ -219,7 +229,7 @@ pub fn constValue(c: *Checker, n: Node.Index, k: items_mod.Const) Error!Typed {
     return switch (k.value) {
         .untyped => |u| .{ .ty = u.typeOf(), .konst = u },
         .scalar => |s| c.constant(s),
-        .type => c.unsupported(n, "types as values (T065)"),
+        .type => |t| typefn.typeValue(c, n, t),
         .computed => |cv| comptime_ctx.use(c, n, cv),
         .unknown => if (k.type == .err) blk: {
             c.failed = true; // reported with the const

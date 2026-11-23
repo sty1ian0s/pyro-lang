@@ -1,0 +1,29 @@
+//@ covers: E0802
+// §8.3, §8.3.1, §8.3.2: type functions build struct types from their
+// comptime parameters; equal arguments (types by identity, values by
+// equality) give the identical type, and types are values in comptime code.
+
+struct Monster { health: f32, threat: u32 }
+
+const CAP: usize = 512;
+
+pub fn SortedSoA(comptime T: type, comptime N: usize) -> type {
+    return struct {
+        len: usize = 0,
+        cols: soa [N]T,
+        order: [N]u32,
+    };
+}
+
+fn Same(comptime T: type) -> type {
+    let t = T;
+    t
+}
+
+const MonsterTable = SortedSoA(Monster, 512);
+const Elem: type = Same(Monster);
+
+// `SortedSoA(Monster, CAP)` and `MonsterTable` are one type.
+fn keep(t: SortedSoA(Monster, CAP)) -> MonsterTable { t }
+
+fn first(m: Elem) -> Monster { m }

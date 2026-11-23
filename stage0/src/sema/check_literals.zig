@@ -185,7 +185,7 @@ fn defaultValue(c: *Checker, at: Node.Index, f: items_mod.Field) Error!Typed {
         .untyped => |k| c.constTo(k, f.type, at),
         .scalar => |v| c.coerce(try c.constant(v), f.type, at),
         .computed => |cv| c.coerce(try @import("comptime_ctx.zig").use(c, at, cv), f.type, at),
-        .type => c.unsupported(at, "types as values (T065)"),
+        .type => |t| c.coerce(try @import("../comptime/typefn.zig").typeValue(c, at, t), f.type, at),
         .unknown => if (f.type == .err) blk: {
             c.failed = true; // reported with the default
             break :blk .err;

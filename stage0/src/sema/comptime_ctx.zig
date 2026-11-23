@@ -206,7 +206,10 @@ pub const Ctx = struct {
         const v = try cx.ev.finish(cx.values.allocator(), r);
         switch (v.data) {
             .scalar => |bits| return .{ .scalar = .{ .type = v.ty, .bits = bits } },
-            .type => |t| return .{ .type = t },
+            .type => |t| {
+                try @import("../comptime/typefn.zig").returned(it, t);
+                return .{ .type = t };
+            },
             else => {},
         }
         try cx.table.append(cx.gpa, v);
@@ -357,7 +360,7 @@ pub fn expr(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     return switch (v) {
         .scalar => |s| c.constant(s),
         .computed => |cv| use(c, n, cv),
-        .type => c.unsupported(n, "types as values (T065)"),
+        .type => |t| @import("../comptime/typefn.zig").typeValue(c, n, t),
         .untyped, .unknown => unreachable, // evaluation gives typed values
     };
 }

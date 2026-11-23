@@ -158,6 +158,10 @@ pub const Nominal = struct {
     lang: Lang = .none,
     /// For `.distinct`: the type it wraps (§4.7). `.none` otherwise.
     underlying: TypeId = .none,
+    /// A type made by a comptime type function (§8.3.2): `name` is its
+    /// whole name (`SortedSoA(Monster, 512)`) and `args` only identify it,
+    /// so `print` leaves them out (`comptime/typefn.zig`).
+    generated: bool = false,
 };
 
 /// A generic type parameter (or protocol `Self`) of declaration `owner`, as
@@ -270,6 +274,17 @@ pub fn get(t: *Types, id: TypeId) Key {
     t.lock.lockSharedUncancelable(t.io);
     defer t.lock.unlockShared(t.io);
     return t.keys.items[@backingInt(id)];
+}
+
+/// Renames nominal type `id` to `name` (an interned string). The name is
+/// not part of its identity: a generated type gets its name of §8.3.2 once
+/// it is known (`comptime/typefn.zig`). Thread-safe.
+pub fn rename(t: *Types, id: TypeId, name: Interner.Id) void {
+    t.lock.lockUncancelable(t.io);
+    defer t.lock.unlock(t.io);
+    const k = &t.keys.items[@backingInt(id)];
+    k.nominal.name = name;
+    t.map.getKeyPtr(k.*).?.nominal.name = name;
 }
 
 /// Number of types in the table, fixed ids included. Thread-safe.
@@ -418,7 +433,7 @@ pub fn print(t: *Types, w: *Writer, id: TypeId, opts: PrintOptions) Writer.Error
                 try w.writeByte('.');
             }
             try w.writeAll(t.strings.get(n.name));
-            if (n.args.len == 0) return;
+            if (n.args.len == 0 or n.generated) return;
             try w.writeByte('<');
             for (n.args, 0..) |arg, i| {
                 if (i > 0) try w.writeAll(", ");
