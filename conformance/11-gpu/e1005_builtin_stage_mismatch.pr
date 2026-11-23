@@ -6,8 +6,10 @@ fn kernel_reads_vertex_index() {
     let i: u32 = @vertex_index; //~ E1005
 }
 
+pub struct VsOut { @position clip: vec4<f32> }
+
 @gpu_vertex
-fn vs_discards() -> u32 {
+fn vs_discards() -> VsOut {
     @discard(); //~ E1005
 }
 

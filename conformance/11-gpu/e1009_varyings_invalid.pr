@@ -1,0 +1,29 @@
+// §11.3.1: a vertex stage returns a varyings struct with exactly one `@position` field
+// of type `vec4<f32>`; integer fields must be `@flat`. A struct is reported once.
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+
+pub struct NoPosition { uv: vec2<f32> } //~ E1009
+pub struct TwoPositions { @position a: vec4<f32>, @position b: vec4<f32> } //~ E1009
+pub struct IntNotFlat { @position clip: vec4<f32>, id: u32 } //~ E1009
+pub struct Vec3Position { @position clip: vec3<f32> } //~ E1009
+
+@gpu_vertex
+fn vs_no_position(v: Vertex) -> NoPosition { NoPosition { uv: v.uv } }
+
+@gpu_vertex
+fn vs_no_position_again(v: Vertex) -> NoPosition { NoPosition { uv: v.uv } }
+
+@gpu_vertex
+fn vs_two(v: Vertex) -> TwoPositions {
+    TwoPositions { a: vec4(v.pos.x, v.pos.y, v.pos.z, 1.0), b: vec4(0.0, 0.0, 0.0, 1.0) }
+}
+
+@gpu_vertex
+fn vs_int(v: Vertex) -> IntNotFlat { IntNotFlat { clip: vec4(v.pos.x, v.pos.y, v.pos.z, 1.0), id: 0 } }
+
+@gpu_vertex
+fn vs_vec3(v: Vertex) -> Vec3Position { Vec3Position { clip: v.pos } }
+
+@gpu_vertex
+fn vs_vec4(v: Vertex) -> vec4<f32> { vec4(v.pos.x, v.pos.y, v.pos.z, 1.0) } //~ E1009

@@ -1,5 +1,5 @@
 //@ covers: E1008
-//@ expected-fail: T179
+//@ expected-fail: T110
 // §11.1.2, §11.3: vertex and fragment stages take their stage-specific parameters
 // (vertex input, `@instance`, fragment input) plus uniform and storage parameters.
 // Texture parameters are in e1008_texture_params.pr (T200), ray-tracing stages in
