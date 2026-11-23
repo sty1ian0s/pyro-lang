@@ -1,0 +1,7 @@
+// §6.12.6: a comprehension into `[N]T` starts from `[@zero(T); N]`, and
+// `@zero` takes only a plain type (§8.7).
+
+fn names(src: []str) -> str {
+    let out: [2]str = [s for s in src]; //~ E0329
+    out[0]
+}

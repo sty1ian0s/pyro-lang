@@ -1,0 +1,12 @@
+// §6.2.5: a slice source whose length is comptime is checked at compile time
+// against `N`, like an array source.
+
+fn short(src: [4]u32) -> u32 {
+    let a: [2]u32 = [x for x in src[0..3]]; //~ E0354
+    a[0]
+}
+
+fn rest(src: [4]u32) -> u32 {
+    let b: [3]u32 = [x for x in src[2..]]; //~ E0354
+    b[0]
+}

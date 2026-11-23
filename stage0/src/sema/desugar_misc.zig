@@ -10,11 +10,13 @@
 //!   the `.ok`/`.some` payload is the value.
 //! - `arrayComp` checks `[e for p in src where cond]` (§6.2.5): it is only
 //!   the value stored to a `[N]T` or `Bounded<T, N>` destination, a
-//!   `let` initializer, an assigned value or an argument (`Checker.comp_dest`,
-//!   E0354), and `where` is not allowed for `[N]T` (E0354). A `[N]T`
-//!   destination expands as §6.12.6: the source length is checked (E0354
-//!   for an array, a trap for a slice), the result starts as
-//!   `[@zero(T); N]` and an index loop stores `e` per element.
+//!   `let`, `const` or `static` initializer, an assigned value or an
+//!   argument, possibly in parentheses (`Checker.comp_dest`, E0354), and
+//!   `where` is not allowed for `[N]T` (E0354). A `[N]T` destination
+//!   expands as §6.12.6: the source length is checked (E0354 for an array
+//!   or a slice with constant bounds, else a trap), the result starts as
+//!   `[@zero(T); N]` (so `T` is plain, E0329) and an index loop stores `e`
+//!   per element. `?` outside a function body is E0602.
 //! - Defaults and named arguments are bound by `check_call.zig`: explicit
 //!   arguments are emitted left to right in source order, then the
 //!   defaults of the missing parameters, which is the §6.12.7 expansion.
@@ -27,6 +29,7 @@ const emit_tir = @import("emit_tir.zig");
 const check_expr = @import("check_expr.zig");
 const check_stmt = @import("check_stmt.zig");
 const builtins = @import("builtins.zig");
+const kinds = @import("kinds.zig");
 const tir = @import("../tir/tir.zig");
 
 const Node = Ast.Node;
@@ -63,6 +66,10 @@ pub fn tryOp(c: *Checker, n: Node.Index, _: TypeId) Error!Typed {
         try c.report(n, .E0310, "`?` needs an `Option` or a `Result`, found `{s}`", .{try c.tyName(v.ty)});
         return .err;
     };
+    if (c.ast.kind(c.sig.node) != .fn_decl) { // a `const`/`static` initializer or a `comptime` block
+        try c.reportAt(c.ast.mainToken(n), .E0602, &.{"handle the value with `match` or `if let` instead"}, "`?` is only allowed in a function body returning `Option` or `Result`", .{});
+        return .err;
+    }
     const ret = c.sig.ret;
     if (ret == .err) {
         c.failed = true; // reported with the signature
@@ -161,7 +168,10 @@ fn payload(c: *Checker, l: tir.Local, enum_ty: TypeId, variant: u32, ty: TypeId)
 /// `[e for p, i in src where cond]` (§6.2.5, §6.12.6).
 pub fn arrayComp(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     const d = c.ast.data(n).array_comp;
-    const dest: enum { array, bounded, other } = if (c.comp_dest != n or expected == .none or expected == .err) .other else switch (c.types.get(expected)) {
+    // `(e)` is only grouping (§6.2.6): it keeps the destination.
+    var at = c.comp_dest;
+    while (at != .none and c.ast.kind(at) == .paren) at = c.ast.data(at).paren.inner;
+    const dest: enum { array, bounded, other } = if (at != n or expected == .none or expected == .err) .other else switch (c.types.get(expected)) {
         .array => .array,
         .nominal => |nm| if (std.mem.eql(u8, c.types.strings.get(nm.name), "Bounded")) .bounded else .other,
         else => .other,
@@ -183,6 +193,10 @@ pub fn arrayComp(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
         return .err;
     }
     const arr = c.types.get(expected).array;
+    if (try kinds.kind(c.items, arr.elem) != .plain) { // the result starts as `[@zero(T); N]` (§6.12.6, §8.7)
+        try c.reportAt(c.ast.mainToken(n), .E0329, &.{"`@zero` needs a plain element type; fill the array with a loop instead"}, "a comprehension into `{s}` starts from `@zero({s})`, which needs a plain type", .{ try c.tyName(expected), try c.tyName(arr.elem) });
+        return .err;
+    }
     const src = try c.materialize(try check_expr.check(c, d.iter, .none), d.iter);
     if (src.ty == .err or src.ty == .noreturn) return src;
     const elem: TypeId = switch (c.types.get(src.ty)) {
@@ -193,7 +207,13 @@ pub fn arrayComp(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
             }
             break :blk a.elem;
         },
-        .slice => |s| s.elem,
+        .slice => |s| blk: {
+            if (knownLen(c, src.ref)) |len| if (len != arr.len) {
+                try c.report(d.iter, .E0354, "the source has {d} elements, but the destination `{s}` has {d}", .{ len, try c.tyName(expected), arr.len });
+                return .err;
+            };
+            break :blk s.elem;
+        },
         .nominal => |nm| if (nm.lang == .none and std.mem.startsWith(u8, c.types.strings.get(nm.name), "Range"))
             return c.unsupported(d.iter, "comprehensions over ranges (T105)")
         else
@@ -254,6 +274,29 @@ pub fn arrayComp(c: *Checker, n: Node.Index, expected: TypeId) Error!Typed {
     c.setBlock(exit);
     if (e.ty == .err) return .err;
     return c.load(out);
+}
+
+/// The length of slice value `r` when it is `e[a..b]` with constant bounds
+/// (a missing `b` of an array is its length), else null.
+fn knownLen(c: *Checker, r: tir.Ref) ?u64 {
+    if (r == .none) return null;
+    const s = switch (c.b.data(r)) {
+        .slice => |s| s,
+        else => return null,
+    };
+    const lo: u64 = if (s.lo) |x| intConst(c, x) orelse return null else 0;
+    const hi: u64 = if (s.hi) |x| intConst(c, x) orelse return null else switch (c.types.get(c.underlying(c.b.typeOf(s.base)))) {
+        .array => |a| a.len,
+        else => return null,
+    };
+    return if (hi >= lo) hi - lo else null;
+}
+
+fn intConst(c: *Checker, r: tir.Ref) ?u64 {
+    return switch (c.b.data(r)) {
+        .int => |i| i.value,
+        else => null,
+    };
 }
 
 /// Binds comprehension pattern `p` to `value` of type `ty`: a name, `mut`
@@ -372,6 +415,24 @@ test "comprehensions: E0354 without a `[N]T` destination, for `where` into `[N]T
         .{ .E0354, "[" },
         .{ .E0354, ">" },
         .{ .E0354, "src" },
+        .{ .E0354, "[" },
+    });
+}
+
+// `?` outside a function body needs the comptime evaluator, which the
+// fixture lacks: conformance case e0602_outside_fn.pr covers it.
+test "comprehensions: E0329 for views, parentheses keep the destination, E0354 for constant slice lengths" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\fn names(src: []str) -> str { let out: [2]str = [s for s in src]; out[0] }
+        \\fn paren(src: [4]u32) -> u32 { let a: [2]u32 = ([x for x in src[1..3]]); a[0] }
+        \\fn short(src: [4]u32) -> u32 { let a: [2]u32 = [x for x in src[0..3]]; a[0] }
+        \\fn rest(src: [4]u32) -> u32 { let a: [3]u32 = [x for x in src[2..]]; a[0] }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{
+        .{ .E0329, "[" },
+        .{ .E0354, "[" },
         .{ .E0354, "[" },
     });
 }

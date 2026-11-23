@@ -1,0 +1,11 @@
+// §6.12.1: `?` returns early from the enclosing function, so it is not allowed
+// in a `const` initializer or a `comptime` block.
+
+fn opt() -> Option<u8> { return .none; }
+
+const X: u8 = opt()?; //~ E0602
+
+fn in_block() -> Option<u8> {
+    let v: u8 = comptime { opt()? }; //~ E0602
+    .some(v)
+}
