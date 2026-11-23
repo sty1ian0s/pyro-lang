@@ -98,7 +98,9 @@ pub const Ctx = struct {
     copy: u32 = 0,
     /// Copies numbered so far (`nextCopy`).
     copies: u32 = 0,
-    /// Every string `@hash` has hashed (§8.6.1), in `values`.
+    /// Every string `@hash` has hashed in this package (§8.6.1), in `values`.
+    /// shortcut: per package, not per program; merge the tables for
+    /// cross-package E0811 when multi-package builds land (T115).
     names: hash.Names = .{},
 
     pub fn init(gpa: Allocator) Ctx {

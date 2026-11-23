@@ -1,5 +1,5 @@
 //! `@hash` (§8.6.1): the 64-bit FNV-1a hash of a string's UTF-8 bytes,
-//! and the program's name table, which maps each hash to the one string
+//! and the package's name table, which maps each hash to the one string
 //! hashed to it. Two distinct strings with the same hash are E0811.
 //! `std.hash.fnv1a64` (§14.9) is the same function at runtime.
 
@@ -11,8 +11,11 @@ pub fn fnv1a64(bytes: []const u8) u64 {
     return std.hash.Fnv1a_64.hash(bytes);
 }
 
-/// Every distinct string hashed in a program, by hash. Lives in an arena:
+/// Every distinct string hashed in one package, by hash. Lives in an arena:
 /// entries are never removed.
+/// shortcut: §8.6.1 wants collision-freedom per program, but each package
+/// keeps its own table; merge the per-package tables (cross-package E0811,
+/// program-wide debug table) when multi-package builds land (T115).
 pub const Names = struct {
     map: std.AutoHashMapUnmanaged(u64, []const u8) = .empty,
 
