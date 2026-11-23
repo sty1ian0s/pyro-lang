@@ -1,4 +1,3 @@
-//@ expected-fail: T077
 // §6.12.1: `?` on a `Result` needs a function returning `Result`, and `?` on an
 // `Option` needs a function returning `Option`.
 

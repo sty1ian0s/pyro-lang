@@ -1,4 +1,4 @@
-//@ expected-fail: T077
+//@ expected-fail: T110
 //@ covers: E0602
 // §6.12.1: `?` on an `Option` inside a function returning `Option` returns
 // `.none` early; `?` on a `Result` inside a `Result` function returns `.err`.

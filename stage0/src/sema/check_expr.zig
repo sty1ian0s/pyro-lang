@@ -29,6 +29,7 @@ const patterns = @import("patterns.zig");
 const unsafe = @import("unsafe.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
 const comptime_flow = @import("comptime_flow.zig");
+const desugar_misc = @import("desugar_misc.zig");
 const tir = @import("../tir/tir.zig");
 const interp_expr = @import("../comptime/interp_expr.zig");
 const instantiate = @import("../comptime/instantiate.zig");
@@ -80,6 +81,8 @@ const handlers = blk: {
         .{ .comptime_block, comptime_ctx.expr },
         .{ .comptime_if, comptime_flow.comptimeIf },
         .{ .for_inline, comptime_flow.inlineFor },
+        .{ .try_op, desugar_misc.tryOp },
+        .{ .array_comp, desugar_misc.arrayComp },
     }) |e| t.set(e[0], e[1]);
     break :blk t;
 };
@@ -89,7 +92,6 @@ fn owner(k: NodeKind) []const u8 {
     return switch (k) {
         .lambda => "lambdas (T074)",
         .@"for" => "`for` loops (T076)",
-        .try_op, .array_comp => "`?` and comprehensions (T077)",
         .ml_string => "multi-line strings (T112)",
         else => "this expression (a later task)",
     };
