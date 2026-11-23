@@ -7,7 +7,8 @@
 //! The compiler declares the block between the `compiler` markers itself
 //! (`stage0/src/comptime/reflect.zig` holds the same text and its tests
 //! check that it matches), so reflection works before the standard library
-//! is loaded. `Target` and `has_feature` are added with `@target` (T115).
+//! is loaded. `@target` (T073) fills `Target`; `Target.has_feature` comes
+//! with T115.
 
 // compiler: begin
 /// What `@type_info(T)` returns (§8.4): one case per type class. A distinct
@@ -107,6 +108,10 @@ pub enum Abi { none, gnu, musl, msvc }
 
 /// Byte order.
 pub enum Endian { big, little }
+
+/// The target being compiled for (`@target()`, §8.6). `has_feature` is
+/// added with the rest of `std.meta` (T115).
+pub struct Target { pub arch: Arch, pub os: Os, pub abi: Abi, pub pointer_bits: u8, pub endian: Endian }
 
 /// CPU features the implementation knows, for `Target.has_feature`.
 pub enum CpuFeature {

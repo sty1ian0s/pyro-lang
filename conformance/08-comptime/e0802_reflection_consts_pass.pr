@@ -1,0 +1,47 @@
+//@ covers: E0802
+// §8.4, §5.9, §14.8: reflection in item-level `const` initializers. A
+// `match` on `@type_info` reads its payload; a `const` may hold any
+// comptime-only type, slices of them included; `.r#mut` names a keyword
+// variant. `@has_method` and `@implements` answer both ways in comptime code.
+
+use std.meta.{StructInfo, FieldInfo, ParamMode};
+
+struct P { x: u32, y: f32 }
+
+protocol Area { fn area(self) -> f32; }
+
+struct Sq { pub side: f32, fn grow(self) -> Sq { Sq { side: self.side * 2.0 } } }
+
+impl Area for Sq { fn area(self) -> f32 { self.side * self.side } }
+
+const SIZE: usize = match @type_info(P) { .struct_(s) => s.size, _ => 0 };
+const OFF: usize = match @type_info(P) { .struct_(s) => s.fields[1].offset, _ => 0 };
+
+const SI: StructInfo = match @type_info(P) { .struct_(s) => s, _ => @compile_error("P is a struct") };
+const FS: []FieldInfo = SI.fields;
+const TS: []type = match @type_info((u8, u16)) { .tuple(t) => t.fields, _ => @compile_error("a tuple") };
+
+const MODE: ParamMode = match @type_info(fn(u8, mut u32) -> u32) {
+    .function(f) => f.params[1].mode,
+    _ => @compile_error("a function type"),
+};
+
+fn Box(comptime T: type) -> type {
+    const S = struct { v: T };
+    const info = @type_info([2]S);
+    return S;
+}
+
+const BOX: str = @type_name(Box(u8));
+
+comptime {
+    if SIZE != 8 || OFF != 4 || FS[1].offset != 4 { @compile_error("P is 8 bytes, y at 4"); }
+    match MODE {
+        .r#mut => {},
+        _ => { @compile_error("the second parameter is `mut`"); },
+    }
+    if BOX != "Box(u8)" { @compile_error("reflection inside an instance keeps its name"); }
+    if !@has_method(Sq, "grow") || @has_method(Sq, "shrink") { @compile_error("own methods"); }
+    if !@has_method(Sq, "area") || @has_method(P, "area") { @compile_error("impl methods"); }
+    if !@implements(Sq, Area) || @implements(P, Area) { @compile_error("@implements"); }
+}

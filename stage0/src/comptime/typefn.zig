@@ -216,10 +216,12 @@ pub fn returned(it: *Items, t: TypeId) Error!void {
 
 /// Type `t` was reached by reflection inside another type (a field type,
 /// §8.4). A type an instance returns is named when the call that makes it
-/// is evaluated, before any reflection can reach it; one still unnamed was
-/// made inside the instance and not returned, so `returned` leaves it be.
+/// is evaluated, before reflection outside the instance can reach it; one
+/// still unnamed then was made inside the instance and not returned, so
+/// `returned` leaves it be. Inside its own instance it may still be returned.
 pub fn reached(it: *Items, t: TypeId) void {
     const g = it.generated.get(t) orelse return;
+    if (g.instance == instantiate.current(it)) return;
     if (g.naming != .returned) g.naming = .inner;
 }
 

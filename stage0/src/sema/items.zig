@@ -1359,8 +1359,8 @@ pub const Items = struct {
         }
         return switch (it.types.get(ty)) {
             .field_id => true,
-            .slice => |s| it.isPlain(s.elem),
-            .soa_slice => |s| it.isPlain(s.elem),
+            .slice => |s| try it.isPlain(s.elem) or try embed.isComptimeOnly(it, ty),
+            .soa_slice => |s| try it.isPlain(s.elem) or try embed.isComptimeOnly(it, ty),
             else => try it.isPlain(ty) or try embed.isComptimeOnly(it, ty),
         };
     }

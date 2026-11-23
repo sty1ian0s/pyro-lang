@@ -152,6 +152,10 @@ pub const source =
     \\/// Byte order.
     \\pub enum Endian { big, little }
     \\
+    \\/// The target being compiled for (`@target()`, §8.6). `has_feature` is
+    \\/// added with the rest of `std.meta` (T115).
+    \\pub struct Target { pub arch: Arch, pub os: Os, pub abi: Abi, pub pointer_bits: u8, pub endian: Endian }
+    \\
     \\/// CPU features the implementation knows, for `Target.has_feature`.
     \\pub enum CpuFeature {
     \\    sse2, sse3, ssse3, sse4_1, sse4_2, popcnt, avx, avx2, fma, bmi, bmi2, avx512f, avx512bw,
@@ -207,6 +211,9 @@ pub fn metaRef(it: *const Items, path: []const u8) ?imports.Ref {
 /// the package has no `std.meta` module.
 pub fn metaType(it: *Items, name: []const u8) Error!?TypeId {
     const m = it.im.graph.lookup(module_path) orelse return null;
+    // A `TypeInfo` value reaches its payload types, whose fields user code
+    // reads before items check the module in order: check all of it now.
+    for (0..it.im.graph.modules[m].items.len) |i| _ = try it.info(.{ .module = m, .item = @intCast(i) });
     const i = it.im.graph.modules[m].names.get(name).?;
     return switch ((try it.info(.{ .module = m, .item = i })).*) {
         .@"struct" => |s| s.type,
@@ -356,7 +363,45 @@ const Reflect = struct {
     }
 
     fn layoutOf(r: *Reflect, t: TypeId, b: builtins.Builtin) StepError!layout.Layout {
-        return try r.e.layoutOf(t) orelse r.cannot(t, b, if (try embed.isComptimeOnly(r.it, t)) "layout: it is comptime-only" else "layout");
+        if (try r.e.layoutOf(t)) |l| return l;
+        if (try r.broken(t)) return r.reported();
+        return r.cannot(t, b, if (try embed.isComptimeOnly(r.it, t)) "layout: it is comptime-only" else "layout");
+    }
+
+    /// Stops without a diagnostic: one was already reported.
+    fn reported(r: *Reflect) StepError {
+        if (r.m.eval) |ev| ev.reported = true;
+        return r.m.fail("reflection error");
+    }
+
+    /// Whether `t` has no layout because of an error already reported: it
+    /// holds, by value, an unknown type (`.err`) or itself (E0376).
+    fn broken(r: *Reflect, t: TypeId) Allocator.Error!bool {
+        var path: std.ArrayList(TypeId) = .empty;
+        return r.brokenIn(t, &path);
+    }
+
+    fn brokenIn(r: *Reflect, t: TypeId, path: *std.ArrayList(TypeId)) Allocator.Error!bool {
+        if (t == .err or std.mem.indexOfScalar(TypeId, path.items, t) != null) return true;
+        try path.append(r.arena(), t);
+        defer _ = path.pop();
+        switch (r.it.types.get(t)) {
+            inline .vec, .array, .soa_array => |x| return r.brokenIn(x.elem, path),
+            .tuple => |x| for (x.elems) |e| {
+                if (try r.brokenIn(e, path)) return true;
+            },
+            .nominal => |n| {
+                if (n.kind == .distinct) return r.brokenIn(n.underlying, path);
+                for (n.args) |a| if (a == .type and try r.brokenIn(a.type, path)) return true;
+                if (typefn.structOf(r.it, t)) |s| for (s.fields, 0..) |_, i| {
+                    if (try r.brokenIn(try r.fieldType(t, s, @intCast(i)), path)) return true;
+                } else if (r.it.enumOf(t)) |e| for (e.variants) |v| for (v.payload) |p| {
+                    if (try r.brokenIn(try r.it.subst(p, n.decl, n.args), path)) return true;
+                };
+            },
+            else => {},
+        }
+        return false;
     }
 
     /// The declaration behind struct `t`.
@@ -376,10 +421,11 @@ const Reflect = struct {
         return r.it.subst(s.fields[i].type, n.decl, n.args);
     }
 
-    fn hasMethod(r: *Reflect, t: TypeId, method: []const u8) Allocator.Error!bool {
+    fn hasMethod(r: *Reflect, t: TypeId, method: []const u8) StepError!bool {
         const own: []const items_mod.Fn = if (typefn.structOf(r.it, t)) |s| s.methods else if (r.it.enumOf(t)) |e| e.methods else &.{};
         for (own) |f| if (std.mem.eql(u8, f.name, method)) return true;
-        const protos = r.m.bodies.protos orelse return false;
+        // shortcut: item-level comptime code (const initializers) runs while items are checked, before protocols exist, so `@has_method` cannot see impl methods there; the stage driver must check protocols first (T093).
+        const protos = r.m.bodies.protos orelse return r.m.fail("`@has_method` through impls in item-level comptime code (T093)");
         const frames = r.m.frames.items;
         const module = r.m.bodies.fns.items[frames[frames.len - 1].id.int()].module;
         return try protos.findMethod(module, t, method) != null;
@@ -505,7 +551,7 @@ const Reflect = struct {
     fn structInfo(r: *Reflect, t: TypeId) StepError!Value {
         const s = try r.structOf(t, .type_info);
         const l = try r.e.layoutOf(t);
-        if (l == null and !try embed.isComptimeOnly(r.it, t)) return r.cannot(t, .type_info, "layout");
+        if (l == null and !try embed.isComptimeOnly(r.it, t)) return if (try r.broken(t)) r.reported() else r.cannot(t, .type_info, "layout");
         const fields = try r.arena().alloc(Value, s.fields.len);
         for (s.fields, fields, 0..) |f, *o, i| {
             const p: layout.Place = if (l) |x| x.fields[i] else .{ .offset = 0 };
@@ -695,6 +741,10 @@ const classes = [_]struct { []const u8, ?[]const u8 }{
     .{ "G", "struct_" },
     .{ "str", null },
     .{ "mask<8>", null },
+    .{ "isize", "int" },
+    .{ "void", "void_" },
+    .{ "noreturn", "noreturn_" },
+    .{ "DP", "struct_" },
 };
 
 /// `type Tn = <class n>;`, its size and alignment as consts, and its
@@ -710,6 +760,8 @@ fn classSource() []const u8 {
         \\type D = distinct u32;
         \\fn Gen(comptime T: type) -> type { return struct { x: T, y: u8 }; }
         \\type G = Gen(u64);
+        \\type DP = distinct P;
+        \\const IT = @type_info(type);
         \\
     ;
     inline for (classes, 0..) |k, i| {
@@ -753,6 +805,8 @@ test "@size_of, @align_of and @type_info agree with the layout engine for every 
             }
         }
     }
+    // `type` has a case but no layout.
+    try testing.expectEqualStrings("type_", try f.caseName(try f.computed("IT")));
     // Member facts of `P` (class 16), `S` (19) and `F` (21).
     const p = (try f.computed("I16")).data.variant.payload[0].data.aggregate;
     const d = p[0].data.slice[3].data.aggregate;
@@ -785,6 +839,14 @@ test "@type_name, @has_field, @has_method, @implements, @field_type and @variant
         \\    @has_field(Pt, "x") && !@has_field(Pt, "z") && @has_method(Pt, "len") && @has_method(Sq, "area")
         \\        && !@has_method(Pt, "area") && @implements(Sq, Area) && !@implements(Pt, Area)
         \\}
+        \\comptime {
+        \\    if !@has_field(Pt, "x") || @has_field(Pt, "z") { @compile_error("has_field"); }
+        \\    if !@has_method(Pt, "len") || @has_method(Pt, "area") { @compile_error("own method"); }
+        \\    if !@has_method(Sq, "area") || @has_method(Sq, "len") { @compile_error("impl method"); }
+        \\    if !@implements(Sq, Area) || @implements(Pt, Area) { @compile_error("implements"); }
+        \\}
+        \\fn F(comptime T: type) -> type { const S = struct { v: T }; const info = @type_info([2]S); return S; }
+        \\const OWN: str = @type_name(F(u8));
     );
     defer f.deinit();
     try f.expectDiags(&.{});
@@ -792,6 +854,9 @@ test "@type_name, @has_field, @has_method, @implements, @field_type and @variant
     // `Inner` is reached by reflection, not returned by `Wrap(u8)` (§8.3.2).
     try testing.expectEqualStrings("Inner", (try f.computed("INNER")).data.str);
     try testing.expectEqualStrings("Sq", (try f.computed("FIELD")).data.str);
+    // Reflection inside the instance that returns the type does not stop it
+    // being named after the call.
+    try testing.expectEqualStrings("F(u8)", (try f.computed("OWN")).data.str);
     try testing.expectEqual(@as(u64, 3), try f.scalar("COUNT"));
     // In runtime code each call is a constant: no builtin is left to run.
     const body = f.bodies.find(0, "checks").?.func.?;
@@ -818,4 +883,31 @@ test "reflection errors name the call; TypeInfo reaching runtime is E0802" {
         .{ null, "`@implements` expects a protocol, found `Pt`" },
         .{ .E0802, "comptime-only value of type `TypeInfo`" },
     });
+}
+
+test "@has_method through impls in a const initializer is unsupported (T093)" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\protocol Area { fn area(self) -> f32; }
+        \\struct Sq { pub side: f32, fn grow(self) -> f32 { self.side } }
+        \\impl Area for Sq { fn area(self) -> f32 { self.side * self.side } }
+        \\const OWN: bool = @has_method(Sq, "grow");
+        \\const IMPL: bool = @has_method(Sq, "area");
+    );
+    defer f.deinit();
+    try testing.expectEqual(@as(u64, 1), try f.scalar("OWN"));
+    try testing.expectEqualStrings("`@has_method` through impls in item-level comptime code (T093)", f.bodies.unsupported.?.what);
+}
+
+test "reflection adds no error to a type whose layout an earlier error broke" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\struct Q { a: Nope, b: u8 }
+        \\struct R { r: R }
+        \\const SQ = @size_of(Q);
+        \\const SR = @size_of(R);
+        \\const IQ = @type_info(Q);
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{ .{ null, "unknown type `Nope`" }, .{ .E0376, "recursive type `R`" } });
 }
