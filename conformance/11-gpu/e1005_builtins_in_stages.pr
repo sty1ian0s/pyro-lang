@@ -1,5 +1,5 @@
 //@ covers: E1005
-//@ expected-fail: T177
+//@ expected-fail: T128
 // §11.1.7: each builtin variable and builtin function used in a compute, vertex or
 // fragment stage that lists it. Task stages are in e1005_builtins_task.pr (T197), ray
 // generation in e1005_builtins_ray_gen.pr (T198).

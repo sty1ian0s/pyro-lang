@@ -22,6 +22,7 @@ const check_index = @import("check_index.zig");
 const mutability = @import("mutability.zig");
 const must_use = @import("must_use.zig");
 const patterns = @import("patterns.zig");
+const gpu_builtins = @import("../gpu/builtins.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -78,7 +79,9 @@ fn stmt(c: *Checker, s: Node.Index) Error!bool {
         .guard_let => return patterns.guardLet(c, s),
         .spawn, .nursery => _ = c.unsupported(s, "`nursery` and `spawn` (T125)"),
         .launch => _ = c.unsupported(s, "`launch` (T187)"),
-        .attributed => _ = c.unsupported(s, "`@simd` loops and `@workgroup` variables (T156, T177)"),
+        .attributed => if (c.ast.kind(c.ast.data(s).attributed.inner) == .let) return gpu_builtins.workgroupLet(c, s, let) else {
+            _ = c.unsupported(s, "`@simd` loops (T156)");
+        },
         else => {
             const v = try check_expr.check(c, s, .none);
             try must_use.check(c, s, v.ty);

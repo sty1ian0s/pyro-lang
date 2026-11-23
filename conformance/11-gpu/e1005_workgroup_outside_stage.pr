@@ -1,0 +1,20 @@
+// §11.1.4: `@workgroup` variables exist only in compute, task and mesh stages.
+
+pub struct VsOut { @position clip: vec4<f32> }
+
+@gpu_vertex
+fn vs_shared() -> VsOut {
+    @workgroup let t: f32 = 0.0; //~ E1005
+    VsOut { clip: vec4(t, t, t, 1.0) }
+}
+
+@gpu_fragment
+fn fs_shared(i: VsOut) -> vec4<f32> {
+    @workgroup let mut n: u32 = 0; //~ E1005
+    i.clip
+}
+
+fn cpu_side() -> u32 {
+    @workgroup let n: u32 = 0; //~ E1005
+    n
+}
