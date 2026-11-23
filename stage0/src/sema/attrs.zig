@@ -374,6 +374,8 @@ test "argument shapes: names, arity and kinds" {
         .{ null, .@"error", "workgroup size" },
         .{ null, .@"error", "workgroup size" },
         .{ null, .@"error", "workgroup size" },
+        // A valid shape, but too many invocations (§11.1.1, gpu/stages.zig).
+        .{ .E1002, .@"error", "workgroup size" },
     });
 }
 

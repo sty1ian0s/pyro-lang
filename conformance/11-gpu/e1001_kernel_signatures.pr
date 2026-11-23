@@ -1,5 +1,5 @@
 //@ covers: E1001
-//@ expected-fail: T176
+//@ expected-fail: T128
 // §11.1.2, §11.2: a kernel returns `void` and takes uniform parameters (scalars,
 // vectors, plain structs) and storage parameters (`[]T`, `soa []T`, `[]Atomic<u32>`).
 // Texture and sampler parameters are in e1001_kernel_texture_params.pr (T203).

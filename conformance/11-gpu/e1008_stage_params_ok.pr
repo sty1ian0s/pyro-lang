@@ -1,0 +1,26 @@
+//@ covers: E1008
+// §11.1.2: non-compute stages take their stage-specific parameters first, then
+// uniform, storage, texture/sampler and acceleration-structure parameters.
+
+use std.gpu;
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct Instance { model: [4]vec4<f32>, tint: vec4<f32> }
+pub struct Camera { view_proj: [4]vec4<f32> }
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+pub struct Shade { color: vec3<f32>, shadowed: bool }
+
+@gpu_vertex
+fn vs(v: Vertex, @instance inst: Instance, cam: Camera, offsets: []f32) -> VsOut {
+    VsOut { clip: vec4(1.0, 1.0, 1.0, 1.0), uv: vec2(0.0, 0.0) }
+}
+
+@gpu_fragment
+fn fs(i: VsOut, albedo: gpu.Texture2D<vec4<f32>>, smp: gpu.Sampler, gain: f32) -> vec4<f32> {
+    vec4(gain, gain, gain, 1.0)
+}
+
+@gpu_miss
+fn miss(mut s: Shade, ray: gpu.RayInfo, scene: gpu.Tlas, sky: vec3<f32>) {
+    s.color = sky;
+}

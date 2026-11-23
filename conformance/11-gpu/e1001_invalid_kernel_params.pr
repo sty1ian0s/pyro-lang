@@ -1,4 +1,3 @@
-//@ expected-fail: T176
 // §11.1.2, §11.2: a kernel must return `void`, and every parameter must be uniform,
 // storage, texture/sampler or acceleration-structure class.
 

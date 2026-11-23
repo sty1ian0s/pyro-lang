@@ -1,5 +1,5 @@
 //@ covers: E1002
-//@ expected-fail: T176
+//@ expected-fail: T128
 // §11.1.1: the workgroup product may be up to 1024 for compute and up to 128 for task
 // and mesh stages.
 

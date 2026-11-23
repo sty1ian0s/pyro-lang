@@ -1,0 +1,23 @@
+//@ covers: E1001
+// §11.1.2, §11.2: kernel parameter classes without vector swizzles (see
+// e1001_kernel_signatures.pr for the full form): uniform scalars, vectors and plain
+// structs (arrays of vectors allowed in fields), storage `[]T`, `soa []T` and
+// `[]Atomic<u32>`/`[]Atomic<i32>`, read-only or `mut`.
+
+pub struct Params { scale: f32, offset: vec2<f32>, rows: [4]vec4<f32>, count: u32 }
+
+@soa
+pub struct Body { x: f32, vx: f32 }
+
+@gpu_kernel(workgroup: 64)
+fn uniforms_and_storage(mut out: []f32, xs: []f32, p: Params, k: f32, dir: vec3<f32>, flag: bool) {
+    out[0] = xs[0] * p.scale * k;
+}
+
+@gpu_kernel
+fn soa_storage(mut bodies: soa []Body, dt: f32) {
+    bodies[0].x += bodies[0].vx * dt;
+}
+
+@gpu_kernel(workgroup: (8, 8, 1))
+fn atomics(bins: []Atomic<u32>, signed: []Atomic<i32>, ps: []Params) {}
