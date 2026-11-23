@@ -328,7 +328,8 @@ pub const Engine = struct {
     }
 
     /// Lays out every non-generic struct, enum, alias and distinct type of
-    /// the package and reports types over the size limit (E0311) and `@c_layout` fields without a C
+    /// the package, and every instance of a generic struct or enum
+    /// (`generics.zig`), and reports types over the size limit (E0311) and `@c_layout` fields without a C
     /// representation (E1201). A type that is too large because a
     /// declared non-generic type it contains is, is not reported again.
     pub fn check(e: *Engine) Error!void {
@@ -352,6 +353,24 @@ pub const Engine = struct {
                 else => {},
             }
         };
+        // shortcut: only instances named by item declarations exist yet; ones first named in bodies are not judged.
+        var insts: std.ArrayList(TypeId) = .empty;
+        var keys = e.items.generic.infos.keyIterator();
+        while (keys.next()) |t| try insts.append(e.alloc(), t.*);
+        for (insts.items) |t| {
+            const ref = e.items.declRef(t).?;
+            const item = e.items.im.graph.modules[ref.module].items[ref.item];
+            var parts: std.ArrayList(TypeId) = .empty;
+            switch (e.items.generic.infos.get(t).?.*) {
+                .@"struct" => |s| {
+                    if (e.attr(ref.module, s.attrs, .c_layout) != null) try soa.checkCFields(e, ref.module, s);
+                    for (s.fields) |f| try parts.append(e.alloc(), f.type);
+                },
+                .@"enum" => |en| for (en.variants) |v| try parts.appendSlice(e.alloc(), v.payload),
+                else => continue,
+            }
+            try e.checkSize(ref.module, item, t, parts.items);
+        }
     }
 
     fn checkSize(e: *Engine, m: ModuleId, item: collect.Item, ty: TypeId, parts: []const TypeId) Error!void {
@@ -362,7 +381,7 @@ pub const Engine = struct {
     }
 
     /// Whether `ty` is too large because of a type `check` reports itself:
-    /// a non-generic declared type, possibly inside arrays, tuples or
+    /// a non-generic declared type or an instance, possibly inside arrays, tuples or
     /// generic arguments.
     fn reportedElsewhere(e: *Engine, ty: TypeId) Error!bool {
         const l = try e.layoutOf(ty) orelse return false;
@@ -372,6 +391,7 @@ pub const Engine = struct {
             .tuple => |t| for (t.elems) |el| if (try e.reportedElsewhere(el)) return true,
             .nominal => |n| {
                 if (n.args.len == 0) return e.items.declRef(ty) != null;
+                if (e.items.generic.infos.contains(ty)) return true; // judged as an instance
                 for (n.args) |a| if (a == .type and try e.reportedElsewhere(a.type)) return true;
             },
             else => {},
@@ -715,7 +735,7 @@ test "E0311: types over 2^48 - 1 bytes, reported once" {
         \\struct UsesWrap { w: Wrap<Huge>, t: (Huge, u8) }
     );
     defer f.deinit();
-    try f.expectDiags(&.{ .{ .E0311, "TooBig" }, .{ .E0311, "D" }, .{ .E0311, "Huge" }, .{ .E0311, "Over" }, .{ .E0311, "E" }, .{ .E0311, "UsesG" } });
+    try f.expectDiags(&.{ .{ .E0311, "TooBig" }, .{ .E0311, "D" }, .{ .E0311, "Huge" }, .{ .E0311, "Over" }, .{ .E0311, "E" }, .{ .E0311, "G" } });
     try testing.expect(!(try f.of("Edge")).tooLarge());
     try testing.expect((try f.of("Outer")).tooLarge());
 }

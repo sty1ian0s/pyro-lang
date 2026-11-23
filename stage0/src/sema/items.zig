@@ -358,7 +358,7 @@ pub const Items = struct {
     // -----------------------------------------------------------------------
     // Diagnostics
 
-    fn tokSpan(it: *const Items, m: ModuleId, t: Ast.TokenIndex) diag.Span {
+    pub fn tokSpan(it: *const Items, m: ModuleId, t: Ast.TokenIndex) diag.Span {
         const a = it.ast(m);
         const start = a.tokens.items(.start)[t];
         return .{ .file = it.im.graph.modules[m].file, .start = start, .end = start + a.tokens.items(.len)[t] };
@@ -522,6 +522,10 @@ pub const Items = struct {
         if (value_ty == .none and inner == n and !isValueArg(a, n)) return .{ .type = try it.resolveType(m, n, self_ty) };
         const want = if (value_ty == .none) TypeId.usize else value_ty;
         const v = try it.coerceValue(m, inner, try it.fold(m, inner, self_ty, want), want);
+        if (v != .scalar) if (it.runtimeRef(m, inner)) |r| {
+            try it.report(m, a.mainToken(r), .E0801, &.{"generic value arguments are evaluated at compile time (§7.6.1)"}, "value is not comptime-known: `{s}` is a runtime value", .{a.tokenSlice(a.mainToken(r))});
+            return null;
+        };
         return switch (v) {
             .scalar => |s| .{ .value = s },
             else => if (a.kind(inner) == .ident or a.kind(inner) == .path) if (it.names.get(m, inner)) |e| switch (e.res) {
@@ -805,7 +809,8 @@ pub const Items = struct {
         switch (a.kind(n)) {
             .self_value => return n,
             .lambda => return null, // its parameters are its own
-            .ident => if (it.names.get(m, n)) |e| switch (e.res) {
+            // A name in a generic argument list is a `path`.
+            .ident, .path => if (it.names.get(m, n)) |e| switch (e.res) {
                 .local => |l| switch (a.kind(l)) {
                     .generic_param, .const_decl => {},
                     .param => if (a.tokens.items(.kind)[a.mainToken(l) - 1] != .kw_comptime) return n,
@@ -1123,6 +1128,13 @@ pub const Items = struct {
 
     /// `T.name` for type `ty`: an enum variant or an associated const.
     fn memberValue(it: *Items, ty: TypeId, name: []const u8) Error!?Value {
+        // An instance's consts are in terms of its arguments (`generics.zig`).
+        if (it.generic.infos.get(ty)) |i| switch (i.*) {
+            inline .@"struct", .@"enum" => |d| for (d.consts) |k| {
+                if (std.mem.eql(u8, k.name, name)) return k.value;
+            },
+            else => {},
+        };
         const ref = it.declRef(ty) orelse return null;
         const node = it.im.graph.modules[ref.module].items[ref.item].node;
         const a = it.ast(ref.module);

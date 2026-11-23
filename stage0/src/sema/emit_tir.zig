@@ -522,12 +522,13 @@ pub fn checkBodies(gpa: Allocator, it: *Items, protos: ?*protocols_mod.Protocols
             .@"fn" => |f| try checkDecl(&bs, it, m, f, .none, &.{}),
             .@"const" => |k| comptimeValue(&bs, m, k.node, k.value, k.type),
             .@"struct" => |s| {
-                for (s.fields) |fd| if (fd.default) |v| comptimeValue(&bs, m, fd.node, v, fd.type);
-                for (s.consts) |k| comptimeValue(&bs, m, k.node, k.value, k.type);
+                // A generic struct's values are evaluated per instance.
+                if (s.generics.len == 0) for (s.fields) |fd| if (fd.default) |v| comptimeValue(&bs, m, fd.node, v, fd.type);
+                if (s.generics.len == 0) for (s.consts) |k| comptimeValue(&bs, m, k.node, k.value, k.type);
                 for (s.methods) |f| try checkDecl(&bs, it, m, f, s.type, s.generics);
             },
             .@"enum" => |e| {
-                for (e.consts) |k| comptimeValue(&bs, m, k.node, k.value, k.type);
+                if (e.generics.len == 0) for (e.consts) |k| comptimeValue(&bs, m, k.node, k.value, k.type);
                 for (e.methods) |f| try checkDecl(&bs, it, m, f, e.type, e.generics);
             },
             // A default method is generic over `Self`.
@@ -561,6 +562,7 @@ pub fn checkBodies(gpa: Allocator, it: *Items, protos: ?*protocols_mod.Protocols
             for (pr.methods) |md| try @import("check_call.zig").checkSignature(it, ref.module, md.f);
         }
     }
+    try @import("generics.zig").checkBounds(&bs, it);
     return bs;
 }
 

@@ -11,7 +11,8 @@ pub struct File {
 
 struct Pair<T: plain> { pub mut a: T, pub mut b: T }
 
-type Files = Pair<File>; //~ E0329
+type Files = List<File>; //~ E0329
+type FilePair = Pair<File>; //~ E0329
 type Names = Pair<str>; //~ E0329
 type Counters = List<Atomic<u32>>; //~ E0329
 

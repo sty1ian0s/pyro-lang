@@ -7,8 +7,8 @@
 //! expression position, §3.6) instantiates it:
 //!
 //! - the bounds are checked: a non-plain argument of a `T: plain`
-//!   parameter is E0329, reported at the use; protocol bounds are the
-//!   callers' (`protocols.checkCallBounds`);
+//!   parameter is E0329, reported at the use; protocol bounds (E0373) are
+//!   checked once protocols exist (`checkBounds`);
 //! - the instance is looked up in, or added to, the shared memo table
 //!   (`comptime/instantiate.zig`, `Items.memo`) under the declaration and
 //!   the arguments (types by identity, values by equality), so equal
@@ -44,6 +44,7 @@ const instantiate = @import("../comptime/instantiate.zig");
 const Value = @import("../comptime/value.zig").Value;
 const ModuleId = @import("../resolve/module_graph.zig").ModuleId;
 const Ref = @import("../resolve/imports.zig").Ref;
+const diag = @import("../diag/diag.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -56,7 +57,34 @@ const Error = Allocator.Error;
 pub const State = struct {
     /// The checked declaration of each instance of a generic struct or enum.
     infos: std.AutoHashMapUnmanaged(TypeId, *const Info) = .empty,
+    /// Instances whose declaration bounds a type parameter by a protocol,
+    /// checked by `checkBounds`.
+    bounded: std.ArrayList(Bounded) = .empty,
 };
+
+/// An instantiation at `at` (module `module`) of a declaration whose
+/// parameters `gens` have protocol bounds, applied to `args`.
+const Bounded = struct {
+    module: ModuleId,
+    at: Node.Index,
+    site: diag.Span,
+    gens: []const TypeId,
+    args: []const Types.Arg,
+};
+
+/// Checks the protocol bounds of every instance (§7.5.2, §7.6.1, E0373)
+/// with the protocols of `bs`; without them, the first is unsupported.
+pub fn checkBounds(bs: *emit_tir.Bodies, it: *Items) Error!void {
+    var i: usize = 0;
+    while (i < it.generic.bounded.items.len) : (i += 1) {
+        const b = it.generic.bounded.items[i];
+        const p = bs.protos orelse {
+            if (bs.unsupported == null) bs.unsupported = .{ .module = b.module, .node = b.at, .what = "protocol bounds of generic type arguments without protocols" };
+            return;
+        };
+        _ = try p.checkCallBounds(b.site, b.gens, b.args);
+    }
+}
 
 /// What `ty` declares: the instance's own declaration for an instance of a
 /// generic struct or enum, else that of item `ref` (which declares `ty`).
@@ -93,6 +121,7 @@ pub fn instance(it: *Items, m: ModuleId, at: Node.Index, ref: Ref, ty: TypeId) E
     };
     const depth = try nextDepth(it, m, at, item.name) orelse return .err;
     const id = try it.memo.add(it.arena.allocator(), key, .{ .type = ty });
+    try deferBounds(it, m, at, ref.module, gens, args);
     var frame = try bind(it, id, ref.module, gens, args, depth);
     const saved = it.instance;
     it.instance = &frame;
@@ -146,6 +175,7 @@ pub fn aliasType(it: *Items, m: ModuleId, at: Node.Index, ref: Ref, args: ?[]con
     };
     const depth = try nextDepth(it, m, at, item.name) orelse return .err;
     const id = try it.memo.add(it.arena.allocator(), key, .failed);
+    if (is_concrete) try deferBounds(it, m, at, ref.module, gens, out);
     var frame = try bind(it, id, ref.module, gens, out, depth);
     const saved = it.instance;
     it.instance = &frame;
@@ -279,6 +309,26 @@ fn plainBounds(it: *Items, m: ModuleId, at: Node.Index, dm: ModuleId, gens: []co
         try it.report(m, items_mod.typeToken(a, at), .E0329, &.{"plain types hold no resource, shared cell or view (§5.1)"}, "`{s}` is not plain, but `{s}` is bounded by `plain`", .{ try it.tyName(arg.type), da.tokenSlice(da.mainToken(g)) });
     }
     return ok;
+}
+
+/// Adds the instantiation at `at` (module `m`) of parameters `gens` (of
+/// module `dm`) with `args` to `it.generic.bounded` if a type parameter
+/// has a bound other than `plain`.
+fn deferBounds(it: *Items, m: ModuleId, at: Node.Index, dm: ModuleId, gens: []const Node.Index, args: []const Types.Arg) Error!void {
+    const da = it.im.graph.modules[dm].ast;
+    const bounded = for (gens) |g| {
+        if ((try it.paramValueType(dm, g)) != .none) continue;
+        for (da.data(g).generic_param.bounds) |b| {
+            if (!(da.kind(b) == .path and std.mem.eql(u8, da.tokenSlice(da.mainToken(b)), "plain"))) break;
+        } else continue;
+        break true;
+    } else false;
+    if (!bounded) return;
+    const arena = it.arena.allocator();
+    const tys = try arena.alloc(TypeId, gens.len);
+    for (gens, tys) |g, *t| t.* = it.mods[dm].params.get(g).?.type;
+    const a = it.im.graph.modules[m].ast;
+    try it.generic.bounded.append(arena, .{ .module = m, .at = at, .site = it.tokSpan(m, items_mod.typeToken(a, at)), .gens = tys, .args = try arena.dupe(Types.Arg, args) });
 }
 
 /// The memo key of declaration `decl` of module `m` applied to `args`,
@@ -458,8 +508,7 @@ test "the standard containers take plain elements" {
     );
     defer f.deinit();
     try kinds.check(&f.items);
-    // A resource element is E0325 (§5.3.1), not also E0329.
-    try f.expectDiags(&.{ .{ .E0329, "List" }, .{ .E0325, "List" }, .{ .E0325, "Bounded" } });
+    try f.expectDiags(&.{ .{ .E0329, "List" }, .{ .E0329, "List" }, .{ .E0329, "Bounded" } });
 }
 
 test "instantiation deeper than 256 is E0812" {
@@ -530,4 +579,65 @@ test "generic aliases and distinct types are instantiated" {
     try testing.expectEqual(m, try aliasOf(&f, "K"));
     try testing.expect(m != try aliasOf(&f, "L"));
     try testing.expectEqual(TypeId.f32, f.types.get(m).nominal.underlying);
+}
+
+test "protocol bounds of type arguments are checked (E0373)" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\pub protocol Shape { fn area(self) -> f32; }
+        \\struct Label { w: f32 }
+        \\struct Square { w: f32 }
+        \\impl Shape for Square { fn area(self) -> f32 { self.w * self.w } }
+        \\struct Bag<T: Shape> { x: T }
+        \\fn bad(b: Bag<Label>) -> f32 { b.x.w }
+        \\fn good(b: Bag<Square>) -> f32 { b.x.area() }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{.{ .E0373, "Bag" }});
+}
+
+test "field defaults and associated consts use the instance's arguments" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\struct Ring<T, CAP: usize> { items: [CAP]T, len: usize = CAP, const MASK: usize = CAP - 1; }
+        \\enum Level<N: usize> { low, const TOP: usize = N + 1; }
+        \\type A = Ring<u8, 8>;
+        \\type L = Level<3>;
+        \\fn masks() -> [A.MASK]u8 { [0; 7] }
+        \\fn tops() -> [L.TOP]u8 { [0; 4] }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{});
+    try f.expectComplete();
+    const s = f.items.structOf(try aliasOf(&f, "A")).?;
+    try testing.expectEqual(8, s.fields[1].default.?.scalar.bits);
+    try testing.expectEqual(7, s.consts[0].value.scalar.bits);
+}
+
+test "instances are laid out: E0311 and `@c_layout` E1201" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\@c_layout
+        \\struct R<T> { a: T }
+        \\struct Ring<T, CAP: usize> { items: [CAP]T }
+        \\type A = R<str>;
+        \\type B = R<u32>;
+        \\fn big(r: Ring<u32, 300000000000000>) {}
+    );
+    defer f.deinit();
+    var lay: @import("layout.zig").Engine = .init(testing.allocator, &f.items);
+    defer lay.deinit();
+    try lay.check();
+    try f.expectDiags(&.{ .{ .E1201, "T" }, .{ .E0311, "Ring" } });
+}
+
+test "a runtime generic value argument is E0801" {
+    var f: Fixture = undefined;
+    try f.init(
+        \\struct Buf<N: usize> { bytes: [N]u8 }
+        \\fn fill(n: usize, b: Buf<n>) {}
+        \\fn ok(comptime n: usize) -> usize { n }
+    );
+    defer f.deinit();
+    try f.expectDiags(&.{.{ .E0801, "n" }});
 }
