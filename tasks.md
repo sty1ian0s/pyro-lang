@@ -608,28 +608,28 @@ graph TD
   - Blocked by: T047, T060
   - Blocks: T064, T065, T066, T077, T112
   - Conflicts: Owns the single memo table; generics/typefn reuse it.
-- [ ] **T064** Generic declarations as memoized type functions
+- [x] **T064** Generic declarations as memoized type functions
   - Spec: §7.6.1, §7.6.2, §7.3.2, §4.10, §4.12, E0329, E0812
   - Deliverable: `stage0/src/sema/generics.zig`.
   - Acceptance: Ring<u32,64> twice same TypeId; `Ring(u32,64).init()`; List<File> E0329; depth >256 E0812; Option<[]u8> kind view.
   - Size: M · Parallel: W17
   - Blocked by: T042, T044, T063
   - Blocks: T068, T105, T132
-- [ ] **T065** Type functions, `type` values, generated-type naming and mangling **[GATE]**
+- [x] **T065** Type functions, `type` values, generated-type naming and mangling **[GATE]**
   - Spec: §8.3, §8.3.1, §8.3.2, §13.7
   - Deliverable: `stage0/src/comptime/{typefn,mangle}.zig`.
   - Acceptance: SortedSoA(Monster,512) twice same TypeId; diagnostics show `SortedSoA(Monster, 512)`; `Table(Monster,.{sorted_by:.threat,..})` -> `Table__Monster__sorted_by_threat`; negative ints mangled; anonymous enum expr rejected.
   - Size: M · Parallel: W17
   - Blocked by: T063
   - Blocks: T069, T118, T172, T190, T203, T211
-- [ ] **T066** @hash: FNV-1a, collision detection, name table
+- [x] **T066** @hash: FNV-1a, collision detection, name table
   - Spec: §8.6.1, §14.9, §13.3, E0811
   - Deliverable: `stage0/src/comptime/hash.zig`; `std/hash.pr` `fnv1a64`.
   - Acceptance: FNV-1a vectors; synthetic collision E0811; non-comptime arg E0801; `@hash("orc") == 0x19fb901921bfa625`.
   - Size: S · Parallel: W17
   - Blocked by: T063
   - Blocks: T115, T117, T221
-- [ ] **T067** @pure checking
+- [x] **T067** @pure checking
   - Spec: §8.8, §9.5.1, E0809
   - Deliverable: `stage0/src/sema/purity.zig`.
   - Acceptance: Pass+fail per forbidden category (mut params, Atomic/Channel, I/O, extern, impure calls).
@@ -696,14 +696,14 @@ graph TD
 
 ## M5. Desugaring and memory safety (resources, views, exclusivity)
 
-- [ ] **T076** Desugar: if let / guard let / while let / for / where / inline for
+- [x] **T076** Desugar: if let / guard let / while let / for / where / inline for
   - Spec: §6.12.2-§6.12.5, §6.7.2, §6.7.3
   - Deliverable: `stage0/src/sema/desugar_loops.zig`: TIR->TIR with fresh `__s/__n/__i` names (output must be valid surface Pyro for --expand).
   - Acceptance: TIR dumps match §6.12 expansions; continue-rewrite B' covered; later run-pass: 250u8..=255u8 terminates.
   - Size: M · Parallel: W17
   - Blocked by: T051, T052, T061
   - Blocks: T079, T089, T105, T211, T220
-- [ ] **T077** Desugar: `?`, comprehensions, named/default args **[CRITICAL]**
+- [x] **T077** Desugar: `?`, comprehensions, named/default args **[CRITICAL]**
   - Spec: §6.12.1, §6.12.6, §6.12.7, §6.2.5, §6.1, §9.1.2, E0354, E0601, E0602
   - Deliverable: `stage0/src/sema/desugar_misc.zig` (owns `?` incl. From conversion).
   - Acceptance: `?` w/o From<E> E0601; `?` in void fn E0602; untyped comprehension dest E0354; `where` with [N]T E0354; args evaluated left-to-right before defaults.
@@ -1426,7 +1426,7 @@ graph TD
   - Size: M · Parallel: W02
   - Blocked by: T004
   - Blocks: T223
-- [ ] **T176** GPU sema: stage attributes, parameter classes, workgroup sizes
+- [x] **T176** GPU sema: stage attributes, parameter classes, workgroup sizes
   - Spec: §11.1.1, §11.1.2, §11.2, E1001, E1002, E1008
   - Deliverable: `stage0/src/gpu/stages.zig`.
   - Acceptance: Pass+fail E1001, E1002, E1008; §11.2 classification dumped.
