@@ -1,0 +1,36 @@
+//@ covers: E1009
+// §11.3.1, §11.3.2, §11.4.4: varyings with one `@position`, `@flat` integers and
+// `@linear` floats; a fragment stage returning one color, or several `@target(n)`
+// colors and a `@depth`; a `@per_primitive` input in a fragment stage.
+
+pub struct Vertex { pos: vec3<f32>, uv: vec2<f32> }
+pub struct Instance { model: [4]vec4<f32>, tint: vec4<f32> }
+pub struct Prim { material: u32 }
+
+pub struct VsOut {
+    @position clip: vec4<f32>,
+    @linear uv: vec2<f32>,
+    @flat tint_id: u32,
+    @flat cell: vec2<i32>,
+}
+
+pub struct GBuffer {
+    @target(0) albedo: vec4<f32>,
+    @target(1) normal: vec4<f32>,
+    @target(7) id: u32,
+    @depth z: f32,
+}
+
+@gpu_vertex
+fn vs(v: Vertex, @instance inst: Instance) -> VsOut {
+    let m = inst.model;
+    VsOut { clip: m[0] + m[3] + inst.tint, uv: v.uv, tint_id: 0, cell: vec2(0, 0) }
+}
+
+@gpu_fragment
+fn fs(i: VsOut) -> vec4<f32> { i.clip * 0.5 }
+
+@gpu_fragment
+fn fs_gbuffer(i: VsOut, @per_primitive p: Prim) -> GBuffer {
+    GBuffer { albedo: i.clip, normal: vec4(0.0, 0.0, 1.0, 0.0), id: p.material, z: 0.5 }
+}

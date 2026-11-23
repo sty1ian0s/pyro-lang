@@ -1,0 +1,31 @@
+// §11.3.2: a fragment input is a varyings struct, and a fragment stage returns
+// `vec4<f32>` or a struct of distinct `@target(n)` fields plus at most one `@depth f32`.
+
+pub struct VsOut { @position clip: vec4<f32>, uv: vec2<f32> }
+pub struct Material { light_dir: vec3<f32>, ambient: f32 }
+
+pub struct TwoDepths {
+    @target(0) color: vec4<f32>,
+    @depth z: f32,
+    @depth w: f32, //~ E1009
+}
+
+pub struct SameTarget {
+    @target(0) a: vec4<f32>,
+    @target(0) b: vec4<f32>, //~ E1009
+    extra: f32, //~ E1009
+}
+
+@gpu_fragment
+fn fs_material_input(m: Material) -> vec4<f32> { vec4(m.ambient, m.ambient, m.ambient, 1.0) } //~ E1009
+
+@gpu_fragment
+fn fs_two_depths(i: VsOut) -> TwoDepths { TwoDepths { color: vec4(i.uv.x, i.uv.y, 0.0, 1.0), z: 0.5, w: 0.5 } }
+
+@gpu_fragment
+fn fs_same_target(i: VsOut) -> SameTarget {
+    SameTarget { a: vec4(i.uv.x, 0.0, 0.0, 1.0), b: vec4(0.0, i.uv.y, 0.0, 1.0), extra: 0.0 }
+}
+
+@gpu_fragment
+fn fs_vec3(i: VsOut) -> vec3<f32> { vec3(i.uv.x, i.uv.y, 0.0) } //~ E1009

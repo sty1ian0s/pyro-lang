@@ -1,0 +1,27 @@
+// §11.1.2, §11.3.1, §11.4.4: a vertex input holds scalars, vectors and arrays of them;
+// `@instance` is a vertex-stage parameter and `@per_primitive` a fragment-stage one,
+// each at most once.
+
+pub struct Color { rgb: vec3<f32> }
+pub struct Nested {
+    pos: vec3<f32>,
+    color: Color, //~ E1008
+}
+pub struct Instance { offset: vec3<f32> }
+pub struct VsOut { @position clip: vec4<f32> }
+
+@gpu_vertex
+fn vs_nested(v: Nested) -> VsOut { VsOut { clip: vec4(v.pos.x, v.pos.y, v.pos.z, 1.0) } }
+
+@gpu_vertex
+fn vs_two_instances(v: Instance, @instance a: Instance, @instance b: Instance) -> VsOut { //~ E1008
+    VsOut { clip: vec4(a.offset.x, b.offset.y, v.offset.z, 1.0) }
+}
+
+@gpu_fragment
+fn fs_instance(i: VsOut, @instance inst: Instance) -> vec4<f32> { vec4(inst.offset.x, 0.0, 0.0, 1.0) } //~ E1008
+
+@gpu_vertex
+fn vs_per_primitive(v: Instance, @per_primitive p: Instance) -> VsOut { //~ E1008
+    VsOut { clip: vec4(p.offset.x, v.offset.y, 0.0, 1.0) }
+}
