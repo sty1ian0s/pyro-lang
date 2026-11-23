@@ -45,6 +45,7 @@ const attrs_mod = @import("attrs.zig");
 const protocols_mod = @import("protocols.zig");
 const comptime_ctx = @import("comptime_ctx.zig");
 const instantiate = @import("../comptime/instantiate.zig");
+const purity = @import("purity.zig");
 
 const Node = Ast.Node;
 const TypeId = Types.TypeId;
@@ -128,6 +129,8 @@ pub const Body = struct {
     /// Checked before protocols (`Bodies.before_protos`) and stopped at a
     /// method call an impl may provide; `checkBodies` checks it again.
     retry: bool = false,
+    /// The first direct effect of the body (`purity.note`).
+    effect: ?purity.Effect = null,
 };
 
 /// The checked bodies of one package.
@@ -191,6 +194,8 @@ pub const Checker = struct {
     /// What `Self` means in the body; `.none` outside a type.
     self_ty: TypeId,
     sig: items_mod.Fn,
+    /// The body being checked; null for a comptime thunk.
+    id: ?tir.FnId = null,
     b: Builder,
     /// The TIR local of each `param` and `let` binding node.
     locals: std.AutoHashMapUnmanaged(Node.Index, tir.Local) = .empty,
@@ -411,9 +416,9 @@ fn operandsPresent(d: tir.Data) bool {
 // ---------------------------------------------------------------------------
 // Functions
 
-/// Checks the body of function `sig` (declared in module `m`, inside type
-/// `self_ty` or `.none`) and returns its TIR, or null if it failed.
-pub fn checkFn(bodies: *Bodies, it: *Items, m: ModuleId, sig: items_mod.Fn, self_ty: TypeId) Error!?tir.Func {
+/// Checks the body `id` of function `sig` (declared in module `m`, inside
+/// type `self_ty` or `.none`) and returns its TIR, or null if it failed.
+pub fn checkFn(bodies: *Bodies, it: *Items, m: ModuleId, id: tir.FnId, sig: items_mod.Fn, self_ty: TypeId) Error!?tir.Func {
     const ast = it.im.graph.modules[m].ast;
     const body = ast.data(sig.node).fn_decl.body.?;
     const arena = bodies.arena.allocator();
@@ -427,6 +432,7 @@ pub fn checkFn(bodies: *Bodies, it: *Items, m: ModuleId, sig: items_mod.Fn, self
         .ast = ast,
         .self_ty = self_ty,
         .sig = sig,
+        .id = id,
         .b = .init(arena, sig.ret),
     };
     if (sig.ret == .err) c.failed = true;
@@ -586,7 +592,7 @@ pub fn checkDecl(bs: *Bodies, it: *Items, m: ModuleId, f: items_mod.Fn, self_ty:
         return;
     }
     // Checking may add bodies (callees) and move `bs.fns.items`.
-    const func = try checkFn(bs, it, m, f, self_ty);
+    const func = try checkFn(bs, it, m, id, f, self_ty);
     bs.fns.items[id.int()].func = func;
 }
 
@@ -648,6 +654,7 @@ pub fn runFiles(_: ?*anyopaque, comp: *Compilation) anyerror!void {
         defer protos.deinit();
         var bs = try checkBodies(comp.gpa, &it, &protos);
         defer bs.deinit();
+        try purity.check(&it, &bs);
         if (bs.unsupported != null) incomplete = true;
     }
     if (incomplete and !comp.sink.hasErrors()) return error.CheckIncomplete;

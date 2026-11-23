@@ -1,0 +1,22 @@
+//@ covers: E0809
+// §8.8: local mutation, `while` loops, recursion and calls of effect-free
+// functions without `@pure` are pure.
+
+fn twice(x: f32) -> f32 { x + x }
+
+fn inc(mut n: u32) { n += 1; }
+
+@pure
+fn fact(n: u64) -> u64 {
+    if n == 0 { 1 } else { n * fact(n - 1) }
+}
+
+@pure
+fn count(limit: u32) -> u32 {
+    let mut n: u32 = 0;
+    while n < limit { inc(mut n); }
+    n
+}
+
+@pure
+fn scaled(x: f32) -> f32 { twice(x) * 0.5 }

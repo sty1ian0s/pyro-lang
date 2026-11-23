@@ -406,11 +406,14 @@ fn resolve(c: *Checker, fa: Node.Index, ty: TypeId) Error!?Callee {
     switch (c.types.get(ty)) {
         .array, .slice, .soa_array, .soa_slice => return unsupported(c, fa, "methods of arrays and slices (T110)"),
         .vec, .mask => return unsupported(c, fa, "methods of vectors (T128)"),
-        .nominal => |nm| if (c.items.declRef(ty) == null) return unsupported(c, fa, switch (nm.lang) {
-            .option, .result => "methods of `Option` and `Result` (T105)",
-            .atomic => "methods of `Atomic` (T130)",
-            else => "methods of standard library types (T163)",
-        }),
+        .nominal => |nm| if (c.items.declRef(ty) == null) {
+            if (nm.lang == .atomic or nm.lang == .channel) @import("purity.zig").note(c, fa, if (nm.lang == .atomic) .atomic else .channel);
+            return unsupported(c, fa, switch (nm.lang) {
+                .option, .result => "methods of `Option` and `Result` (T105)",
+                .atomic => "methods of `Atomic` (T130)",
+                else => "methods of standard library types (T163)",
+            });
+        },
         .param => return unsupported(c, fa, "methods of generic parameters (T070)"),
         else => if (ty == .str) return unsupported(c, fa, "methods of `str` (T108)"),
     }
